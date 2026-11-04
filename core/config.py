@@ -152,6 +152,8 @@ CLOUDINARY_TEXTBEE_CONFIG_PUBLIC_ID = "glennbot_config/textbee_sms_config_v1.jso
 
 # --- DATABASE URL CONFIGURATION ---
 _raw_database_url = (os.getenv("DATABASE_URL") or "").strip()
+if not _raw_database_url:
+    _raw_database_url = "sqlite:////tmp/glennbot_fallback.db"
 if _raw_database_url.startswith("postgres://"):
     _raw_database_url = "postgresql://" + _raw_database_url[len("postgres://"):]
 if _raw_database_url.startswith("postgresql://"):
@@ -161,7 +163,12 @@ if _raw_database_url.startswith("postgresql://"):
     except ImportError:
         pass
 DATABASE_URL = _raw_database_url
-_DB_CONNECT_ARGS = {'prepare_threshold': None} if "+psycopg" in DATABASE_URL else {}
+if DATABASE_URL.startswith("sqlite"):
+    _DB_CONNECT_ARGS = {"check_same_thread": False}
+elif "+psycopg" in DATABASE_URL:
+    _DB_CONNECT_ARGS = {"prepare_threshold": None}
+else:
+    _DB_CONNECT_ARGS = {}
 
 # --- ZERNIO / EXTERNAL API CONFIGURATION ---
 _raw_env_api_key = (

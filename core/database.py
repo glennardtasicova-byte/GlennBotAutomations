@@ -20,15 +20,22 @@ from core.config import (
 )
 
 # --- 3. DATABASE ENGINE & SCHEDULER CONFIGURATION (SUPABASE) ---
-db_engine = create_engine(
-    DATABASE_URL,
-    connect_args=_DB_CONNECT_ARGS,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    pool_size=20,
-    max_overflow=40,
-    pool_timeout=30
-)
+if DATABASE_URL.startswith("sqlite"):
+    db_engine = create_engine(
+        DATABASE_URL,
+        connect_args=_DB_CONNECT_ARGS,
+        pool_pre_ping=True,
+    )
+else:
+    db_engine = create_engine(
+        DATABASE_URL,
+        connect_args=_DB_CONNECT_ARGS,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=20,
+        max_overflow=40,
+        pool_timeout=30
+    )
 
 
 def init_records_db():
