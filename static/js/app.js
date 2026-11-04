@@ -11687,22 +11687,38 @@
             const plat = String(targetPlatform || '').trim().toLowerCase();
             if (!plat) return;
 
+            const contactObj = (crmContactsList || []).find(item => String(item.id) === String(contactId)) || {};
+            const fullName = [contactObj.first_name, contactObj.middle_name, contactObj.last_name].filter(Boolean).join(' ').trim();
+
             try {
                 const res = await fetch('/api/contacts/open-chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contact_id: contactId,
-                        platform: plat
+                        platform: plat,
+                        contact_number: contactObj.contact_number || '',
+                        social_username: getCrmContactEffectiveUsername(contactObj) || contactObj.social_username || '',
+                        participant_name: fullName || contactObj.social_username || contactObj.contact_number || 'Contact'
                     })
                 });
-                const data = await res.json();
-                if (data.status !== 'success' || !data.conversation) {
+                const rawText = await res.text();
+                let data = {};
+                try {
+                    data = rawText ? JSON.parse(rawText) : {};
+                } catch (_jsonErr) {
+                    showToast(`❌ Server error (${res.status}): Make sure routers/scheduler_routes.py is updated and server is restarted.`);
+                    return;
+                }
+                if (!res.ok || data.status !== 'success' || !data.conversation) {
                     showToast('❌ ' + (data.message || `Could not open ${plat.toUpperCase()} chat.`));
                     return;
                 }
 
                 const conv = data.conversation;
+                const convKey = String(conv.conv_key || `${conv.account_id}_${conv.conversation_id}`);
+                conv.conv_key = convKey;
+
                 switchTab('messages');
 
                 const filterEl = document.getElementById('messages-filter-platform');
@@ -11717,14 +11733,14 @@
                 await fetchConversations(false);
 
                 // Ensure the conversation is in messagesConversationsList and select it immediately
-                const existingIdx = messagesConversationsList.findIndex(item => item.conv_key === conv.conv_key);
+                const existingIdx = messagesConversationsList.findIndex(item => item.conv_key === convKey);
                 if (existingIdx >= 0) {
                     messagesConversationsList[existingIdx] = Object.assign({}, messagesConversationsList[existingIdx], conv);
                 } else {
                     messagesConversationsList.unshift(conv);
                 }
                 renderMessagesConversationsList();
-                await selectMessageConversation(conv.conv_key, conv.conversation_id, conv.account_id);
+                await selectMessageConversation(convKey, conv.conversation_id, conv.account_id);
                 setTimeout(() => {
                     document.getElementById('direct-message-input')?.focus();
                 }, 120);

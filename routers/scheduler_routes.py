@@ -6330,7 +6330,7 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
             _add_candidate_cid(tg_handle_raw.lstrip("@"), prepend=False)
             _add_candidate_cid(f"@{tg_handle_raw.lstrip('@')}", prepend=False)
         elif platform == "whatsapp" and participant_id:
-            norm_wa = _normalize_textbee_phone_e164(participant_id)
+            norm_wa = _normalize_sms_phone_number(participant_id)
             wa_digits = re.sub(r"\D", "", norm_wa or participant_id)
             if norm_wa:
                 _add_candidate_cid(norm_wa, prepend=False)
@@ -16602,192 +16602,219 @@ async def api_open_crm_contact_chat_in_messages(request: Request):
       sending a message will return a Telegram username validation error.
     """
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
 
-    contact_id = str(body.get("contact_id") or "").strip()
-    target_platform = str(body.get("platform") or "").strip().lower()
+        contact_id = str(body.get("contact_id") or "").strip()
+        target_platform = str(body.get("platform") or "").strip().lower()
 
-    if target_platform in ("facebook", "instagram"):
-        return {
-            "status": "error",
-            "message": "Contacts saved via Facebook or Instagram cannot be messaged on FB/IG from Contacts unless they have a Mobile Number (SMS/WhatsApp), Email Address, or Social Username (Telegram)."
+        if target_platform in ("facebook", "instagram"):
+            return {
+                "status": "error",
+                "message": "Contacts saved via Facebook or Instagram cannot be messaged on FB/IG from Contacts unless they have a Mobile Number (SMS/WhatsApp), Email Address, or Social Username (Telegram)."
+            }
+        if target_platform not in ("sms", "whatsapp", "telegram"):
+            return {"status": "error", "message": f"Unsupported chat platform: {target_platform}"}
+
+        # Look up CRM contact if contact_id was provided
+        crm_contact: Dict[str, Any] = {}
+        if contact_id:
+            all_contacts = _load_crm_contacts_state(force_cloud=False) or []
+            for c in all_contacts:
+                if isinstance(c, dict) and str(c.get("id") or "") == contact_id:
+                    crm_contact = c
+                    break
+
+        first_name = str(crm_contact.get("first_name") or "").strip()
+        middle_name = str(crm_contact.get("middle_name") or "").strip()
+        last_name = str(crm_contact.get("last_name") or "").strip()
+        computed_name = " ".join(x for x in (first_name, middle_name, last_name) if x).strip()
+        participant_name = str(
+            body.get("participant_name")
+            or computed_name
+            or crm_contact.get("social_username")
+            or crm_contact.get("contact_number")
+            or "Contact"
+        ).strip()
+
+        contact_number = str(body.get("contact_number") or crm_contact.get("contact_number") or "").strip()
+        social_username = str(body.get("social_username") or crm_contact.get("social_username") or "").strip()
+        avatar_url = str(crm_contact.get("avatar_url") or "").strip()
+        source_ref_id = str(crm_contact.get("source_ref_id") or "").strip()
+
+        if target_platform in ("sms", "whatsapp"):
+            digits_only = re.sub(r"\D", "", contact_number)
+            if len(digits_only) < 7:
+                return {
+                    "status": "error",
+                    "message": f"{target_platform.upper()} requires a valid Mobile Number on this contact."
+                }
+        elif target_platform == "telegram":
+            if not social_username:
+                return {
+                    "status": "error",
+                    "message": "Telegram requires a Social Username / Handle on this contact."
+                }
+
+        if not CLOUDINARY_MESSAGES_STORE.get("loaded"):
+            load_messages_store_from_cloudinary()
+
+        convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
+        now_dt = datetime.now(MANILA_TZ)
+        now_iso = now_dt.isoformat()
+        disp_time = now_dt.strftime("%b %d, %Y %I:%M %p")
+
+        # 1. Try to find an existing conversation in CLOUDINARY_MESSAGES_STORE for this contact & platform
+        matched_conv: Optional[Dict[str, Any]] = None
+        norm_phone = _normalize_sms_phone_number(contact_number) if contact_number else ""
+        norm_phone_digits = re.sub(r"\D", "", norm_phone or contact_number)
+        clean_uname_low = social_username.lstrip("@").strip().lower()
+
+        for ckey, c_obj in list(convs_store.items()):
+            if not isinstance(c_obj, dict):
+                continue
+            c_plat = str(c_obj.get("platform") or "").strip().lower()
+            if c_plat != target_platform:
+                continue
+
+            c_pid = str(c_obj.get("participant_id") or "").strip()
+            c_handle = str(c_obj.get("participant_handle") or "").strip()
+            c_cid = str(c_obj.get("conversation_id") or "").strip()
+
+            if target_platform in ("sms", "whatsapp") and norm_phone_digits:
+                c_digits = re.sub(r"\D", "", f"{c_pid} {c_handle} {c_cid}")
+                if norm_phone_digits and (norm_phone_digits in c_digits or (len(norm_phone_digits) >= 10 and norm_phone_digits[-10:] in c_digits)):
+                    matched_conv = c_obj
+                    break
+            elif target_platform == "telegram" and clean_uname_low:
+                cand_handles = [
+                    c_handle.lstrip("@").strip().lower(),
+                    c_pid.lstrip("@").strip().lower(),
+                    c_cid.replace("tg_", "").lstrip("@").strip().lower()
+                ]
+                if clean_uname_low in cand_handles or (source_ref_id and source_ref_id in (c_cid, ckey)):
+                    matched_conv = c_obj
+                    break
+
+        if matched_conv is not None:
+            matched_ckey = str(matched_conv.get("conv_key") or f"{matched_conv.get('account_id')}_{matched_conv.get('conversation_id')}").strip()
+            matched_conv["conv_key"] = matched_ckey
+            matched_conv["hidden"] = False
+            matched_conv["opened_from_crm"] = True
+            if participant_name and (not matched_conv.get("participant_name") or matched_conv.get("participant_name") == matched_conv.get("participant_id")):
+                matched_conv["participant_name"] = participant_name
+            if target_platform == "telegram" and social_username:
+                matched_conv["participant_handle"] = social_username if social_username.startswith("@") else f"@{social_username}"
+            elif target_platform in ("sms", "whatsapp") and norm_phone:
+                matched_conv["participant_handle"] = norm_phone
+                matched_conv["participant_phone"] = norm_phone
+                if not matched_conv.get("participant_id"):
+                    matched_conv["participant_id"] = norm_phone
+            try:
+                save_messages_store_async()
+            except Exception:
+                pass
+            conv_out = dict(matched_conv)
+            conv_out["recent_messages"] = (conv_out.get("messages") or [])[-30:]
+            return {
+                "status": "success",
+                "conversation": conv_out
+            }
+
+        # 2. Otherwise, create a new conversation entry for the selected platform so it opens immediately in the Messages Tab
+        if target_platform == "sms":
+            sim_id = str(TEXTBEE_RUNTIME_CONFIG.get("sim_subscription_id") or TEXTBEE_SIM_SUBSCRIPTION_ID or "2").strip()
+            acc_id = TEXTBEE_ACCOUNT_ID
+            acc_name = f"TextBee SMS (SIM {sim_id})"
+            z_acc_id = TEXTBEE_ACCOUNT_ID
+            z_key = ""
+            clean_digits = re.sub(r"\D+", "", norm_phone or contact_number) or re.sub(r"\W+", "", norm_phone or contact_number) or "unknown"
+            conv_id = f"sms_{clean_digits}"
+            part_id = norm_phone or contact_number
+            part_handle = norm_phone or contact_number
+        else:
+            # Find a connected WhatsApp or Telegram account if available
+            msg_accounts = refresh_connected_accounts_cache(force=False) or []
+            plat_acc = next((a for a in msg_accounts if isinstance(a, dict) and str(a.get("platform") or "").strip().lower() == target_platform), None)
+            if plat_acc:
+                acc_id = str(plat_acc.get("account_id") or plat_acc.get("zernio_account_id") or f"{target_platform}_direct")
+                acc_name = str(plat_acc.get("account_name") or f"{target_platform.capitalize()}")
+                z_acc_id = str(plat_acc.get("zernio_account_id") or acc_id)
+                z_key = str(plat_acc.get("api_key") or "")
+            else:
+                acc_id = f"{target_platform}_crm_direct"
+                acc_name = "WhatsApp Business" if target_platform == "whatsapp" else "Telegram"
+                z_acc_id = acc_id
+                z_key = ""
+
+            if target_platform == "whatsapp":
+                clean_digits = re.sub(r"\D", "", norm_phone or contact_number)
+                conv_id = f"wa_{clean_digits}"
+                part_id = norm_phone or contact_number
+                part_handle = norm_phone or contact_number
+            else:
+                # telegram
+                formatted_handle = social_username if (social_username.startswith("@") or re.fullmatch(r"-?\d{5,20}", social_username)) else f"@{social_username}"
+                safe_slug = re.sub(r"[^a-zA-Z0-9_]", "_", social_username.lstrip("@")).strip("_") or str(int(time.time()))
+                conv_id = f"tg_{safe_slug}"
+                part_id = formatted_handle
+                part_handle = formatted_handle
+
+        conv_key = f"{acc_id}_{conv_id}"
+        new_conv: Dict[str, Any] = {
+            "conv_key": conv_key,
+            "conversation_id": conv_id,
+            "platform_conversation_id": conv_id,
+            "zernio_conversation_id": conv_id,
+            "alternate_conversation_ids": [conv_id, part_id],
+            "platform": target_platform,
+            "account_id": acc_id,
+            "zernio_account_id": z_acc_id,
+            "zernio_api_key": z_key,
+            "account_name": acc_name,
+            "account_avatar": "",
+            "participant_id": part_id,
+            "participant_name": participant_name,
+            "participant_handle": part_handle,
+            "participant_phone": norm_phone or contact_number,
+            "participant_email": str(crm_contact.get("email_address") or ""),
+            "participant_avatar": avatar_url,
+            "participant_picture": avatar_url,
+            "social_username": social_username,
+            "last_message_text": f"Chat opened from Contacts ({part_handle})",
+            "last_message_is_own": False,
+            "updated_iso": now_iso,
+            "display_time": disp_time,
+            "relative_time": "Just now",
+            "has_authoritative_ts": True,
+            "api_order_index": 0,
+            "unread_count": 0,
+            "is_read": True,
+            "hidden": False,
+            "opened_from_crm": True,
+            "crm_contact_id": contact_id,
+            "messages": []
         }
-    if target_platform not in ("sms", "whatsapp", "telegram"):
-        return {"status": "error", "message": f"Unsupported chat platform: {target_platform}"}
+        convs_store[conv_key] = new_conv
+        try:
+            save_messages_store_async()
+        except Exception:
+            pass
 
-    # Look up CRM contact if contact_id was provided
-    crm_contact: Dict[str, Any] = {}
-    if contact_id:
-        for c in _get_all_crm_contacts_merged():
-            if str(c.get("id") or "") == contact_id:
-                crm_contact = c
-                break
-
-    first_name = str(crm_contact.get("first_name") or "").strip()
-    middle_name = str(crm_contact.get("middle_name") or "").strip()
-    last_name = str(crm_contact.get("last_name") or "").strip()
-    computed_name = " ".join(x for x in (first_name, middle_name, last_name) if x).strip()
-    participant_name = str(
-        body.get("participant_name")
-        or computed_name
-        or crm_contact.get("social_username")
-        or crm_contact.get("contact_number")
-        or "Contact"
-    ).strip()
-
-    contact_number = str(body.get("contact_number") or crm_contact.get("contact_number") or "").strip()
-    social_username = str(body.get("social_username") or crm_contact.get("social_username") or "").strip()
-    avatar_url = str(crm_contact.get("avatar_url") or "").strip()
-    source_ref_id = str(crm_contact.get("source_ref_id") or "").strip()
-
-    if target_platform in ("sms", "whatsapp"):
-        digits_only = re.sub(r"\D", "", contact_number)
-        if len(digits_only) < 7:
-            return {
-                "status": "error",
-                "message": f"{target_platform.upper()} requires a valid Mobile Number on this contact."
-            }
-    elif target_platform == "telegram":
-        if not social_username:
-            return {
-                "status": "error",
-                "message": "Telegram requires a Social Username / Handle on this contact."
-            }
-
-    if not CLOUDINARY_MESSAGES_STORE.get("loaded"):
-        load_messages_store_from_cloudinary()
-
-    convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
-    now_dt = datetime.now( PH_TZ)
-    now_iso = now_dt.isoformat()
-    disp_time = now_dt.strftime("%b %d, %Y %I:%M %p")
-
-    # 1. Try to find an existing conversation in CLOUDINARY_MESSAGES_STORE for this contact & platform
-    matched_conv: Optional[Dict[str, Any]] = None
-    norm_phone = _normalize_textbee_phone_e164(contact_number) if contact_number else ""
-    norm_phone_digits = re.sub(r"\D", "", norm_phone or contact_number)
-    clean_uname_low = social_username.lstrip("@").strip().lower()
-
-    for ckey, c_obj in list(convs_store.items()):
-        if not isinstance(c_obj, dict):
-            continue
-        c_plat = str(c_obj.get("platform") or "").strip().lower()
-        if c_plat != target_platform:
-            continue
-
-        c_pid = str(c_obj.get("participant_id") or "").strip()
-        c_handle = str(c_obj.get("participant_handle") or "").strip()
-        c_cid = str(c_obj.get("conversation_id") or "").strip()
-
-        if target_platform in ("sms", "whatsapp") and norm_phone_digits:
-            c_digits = re.sub(r"\D", "", f"{c_pid} {c_handle} {c_cid}")
-            if norm_phone_digits and (norm_phone_digits in c_digits or (len(norm_phone_digits) >= 10 and norm_phone_digits[-10:] in c_digits)):
-                matched_conv = c_obj
-                break
-        elif target_platform == "telegram" and clean_uname_low:
-            cand_handles = [
-                c_handle.lstrip("@").strip().lower(),
-                c_pid.lstrip("@").strip().lower(),
-                c_cid.replace("tg_", "").lstrip("@").strip().lower()
-            ]
-            if clean_uname_low in cand_handles or (source_ref_id and source_ref_id in (c_cid, ckey)):
-                matched_conv = c_obj
-                break
-
-    if matched_conv is not None:
-        matched_conv["hidden"] = False
-        matched_conv["opened_from_crm"] = True
-        if participant_name and (not matched_conv.get("participant_name") or matched_conv.get("participant_name") == matched_conv.get("participant_id")):
-            matched_conv["participant_name"] = participant_name
-        if target_platform == "telegram" and social_username:
-            matched_conv["participant_handle"] = social_username if social_username.startswith("@") else f"@{social_username}"
-        elif target_platform in ("sms", "whatsapp") and norm_phone:
-            matched_conv["participant_handle"] = norm_phone
-            if not matched_conv.get("participant_id"):
-                matched_conv["participant_id"] = norm_phone
-        save_messages_store_to_cloudinary(force=True)
-        conv_out = dict(matched_conv)
-        conv_out["recent_messages"] = (conv_out.get("messages") or [])[-30:]
+        conv_out = dict(new_conv)
+        conv_out["recent_messages"] = []
         return {
             "status": "success",
             "conversation": conv_out
         }
-
-    # 2. Otherwise, create a new conversation entry for the selected platform so it opens immediately in the Messages Tab
-    if target_platform == "sms":
-        acc_id = TEXTBEE_ACCOUNT_ID
-        acc_name = "SMS Gateway (SIM 2)"
-        z_acc_id = TEXTBEE_ACCOUNT_ID
-        z_key = ""
-        clean_digits = re.sub(r"[^0-9+]", "", norm_phone or contact_number)
-        conv_id = f"sms_{clean_digits}"
-        part_id = norm_phone or contact_number
-        part_handle = norm_phone or contact_number
-    else:
-        # Find a connected WhatsApp or Telegram account if available
-        msg_accounts = get_messaging_capable_accounts()
-        plat_acc = next((a for a in msg_accounts if str(a.get("platform") or "").strip().lower() == target_platform), None)
-        if plat_acc:
-            acc_id = str(plat_acc.get("account_id") or plat_acc.get("zernio_account_id") or f"{target_platform}_direct")
-            acc_name = str(plat_acc.get("account_name") or f"{target_platform.capitalize()}")
-            z_acc_id = str(plat_acc.get("zernio_account_id") or acc_id)
-            z_key = str(plat_acc.get("api_key") or "")
-        else:
-            acc_id = f"{target_platform}_crm_direct"
-            acc_name = "WhatsApp Business" if target_platform == "whatsapp" else "Telegram"
-            z_acc_id = acc_id
-            z_key = ""
-
-        if target_platform == "whatsapp":
-            clean_digits = re.sub(r"\D", "", norm_phone or contact_number)
-            conv_id = f"wa_{clean_digits}"
-            part_id = norm_phone or contact_number
-            part_handle = norm_phone or contact_number
-        else:
-            # telegram
-            formatted_handle = social_username if (social_username.startswith("@") or re.fullmatch(r"-?\d{5,20}", social_username)) else f"@{social_username}"
-            safe_slug = re.sub(r"[^a-zA-Z0-9_]", "_", social_username.lstrip("@")).strip("_") or str(int(time.time()))
-            conv_id = f"tg_{safe_slug}"
-            part_id = formatted_handle
-            part_handle = formatted_handle
-
-    conv_key = f"{acc_id}_{conv_id}"
-    new_conv: Dict[str, Any] = {
-        "conversation_id": conv_id,
-        "platform_conversation_id": conv_id,
-        "zernio_conversation_id": conv_id,
-        "alternate_conversation_ids": [conv_id, part_id],
-        "platform": target_platform,
-        "account_id": acc_id,
-        "zernio_account_id": z_acc_id,
-        "zernio_api_key": z_key,
-        "account_name": acc_name,
-        "participant_id": part_id,
-        "participant_name": participant_name,
-        "participant_handle": part_handle,
-        "social_username": social_username,
-        "participant_picture": avatar_url,
-        "last_message_text": f"Chat opened from Contacts ({part_handle})",
-        "updated_iso": now_iso,
-        "display_time": disp_time,
-        "unread_count": 0,
-        "is_read": True,
-        "hidden": False,
-        "opened_from_crm": True,
-        "crm_contact_id": contact_id,
-        "messages": []
-    }
-    convs_store[conv_key] = new_conv
-    save_messages_store_to_cloudinary(force=True)
-
-    conv_out = dict(new_conv)
-    conv_out["recent_messages"] = []
-    return {
-        "status": "success",
-        "conversation": conv_out
-    }
+    except Exception as exc:
+        print(f"[Contacts Open Chat Error]: {exc}")
+        return {
+            "status": "error",
+            "message": f"Failed to open chat: {str(exc)}"
+        }
 
 
 
