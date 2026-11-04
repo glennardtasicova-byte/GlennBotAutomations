@@ -1001,18 +1001,117 @@
             }
         }
 
+        function parseCssRgbColor(colorStr) {
+            if (!colorStr) return null;
+            const s = String(colorStr).trim().toLowerCase();
+            if (!s || s === 'transparent' || s === 'inherit' || s === 'initial' || s === 'unset') return null;
+            const rgbaMatch = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*[,/]\s*([0-9.]+))?\s*\)/);
+            if (rgbaMatch) {
+                const a = rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1;
+                if (a < 0.15) return null;
+                return { r: parseInt(rgbaMatch[1], 10), g: parseInt(rgbaMatch[2], 10), b: parseInt(rgbaMatch[3], 10), a };
+            }
+            const hexMatch = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+            if (hexMatch) {
+                let h = hexMatch[1];
+                if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+                return {
+                    r: parseInt(h.slice(0, 2), 16),
+                    g: parseInt(h.slice(2, 4), 16),
+                    b: parseInt(h.slice(4, 6), 16),
+                    a: 1
+                };
+            }
+            return null;
+        }
+
+        function computeRelativeLuminance(rgb) {
+            if (!rgb) return 1;
+            const toLinear = (c) => {
+                const v = c / 255;
+                return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+            };
+            return 0.2126 * toLinear(rgb.r) + 0.7152 * toLinear(rgb.g) + 0.0722 * toLinear(rgb.b);
+        }
+
+        function applySmartEmailIframeContrastGuard(iframeEl) {
+            try {
+                const doc = iframeEl?.contentDocument || iframeEl?.contentWindow?.document;
+                if (!doc || !doc.body) return;
+                const win = iframeEl.contentWindow || window;
+
+                const getEffectiveBgInfo = (startEl) => {
+                    let cur = startEl;
+                    let hasBgImage = false;
+                    while (cur && cur.nodeType === 1) {
+                        const cs = win.getComputedStyle(cur);
+                        if (cs && cs.backgroundImage && cs.backgroundImage !== 'none') {
+                            hasBgImage = true;
+                        }
+                        const parsed = parseCssRgbColor(cs ? cs.backgroundColor : '');
+                        if (parsed) {
+                            return { rgb: parsed, hasBgImage };
+                        }
+                        const bgAttr = cur.getAttribute && cur.getAttribute('bgcolor');
+                        const parsedAttr = parseCssRgbColor(bgAttr);
+                        if (parsedAttr) {
+                            return { rgb: parsedAttr, hasBgImage };
+                        }
+                        if (cur === doc.body || cur === doc.documentElement) break;
+                        cur = cur.parentElement;
+                    }
+                    return { rgb: { r: 255, g: 255, b: 255, a: 1 }, hasBgImage };
+                };
+
+                const allEls = doc.body.querySelectorAll('*');
+                allEls.forEach((el) => {
+                    const tag = (el.tagName || '').toUpperCase();
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'META' || tag === 'LINK' || tag === 'IMG' || tag === 'BR' || tag === 'HR') {
+                        return;
+                    }
+                    let hasDirectText = false;
+                    for (let i = 0; i < el.childNodes.length; i++) {
+                        const n = el.childNodes[i];
+                        if (n.nodeType === 3 && n.nodeValue && n.nodeValue.trim().length > 0) {
+                            hasDirectText = true;
+                            break;
+                        }
+                    }
+                    if (!hasDirectText) return;
+
+                    const cs = win.getComputedStyle(el);
+                    const fgRgb = parseCssRgbColor(cs ? cs.color : '');
+                    if (!fgRgb) return;
+
+                    const { rgb: bgRgb, hasBgImage } = getEffectiveBgInfo(el);
+                    const fgLum = computeRelativeLuminance(fgRgb);
+                    const bgLum = computeRelativeLuminance(bgRgb);
+
+                    // Case 1: Dark text on a dark background (e.g., black hero banner where text became dark) -> make text white
+                    if (bgLum < 0.24 && fgLum < 0.35) {
+                        el.style.setProperty('color', '#ffffff', 'important');
+                    }
+                    // Case 2: White/near-white text on a white/light background (without a background image/gradient) -> make text dark slate
+                    else if (!hasBgImage && bgLum > 0.78 && fgLum > 0.85) {
+                        el.style.setProperty('color', '#0f172a', 'important');
+                    }
+                });
+            } catch (e) {
+                // Ignore cross-origin or transient DOM errors
+            }
+        }
+
         function populateEmailHtmlIframe(iframeEl, rawHtmlBody) {
             if (!iframeEl) return;
             iframeEl.style.colorScheme = 'light';
-            // Neutralize @media (prefers-color-scheme: dark) and inline white text in emails (e.g. Google Calendar / Meet / Teams invites)
-            // so dark-mode browsers never turn text white (#e8eaed / #ffffff) on top of the white reader background!
+            // Neutralize @media (prefers-color-scheme: dark) so emails render in their standard Gmail light-mode palette
+            // while preserving intentional dark hero banners / white text inside the email design.
             const sanitizedBody = String(rawHtmlBody || '')
                 .replace(/<meta[^>]*name=["']?(?:supported-)?color-schemes?["']?[^>]*>/gi, '')
-                .replace(/prefers-color-scheme\s*:\s*dark/gi, 'prefers-color-scheme: never-match-dark')
-                .replace(/color\s*:\s*(?:#fff(?:fff)?|#e8eaed|#f8fafc|#f1f5f9|white)\s*!important/gi, 'color: #0f172a !important');
+                .replace(/prefers-color-scheme\s*:\s*dark/gi, 'prefers-color-scheme: never-match-dark');
 
             const safeHtmlDoc = `<!DOCTYPE html>
-<html style="color-scheme: light only !important; background-color: #ffffff !important; color: #0f172a !important;">
+<html style="color-scheme: light only; background-color: #ffffff; color: #0f172a;">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1021,37 +1120,27 @@
 <base target="_blank">
 <style>
     :root, html, body {
-        color-scheme: light only !important;
+        color-scheme: light only;
         margin: 0;
         padding: 14px 18px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         font-size: 14px;
         line-height: 1.6;
-        color: #0f172a !important;
-        background-color: #ffffff !important;
+        color: #0f172a;
+        background-color: #ffffff;
         word-wrap: break-word;
         overflow-x: auto;
     }
-    body, p, div, span, td, th, li, ul, ol, h1, h2, h3, h4, h5, h6,
-    .primary-text, .grey-infobar-text {
-        color: #0f172a !important;
-    }
-    .secondary-text, .grey-button-text {
-        color: #334155 !important;
-    }
-    .primary-button, a[style*="background-color:#0284c7"], a[style*="background-color: #1a73e8"] {
-        color: #ffffff !important;
-    }
-    .primary-button-text, .primary-button span, .primary-button a {
-        color: #ffffff !important;
-    }
     img { max-width: 100%; height: auto; }
-    a { color: #0284c7 !important; }
-    pre, code { white-space: pre-wrap; word-break: break-word; color: #0f172a !important; }
+    pre, code { white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>${sanitizedBody}</body>
 </html>`;
+            iframeEl.onload = () => {
+                applySmartEmailIframeContrastGuard(iframeEl);
+                setTimeout(() => applySmartEmailIframeContrastGuard(iframeEl), 120);
+            };
             iframeEl.srcdoc = safeHtmlDoc;
         }
 
