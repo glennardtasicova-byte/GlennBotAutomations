@@ -1,0 +1,100 @@
+    <!-- ==================== TAB 4: UNIFIED INBOX & DIRECT MESSAGES (10 PER PAGE + SEE MORE + PAGE FILTER) ==================== -->
+    <div id="view-messages" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex flex-col lg:h-full lg:min-h-0">
+            <!-- Top Header & Filters Bar -->
+            <div class="flex-none flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-3.5 mb-3.5 border-b border-slate-700">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+                        <i class="fas fa-envelope-open-text text-lg"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-base sm:text-lg font-bold text-white flex flex-wrap items-center gap-2">
+                            <span>Unified Inbox & Direct Messages</span>
+                            <span id="messages-header-unread-pill" class="hidden text-[11px] bg-rose-500/20 text-rose-300 border border-rose-500/50 px-2 py-0.5 rounded-full font-semibold">0 Unread</span>
+                            <span class="inline-flex items-center gap-1.5 text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold" title="Direct messages are synced via External API & Webhook">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> External API Live
+                            </span>
+                        </h2>
+                        <p class="text-[11px] sm:text-xs text-slate-400">Limited to 10 people per Social Media Page for fast loading • Click "See More" to load older chats</p>
+                    </div>
+                </div>
+
+                <!-- Filters: Platform, Social Media Page, Read Status, Actions -->
+                <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                    <select id="messages-filter-platform" onchange="onMessagesPlatformFilterChange()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer">
+                        <option value="all">All Platforms</option>
+                        <option value="sms">📱 SMS Only (TextBee SIM 2)</option>
+                        <option value="facebook">Facebook Only</option>
+                        <option value="instagram">Instagram Only</option>
+                        <option value="whatsapp">WhatsApp Only</option>
+                        <option value="telegram">Telegram Only</option>
+                        <option value="tiktok">TikTok Only</option>
+                        <option value="youtube">YouTube Only</option>
+                    </select>
+
+                    <!-- FILTER BY SOCIAL MEDIA PAGE DROPDOWN -->
+                    <select id="messages-filter-page" onchange="onMessagesPageFilterChange()" class="bg-slate-800 border border-gb-cyan/50 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer max-w-[230px] truncate" title="Filter conversations by Social Media Page">
+                        <option value="all">All Social Media Pages</option>
+                    </select>
+
+                    <select id="messages-filter-read" onchange="renderMessagesConversationsList()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer">
+                        <option value="all">All Chats</option>
+                        <option value="unread">Unread Only</option>
+                    </select>
+
+                    <!-- CREATE NEW SMS BUTTON (TEXTBEE.DEV SIM 2 OUTBOUND INITIATOR) -->
+                    <button type="button" onclick="openCreateNewSmsModal()" class="bg-gradient-to-r from-emerald-500/25 to-gb-cyan/25 hover:from-emerald-500/40 hover:to-gb-cyan/40 border border-emerald-400/70 text-emerald-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-[0_0_14px_rgba(16,185,129,0.28)]" title="Initiate a brand-new SMS message to any phone number via TextBee.dev (SIM 2)">
+                        <i class="fas fa-sms text-emerald-400"></i> <span>Create New SMS</span>
+                    </button>
+
+                    <button type="button" onclick="openConnectAccountsModal('textbee')" class="bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/50 text-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all" title="Configure TextBee.dev SMS Gateway (SIM 2) & Device ID">
+                        <i class="fas fa-sim-card text-amber-400"></i> <span class="hidden sm:inline">TextBee SIM 2</span>
+                    </button>
+
+                    <button type="button" onclick="openConnectAccountsModal('whatsapp')" class="bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/50 text-[#25D366] px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all" title="Connect WhatsApp or Telegram via Zernio API">
+                        <i class="fab fa-whatsapp"></i> <i class="fab fa-telegram-plane text-[#229ED9]"></i> <span class="hidden sm:inline">Link WA/TG</span>
+                    </button>
+
+                    <button onclick="markAllMessagesRead()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all" title="Mark all conversations as read">
+                        <i class="fas fa-check-double text-emerald-400"></i> <span>Mark All Read</span>
+                    </button>
+
+                    <button type="button" id="btn-delete-all-messages" onclick="promptDeleteAllMessages()" class="bg-rose-950/70 hover:bg-rose-600 border border-rose-500/60 text-rose-200 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all" title="Delete all messages and conversations">
+                        <i class="fas fa-trash-alt"></i> <span>Delete All</span>
+                    </button>
+
+                    <button onclick="fetchConversations(true)" id="btn-sync-messages" class="bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all">
+                        <i id="sync-messages-icon" class="fas fa-sync-alt"></i> <span>Sync Messages</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Main 2-Column Split View: Left = People Who Messaged (10 per Page + See More), Right = Active Conversation Thread -->
+            <div class="flex-1 lg:min-h-0 flex flex-col lg:flex-row gap-4 overflow-hidden">
+                <!-- LEFT COLUMN: PEOPLE / CONVERSATIONS LIST -->
+                <div class="lg:w-5/12 flex flex-col lg:h-full lg:min-h-0 rounded-xl border border-slate-700/80 bg-slate-900/60 overflow-hidden">
+                    <div class="flex-none px-3.5 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        <span><i class="fas fa-users text-gb-cyan mr-1.5"></i> People & Conversations</span>
+                        <span id="messages-list-counter">0 chats</span>
+                    </div>
+                    <div id="messages-list-container" class="flex-1 overflow-y-auto p-2.5 space-y-2 max-h-[380px] lg:max-h-none">
+                        <div class="flex flex-col items-center justify-center py-12 text-slate-500">
+                            <i class="fas fa-circle-notch fa-spin text-2xl text-gb-cyan mb-2"></i>
+                            <p class="text-xs">Loading conversations from connected pages...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT COLUMN: ACTIVE CONVERSATION CHAT THREAD & REPLY BOX -->
+                <div id="message-detail-panel" class="lg:w-7/12 flex flex-col lg:h-full lg:min-h-0 rounded-xl border border-slate-700/80 bg-slate-900/60 overflow-hidden">
+                    <div class="flex flex-col items-center justify-center h-full py-16 px-6 text-center text-slate-500">
+                        <div class="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center mb-3 text-slate-400">
+                            <i class="fas fa-comments text-2xl text-gb-cyan/70"></i>
+                        </div>
+                        <h3 class="text-sm sm:text-base font-bold text-slate-300 mb-1">Select a Person on the Left to View Conversation</h3>
+                        <p class="text-xs text-slate-400 max-w-md">Click any person from your connected Social Media Pages to read the full chat history and send a direct reply.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>

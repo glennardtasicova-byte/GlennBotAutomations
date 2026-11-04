@@ -1,0 +1,122 @@
+    <!-- ==================== VIEW 9: "FILES" MODAL / VIEW (GOOGLE DRIVE API VAULT WITH PYTHON FILE IDs) ==================== -->
+    <div id="view-files" class="hidden flex-1 w-full lg:h-full flex flex-col min-h-0">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex-1 flex flex-col min-h-0 overflow-hidden">
+            <!-- Header & Action Toolbar -->
+            <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3.5 mb-3.5 border-b border-slate-700/80 shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fab fa-google-drive text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h2 class="text-sm sm:text-base md:text-lg font-bold tracking-wider uppercase text-white">Files Vault • Google Drive API Storage</h2>
+                            <span id="files-b2-status-pill" class="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 font-semibold flex items-center gap-1">
+                                <i class="fab fa-google-drive text-[9px]"></i> Google Drive (<code class="text-white">GlennBot_Media_Vault</code>)
+                            </span>
+                            <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-gb-cyan/15 text-gb-cyan border border-gb-cyan/40 font-semibold">
+                                Clean Google Drive Filenames • Python <code class="font-mono">file_id</code> Saved in Cloudinary
+                            </span>
+                        </div>
+                        <p class="text-[11px] sm:text-xs text-slate-400">
+                            Upload any file to <strong>Google Drive API</strong> (<code class="text-emerald-300">GlennBot_Media_Vault</code>). All files uploaded from this modal get a <strong>Python-generated File ID</strong> (<code class="text-gb-cyan">file_...</code>) with 100% live video/image preview in Create Post.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Search + Refresh + Upload Button -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <div class="relative flex-1 sm:flex-none sm:w-64">
+                        <i class="fas fa-search text-slate-500 text-xs absolute left-3 top-1/2 -translate-y-1/2"></i>
+                        <input type="text" id="vault-files-search" oninput="renderVaultFilesList()" placeholder="Search by File ID, filename, or note..." class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl pl-8 pr-3 py-2 text-xs text-white focus:outline-none">
+                    </div>
+                    <button type="button" onclick="fetchVaultFiles(true)" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-semibold flex items-center gap-1.5 transition-all">
+                        <i id="vault-files-sync-icon" class="fas fa-sync-alt"></i>
+                        <span>Refresh</span>
+                    </button>
+                    <button type="button" onclick="document.getElementById('vault-files-input')?.click()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:opacity-95 transition-all">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <span>+ Choose File(s) to Upload</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Google Drive API OAuth Connection Bar (1-Time Authorization for 15 GB Personal Google Drive Quota) -->
+            <div id="gdrive-auth-banner" class="p-3 rounded-xl bg-slate-900/95 border border-emerald-500/40 mb-3 shrink-0 flex flex-col gap-2.5">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <div id="gdrive-auth-icon-box" class="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-400/40 flex items-center justify-center text-emerald-300 shrink-0">
+                            <i class="fab fa-google-drive text-sm"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span id="gdrive-auth-status-title" class="text-xs font-bold text-white">Google Drive OAuth 2.0 Client Configured</span>
+                                <span id="gdrive-auth-status-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40">Checking connection...</span>
+                            </div>
+                            <p id="gdrive-auth-status-desc" class="text-[11px] text-slate-400 truncate">
+                                Client ID <code class="text-gb-cyan">Google OAuth (.env)</code> • Click "Connect Google Drive" once to save your permanent Refresh Token.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 shrink-0">
+                        <button type="button" id="btn-connect-gdrive-oauth" onclick="connectGoogleDriveOAuth()" class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:opacity-95 transition-all">
+                            <i class="fab fa-google"></i>
+                            <span id="btn-connect-gdrive-label">Connect Google Drive</span>
+                        </button>
+                        <button type="button" onclick="toggleGoogleDriveCodePasteBox()" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 hover:text-gb-cyan text-[11px] font-semibold flex items-center gap-1 transition-all" title="If authorizing from Render.com and redirected to http://localhost/?code=..., paste that URL or code here">
+                            <i class="fas fa-key text-[10px]"></i>
+                            <span>Paste Auth URL / Code</span>
+                        </button>
+                    </div>
+                </div>
+                <!-- Optional Paste Code / Redirect URL Box (Used when authorizing from Render.com where redirect_uri is http://localhost) -->
+                <div id="gdrive-code-paste-box" class="hidden pt-2.5 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <div class="text-[11px] text-amber-300 sm:w-72 shrink-0 leading-tight">
+                        <i class="fas fa-info-circle mr-1"></i><strong>On Render.com?</strong> After signing in with Google, if the popup lands on <code class="text-white">http://localhost/?code=...</code>, copy that full browser address bar URL and paste it here:
+                    </div>
+                    <input type="text" id="gdrive-code-paste-input" placeholder="Paste full http://localhost/?code=... URL, auth code, or 1//0... refresh token here" class="flex-1 bg-slate-950 border border-slate-700 focus:border-emerald-400 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none">
+                    <button type="button" id="btn-submit-gdrive-code" onclick="submitGoogleDriveAuthCode()" class="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 shrink-0 transition-all">
+                        <i class="fas fa-check-circle"></i>
+                        <span>Verify &amp; Save Token</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Upload Bar (Drag/Drop + Automation Note + Upload Trigger) -->
+            <div class="p-3.5 rounded-xl bg-slate-900/90 border border-dashed border-emerald-400/50 mb-3.5 shrink-0 space-y-2.5">
+                <input type="file" id="vault-files-input" multiple class="hidden" onchange="onVaultFilesInputSelected(this)">
+                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <button type="button" onclick="document.getElementById('vault-files-input')?.click()" class="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-300 text-xs font-bold flex items-center gap-2 shrink-0 transition-all">
+                            <i class="fas fa-file-upload"></i>
+                            <span>Select File(s)</span>
+                        </button>
+                        <div class="min-w-0">
+                            <div id="vault-selected-files-label" class="text-xs font-bold text-white truncate">No file selected yet — click "Select File(s)" to upload to Google Drive</div>
+                            <div class="text-[11px] text-slate-400">Python automatically generates a unique <code class="text-gb-cyan font-mono">file_id</code> per uploaded file and stores it in your Google Drive (<code class="text-emerald-300">GlennBot_Media_Vault</code>).</div>
+                        </div>
+                    </div>
+                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input type="text" id="vault-files-note-input" placeholder="Optional automation note / tag (e.g. Brochure PDF, Intro Video)..." class="sm:w-64 bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
+                        <button type="button" id="btn-upload-vault-files" onclick="uploadSelectedVaultFilesToGoogleDrive()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:opacity-95 transition-all shrink-0">
+                            <i class="fab fa-google-drive"></i>
+                            <span>Upload to Google Drive &amp; Generate File ID</span>
+                        </button>
+                    </div>
+                </div>
+                <!-- Automation API Endpoint Info Strip -->
+                <div class="pt-2 border-t border-slate-800/90 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                    <span>
+                        <i class="fas fa-robot text-gb-cyan mr-1"></i>
+                        <strong>Automation Lookup Endpoint (n8n / API):</strong>
+                        <code class="text-gb-cyan font-mono bg-slate-950 px-2 py-0.5 rounded border border-slate-800">GET /api/v1/files/{file_id}</code>
+                    </span>
+                    <span id="vault-files-summary-count" class="text-emerald-300 font-semibold">0 file(s) stored in Google Drive</span>
+                </div>
+            </div>
+
+            <!-- Uploaded Files Table Container (Visible with Python-generated File IDs) -->
+            <div id="vault-files-table-container" class="flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+                <!-- Populated dynamically by renderVaultFilesList() -->
+            </div>
+        </div>
+    </div>

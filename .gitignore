@@ -1,0 +1,23 @@
+# Virtual Environment & Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Environment Variables (CRITICAL: Do NOT commit secrets!)
+.env
+.env.*
+!.env.example
+
+# Temporary / Local cache files
+*.log
+files_vault_cache.json
+spreadsheets_store_cache.json
+.pytest_cache/
+.DS_Store
+Thumbs.db

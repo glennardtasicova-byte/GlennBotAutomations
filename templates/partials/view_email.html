@@ -1,0 +1,226 @@
+    <!-- ==================== VIEW 7: DEDICATED SINGLE-ACCOUNT EMAIL HUB (GMAIL, MICROSOFT, IMAP/SMTP) ==================== -->
+    <div id="view-email" class="hidden flex-1 w-full lg:h-full flex flex-col min-h-0">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex-1 flex flex-col min-h-0 overflow-hidden">
+            <!-- Top Email Control & Platform Filter Header -->
+            <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3.5 mb-3.5 border-b border-slate-700/80 shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+                        <i class="fas fa-at text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h2 class="text-sm sm:text-base md:text-lg font-bold tracking-wider uppercase text-white">Client Email Command Center</h2>
+                            <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 font-semibold flex items-center gap-1">
+                                <i class="fas fa-shield-alt text-[9px]"></i> Single-Inbox Isolation Active
+                            </span>
+                        </div>
+                        <p class="text-[11px] sm:text-xs text-slate-400">
+                            Only one email account is displayed per transaction so client inboxes never mix.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Top Platform Filter + Account Switcher + Action Buttons -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <!-- Platform Filter Dropdown (Switch Platform anytime even when others auto-hide) -->
+                    <div class="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1.5">
+                        <i class="fas fa-filter text-gb-cyan text-xs"></i>
+                        <span class="text-[11px] text-slate-400 font-semibold">Platform:</span>
+                        <select id="email-top-platform-filter" onchange="handleTopEmailPlatformFilter(this.value)" class="bg-transparent text-white text-xs font-bold focus:outline-none cursor-pointer pr-1">
+                            <option value="all" class="bg-slate-900 text-white">Show All Platforms</option>
+                            <option value="gmail" class="bg-slate-900 text-red-300">Gmail (Google OAuth)</option>
+                            <option value="microsoft" class="bg-slate-900 text-sky-300">Microsoft (Outlook / 365)</option>
+                            <option value="imap" class="bg-slate-900 text-amber-300">IMAP / SMTP Hosting</option>
+                        </select>
+                    </div>
+
+                    <!-- Connected Email Account Selector (Strictly 1 Active Account at a time) -->
+                    <div class="flex items-center gap-1.5 bg-slate-900/90 border border-gb-cyan/40 rounded-xl px-2.5 py-1.5">
+                        <i class="fas fa-user-check text-gb-cyan text-xs"></i>
+                        <span class="text-[11px] text-slate-400 font-semibold">Active Email:</span>
+                        <select id="email-active-account-select" onchange="selectSingleEmailAccount(this.value)" class="bg-transparent text-gb-cyan text-xs font-bold focus:outline-none cursor-pointer max-w-[220px] truncate">
+                            <option value="" class="bg-slate-900 text-slate-400">-- Select Connected Email --</option>
+                        </select>
+                    </div>
+
+                    <button type="button" onclick="openComposeEmailModal()" id="btn-email-compose-top" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:shadow-[0_0_20px_rgba(0,240,255,0.55)] transition-all">
+                        <i class="fas fa-pen-nib"></i>
+                        <span>Compose Email</span>
+                    </button>
+
+                    <button type="button" onclick="openConnectAccountsModal('gmail')" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-gb-cyan/50 text-gb-cyan text-xs font-semibold flex items-center gap-1.5 transition-all" title="Connect a new Gmail, Microsoft, or IMAP/SMTP account">
+                        <i class="fas fa-plus-circle"></i>
+                        <span>+ Connect Email</span>
+                    </button>
+
+                    <button type="button" onclick="refreshActiveEmailInbox(true)" id="btn-email-sync" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-all">
+                        <i class="fas fa-sync-alt" id="email-sync-icon"></i>
+                        <span>Sync Inbox</span>
+                    </button>
+
+                    <button type="button" onclick="openEmailWebhookModal()" id="btn-email-webhook-status" class="px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition-all" title="Configure & Verify Real-Time Email Webhook">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <i class="fas fa-bolt text-[11px]"></i>
+                        <span>Webhook Live</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Main Email Body: Left Platform Column (like Create Post) + Right Single-Account Inbox & Reader -->
+            <div class="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 overflow-hidden">
+
+                <!-- LEFT COLUMN: EMAIL PLATFORMS (GMAIL, MICROSOFT, IMAP/SMTP) -->
+                <!-- Automatically hides unselected platforms when a platform is active so emails never mix! -->
+                <div id="email-platforms-column" class="w-full lg:w-72 shrink-0 flex flex-col gap-3 overflow-y-auto pr-0.5">
+                    <div class="flex items-center justify-between px-1">
+                        <span class="text-[11px] font-bold uppercase tracking-wider text-gb-cyan flex items-center gap-1.5">
+                            <i class="fas fa-layer-group"></i> Email Platforms
+                        </span>
+                        <button type="button" id="btn-show-all-email-platforms" onclick="showAllEmailPlatformsColumn()" class="hidden text-[11px] text-amber-300 hover:text-amber-200 font-semibold flex items-center gap-1 bg-amber-500/15 border border-amber-400/40 px-2 py-0.5 rounded-lg transition-all">
+                            <i class="fas fa-exchange-alt text-[10px]"></i> Switch Platform
+                        </button>
+                    </div>
+
+                    <!-- PLATFORM CARD 1: GMAIL -->
+                    <div id="email-plat-card-gmail" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700 hover:border-red-400/60 transition-all space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <button type="button" onclick="focusEmailPlatform('gmail')" class="flex items-center gap-2.5 text-left group">
+                                <span class="w-8 h-8 rounded-lg bg-red-500/15 border border-red-500/40 flex items-center justify-center text-red-400 shrink-0 group-hover:scale-105 transition-transform">
+                                    <i class="fab fa-google text-sm"></i>
+                                </span>
+                                <div>
+                                    <div class="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+                                        <span>Gmail</span>
+                                        <span id="email-count-badge-gmail" class="text-[10px] px-1.5 py-0.2 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-bold">0</span>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400">OAuth2 Popup Login</p>
+                                </div>
+                            </button>
+                            <button type="button" onclick="startEmailOAuthPopup('gmail')" class="px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/35 border border-red-400/50 text-red-200 text-[11px] font-bold flex items-center gap-1 transition-all" title="Connect a Gmail account via Popup">
+                                <i class="fas fa-plus text-[9px]"></i> Connect
+                            </button>
+                        </div>
+                        <div id="email-plat-accounts-gmail" class="space-y-1.5 pt-1 border-t border-slate-800/80"></div>
+                    </div>
+
+                    <!-- PLATFORM CARD 2: MICROSOFT (OUTLOOK / OFFICE 365) -->
+                    <div id="email-plat-card-microsoft" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700 hover:border-sky-400/60 transition-all space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <button type="button" onclick="focusEmailPlatform('microsoft')" class="flex items-center gap-2.5 text-left group">
+                                <span class="w-8 h-8 rounded-lg bg-sky-500/15 border border-sky-500/40 flex items-center justify-center text-sky-400 shrink-0 group-hover:scale-105 transition-transform">
+                                    <i class="fab fa-microsoft text-sm"></i>
+                                </span>
+                                <div>
+                                    <div class="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+                                        <span>Microsoft</span>
+                                        <span id="email-count-badge-microsoft" class="text-[10px] px-1.5 py-0.2 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/40 font-bold">0</span>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400">Outlook / 365 OAuth2</p>
+                                </div>
+                            </button>
+                            <button type="button" onclick="startEmailOAuthPopup('microsoft')" class="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-sky-200 text-[11px] font-bold flex items-center gap-1 transition-all" title="Connect a Microsoft Outlook / 365 account via Popup">
+                                <i class="fas fa-plus text-[9px]"></i> Connect
+                            </button>
+                        </div>
+                        <div id="email-plat-accounts-microsoft" class="space-y-1.5 pt-1 border-t border-slate-800/80"></div>
+                    </div>
+
+                    <!-- PLATFORM CARD 3: IMAP / SMTP (CUSTOM DOMAIN / HOSTINGER / CPANEL) -->
+                    <div id="email-plat-card-imap" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-700 hover:border-amber-400/60 transition-all space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <button type="button" onclick="focusEmailPlatform('imap')" class="flex items-center gap-2.5 text-left group">
+                                <span class="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 group-hover:scale-105 transition-transform">
+                                    <i class="fas fa-server text-sm"></i>
+                                </span>
+                                <div>
+                                    <div class="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5">
+                                        <span>IMAP / SMTP</span>
+                                        <span id="email-count-badge-imap" class="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">0</span>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400">Webmail / Custom Host</p>
+                                </div>
+                            </button>
+                            <button type="button" onclick="openConnectAccountsModal('imap')" class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/50 text-amber-200 text-[11px] font-bold flex items-center gap-1 transition-all" title="Connect an IMAP/SMTP email account">
+                                <i class="fas fa-plus text-[9px]"></i> Connect
+                            </button>
+                        </div>
+                        <div id="email-plat-accounts-imap" class="space-y-1.5 pt-1 border-t border-slate-800/80"></div>
+                    </div>
+
+                    <!-- Info Notice about Single-Email Isolation -->
+                    <div class="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 leading-relaxed">
+                        <div class="font-bold text-gb-cyan mb-1 flex items-center gap-1.5">
+                            <i class="fas fa-lock text-[10px]"></i> Single-Account Mode
+                        </div>
+                        When you select a platform and email account, other platforms automatically hide so you only view the folders (<strong class="text-slate-200">Inbox, Sent, Drafts, Trash</strong>) for that specific email. Use the <strong class="text-slate-200">Platform Filter</strong> above to switch accounts anytime.
+                    </div>
+                </div>
+
+                <!-- RIGHT COLUMN: STRICT SINGLE-EMAIL WORKSPACE (FOLDERS + MESSAGE LIST + READING PANE) -->
+                <div class="flex-1 min-w-0 flex flex-col bg-slate-950/70 border border-slate-800 rounded-2xl overflow-hidden">
+                    <!-- Active Account & Folder Bar -->
+                    <div class="px-3.5 py-2.5 bg-slate-900/95 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shrink-0">
+                        <!-- Folder Tabs (Inbox, Sent, Drafts, Spam, Trash) -->
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <button type="button" onclick="switchEmailFolder('inbox')" id="email-folder-btn-inbox" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-gb-cyan/20 text-gb-cyan border border-gb-cyan/50 flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-inbox"></i> <span>Inbox</span>
+                            </button>
+                            <button type="button" onclick="switchEmailFolder('sent')" id="email-folder-btn-sent" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-paper-plane"></i> <span>Sent</span>
+                            </button>
+                            <button type="button" onclick="switchEmailFolder('drafts')" id="email-folder-btn-drafts" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-file-alt"></i> <span>Drafts</span>
+                            </button>
+                            <button type="button" onclick="switchEmailFolder('spam')" id="email-folder-btn-spam" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-exclamation-triangle text-amber-400"></i> <span>Spam</span>
+                            </button>
+                            <button type="button" onclick="switchEmailFolder('trash')" id="email-folder-btn-trash" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-trash-alt"></i> <span>Trash</span>
+                            </button>
+                        </div>
+
+                        <!-- Search inside this single email account -->
+                        <div class="flex items-center gap-2">
+                            <div class="relative flex-1 sm:w-60">
+                                <i class="fas fa-search text-slate-500 text-xs absolute left-3 top-1/2 -translate-y-1/2"></i>
+                                <input type="text" id="email-search-input" onkeydown="if(event.key==='Enter') refreshActiveEmailInbox(true)" placeholder="Search this email inbox..." class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none">
+                            </div>
+                            <button type="button" onclick="refreshActiveEmailInbox(true)" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold">
+                                Search
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Active Single-Account Identity Banner -->
+                    <div id="email-active-account-banner" class="px-4 py-2 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-between text-xs shrink-0">
+                        <div class="flex items-center gap-2 truncate">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span class="text-slate-400">Viewing Single Account:</span>
+                            <span id="email-active-account-label" class="font-bold text-white truncate">No email account selected yet</span>
+                        </div>
+                        <span id="email-active-folder-count" class="text-[11px] text-gb-cyan font-semibold shrink-0">0 emails</span>
+                    </div>
+
+                    <!-- 2-Pane Split: Left Message List + Right Email Reader & Reply -->
+                    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+                        <!-- Left Message List (5 cols) -->
+                        <div id="email-messages-list-pane" class="lg:col-span-5 border-b lg:border-b-0 lg:border-r border-slate-800 overflow-y-auto divide-y divide-slate-800/70 max-h-[340px] lg:max-h-none">
+                            <div class="p-8 text-center text-slate-400 text-xs">
+                                Select or connect a Gmail, Microsoft, or IMAP account on the left to load its inbox.
+                            </div>
+                        </div>
+
+                        <!-- Right Email Reader & Quick Reply Pane (7 cols) -->
+                        <div id="email-reader-pane" class="lg:col-span-7 flex flex-col min-h-0 overflow-hidden bg-slate-950/40">
+                            <div class="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-500 text-xs">
+                                <i class="fas fa-envelope-open text-3xl text-slate-700 mb-3"></i>
+                                <p class="font-semibold text-slate-300">No Email Selected</p>
+                                <p class="text-[11px] text-slate-500 mt-1 max-w-sm">Click any email from the list on the left to read its full content and reply directly from that account.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>

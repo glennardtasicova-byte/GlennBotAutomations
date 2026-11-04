@@ -1,0 +1,119 @@
+    <!-- ==================== TAB 2: CALENDAR VIEW (DUAL-TAB: SOCIAL SCHEDULED POSTS + COMPOSIO CALENDARS & MEETINGS) ==================== -->
+    <div id="view-calendar" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex flex-col lg:h-full lg:min-h-0">
+            <!-- TOP HEADER + 2-TAB MODE SWITCHER + MONTH/YEAR CONTROLS -->
+            <div class="flex-none flex flex-col gap-3 pb-3.5 mb-3.5 border-b border-slate-700">
+                <div class="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <i class="fas fa-calendar-check text-gb-cyan text-xl"></i>
+                        <div>
+                            <h2 id="calendar-main-heading" class="text-base sm:text-lg font-bold text-white">Unified Schedule &amp; Appointments Calendar</h2>
+                            <p id="calendar-main-subheading" class="text-[11px] sm:text-xs text-slate-400">Switch between Social Media Scheduled Posts and Composio Connected Calendars (Google Calendar, MS Outlook, Meet, Teams &amp; Zoom)</p>
+                        </div>
+                    </div>
+
+                    <!-- DUAL CALENDAR TAB SWITCHER -->
+                    <div class="flex items-center gap-1.5 bg-slate-900/95 p-1 rounded-xl border border-slate-700 w-full lg:w-auto">
+                        <button type="button" id="cal-subtab-posts" onclick="switchCalendarSubTab('posts')" class="flex-1 lg:flex-none px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 bg-gb-cyan text-slate-950 shadow-[0_0_12px_rgba(0,240,255,0.3)]">
+                            <i class="fas fa-share-alt"></i>
+                            <span>Scheduled Posts</span>
+                            <span id="cal-subtab-posts-count" class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-950/25 text-slate-950 font-extrabold">0</span>
+                        </button>
+                        <button type="button" id="cal-subtab-composio" onclick="switchCalendarSubTab('composio')" class="flex-1 lg:flex-none px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 text-slate-300 hover:text-white hover:bg-slate-800">
+                            <i class="fas fa-video text-gb-cyan"></i>
+                            <span>Calendars &amp; Meetings (Composio)</span>
+                            <span id="cal-subtab-composio-count" class="px-1.5 py-0.5 rounded-full text-[10px] bg-gb-cyan/20 text-gb-cyan border border-gb-cyan/40 font-extrabold">0</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- COMPOSIO CONNECTED CALENDARS & VIDEO MEETINGS TOOLBAR (SHOWN IN TAB 2) -->
+                <div id="calendar-composio-toolbar" class="hidden flex-col gap-2.5 p-3 rounded-xl bg-slate-900/90 border border-gb-cyan/30">
+                    <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-gb-cyan mr-1 flex items-center gap-1.5">
+                                <i class="fas fa-key"></i> Single Composio API Hub:
+                            </span>
+                            <button type="button" onclick="startCalendarOAuthPopup('google_calendar')" class="px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/40 text-red-200 text-[11px] font-semibold flex items-center gap-1.5 transition-all" title="Unified Google Calendar + Google Meet Integration">
+                                <i class="fab fa-google text-red-400"></i>
+                                <i class="fas fa-video text-emerald-400 text-[10px]"></i>
+                                <span>+ Connect Google Calendar &amp; Meet</span>
+                            </button>
+                            <button type="button" onclick="startCalendarOAuthPopup('outlook_calendar')" class="px-3 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-200 text-[11px] font-semibold flex items-center gap-1.5 transition-all" title="Unified Microsoft Outlook Calendar + MS Teams Integration">
+                                <i class="fab fa-microsoft text-sky-400"></i>
+                                <i class="fas fa-users text-indigo-400 text-[10px]"></i>
+                                <span>+ Connect MS Outlook &amp; Teams</span>
+                            </button>
+                            <button type="button" onclick="startCalendarOAuthPopup('zoom')" class="px-3 py-1.5 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-blue-200 text-[11px] font-semibold flex items-center gap-1.5 transition-all" title="Connect Zoom Cloud Meetings (Auto-syncs meetings to Google/Outlook Calendar)">
+                                <i class="fas fa-video text-blue-400"></i>
+                                <span>+ Connect Zoom</span>
+                            </button>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2">
+                            <select id="cal-composio-account-filter" onchange="onComposioCalendarFilterChange()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none">
+                                <option value="all">All Connected Calendars</option>
+                            </select>
+                            <select id="cal-composio-meeting-filter" onchange="onComposioCalendarFilterChange()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none">
+                                <option value="all">All Appointments &amp; Meetings</option>
+                                <option value="with_meeting">With Any Video Meeting</option>
+                                <option value="without_meeting">Without Video Meeting (Standard)</option>
+                                <option value="google_meet">With Google Meet Only</option>
+                                <option value="microsoft_teams">With MS Teams Only</option>
+                                <option value="zoom">With Zoom Only</option>
+                            </select>
+                            <button type="button" onclick="openScheduleMeetingModal()" class="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:scale-105 transition-all">
+                                <i class="fas fa-calendar-plus"></i>
+                                <span>+ Schedule Meeting / Appointment</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- CONNECTED CALENDAR ACCOUNTS LIST -->
+                    <div id="cal-composio-accounts-chips" class="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-800 text-xs">
+                        <span class="text-[11px] text-slate-400 italic">No calendar accounts connected yet. Click Google Calendar &amp; Meet, MS Outlook &amp; Teams, or Zoom above to connect via Composio OAuth2.</span>
+                    </div>
+                </div>
+
+                <!-- MONTH / YEAR / TODAY / REFRESH BAR -->
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div id="calendar-legend-bar" class="flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
+                        <span><i class="fas fa-mouse-pointer text-gb-cyan mr-1"></i>Hover any item for rich pop-up bubble</span>
+                        <span>•</span>
+                        <span><i class="fas fa-expand-alt text-gb-cyan mr-1"></i>Click day or expand icon for full table</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-end">
+                        <button onclick="changeCalendarMonth(-1)" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-2.5 py-1.5 rounded-lg text-xs transition-all">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <select id="cal-month-select" onchange="onCalendarMonthYearChange()" class="bg-slate-800 border border-slate-600 text-white text-xs sm:text-sm rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer flex-1 sm:flex-none">
+                            <option value="0">January</option><option value="1">February</option><option value="2">March</option>
+                            <option value="3">April</option><option value="4">May</option><option value="5">June</option>
+                            <option value="6">July</option><option value="7">August</option><option value="8">September</option>
+                            <option value="9">October</option><option value="10">November</option><option value="11">December</option>
+                        </select>
+                        <select id="cal-year-select" onchange="onCalendarMonthYearChange()" class="bg-slate-800 border border-slate-600 text-white text-xs sm:text-sm rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer"></select>
+                        <button onclick="changeCalendarMonth(1)" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-2.5 py-1.5 rounded-lg text-xs transition-all">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                        <button onclick="resetCalendarToToday()" class="bg-gb-cyan/10 hover:bg-gb-cyan/20 border border-gb-cyan/40 text-gb-cyan px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all">
+                            Today
+                        </button>
+                        <button onclick="refreshActiveCalendarTab()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 px-2.5 py-1.5 rounded-lg text-xs transition-all flex items-center gap-1.5" title="Sync & Refresh Calendar">
+                            <i id="cal-refresh-icon" class="fas fa-sync-alt"></i>
+                            <span class="hidden sm:inline">Sync</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-1 lg:min-h-0 overflow-x-auto overflow-y-auto">
+                <div class="min-w-[640px] flex flex-col h-full">
+                    <div class="flex-none grid grid-cols-7 gap-2 mb-2 text-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                    </div>
+                    <div id="calendar-grid" class="flex-1 grid grid-cols-7 gap-2 pr-1"></div>
+                </div>
+            </div>
+        </div>
+    </div>

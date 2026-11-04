@@ -1,0 +1,125 @@
+    <!-- ==================== TAB 1: CREATE POST (SCHEDULER) ==================== -->
+    <div id="view-scheduler" class="flex-1 lg:min-h-0 flex flex-col lg:flex-row gap-4 sm:gap-6 w-full pb-4 lg:pb-2">
+        <!-- FIXED PLATFORMS LIST + CONNECT SOCIAL ACCOUNTS WIDGET -->
+        <div class="glass-panel rounded-2xl p-4 sm:p-5 lg:w-1/4 flex flex-col justify-between lg:h-full shrink-0 gap-4 lg:overflow-y-auto">
+            <div>
+                <h2 class="text-base sm:text-lg font-semibold border-b border-slate-700 pb-3 mb-3.5 text-white flex items-center justify-between">
+                    <span><i class="fas fa-network-wired text-gb-cyan mr-2"></i> Platforms</span>
+                    <span class="text-[10px] font-normal text-slate-400 lg:hidden">Tap to select</span>
+                </h2>
+                <div class="grid grid-cols-2 sm:grid-cols-4 lg:flex lg:flex-col gap-2.5">
+                    <label class="relative cursor-pointer group block">
+                        <input type="checkbox" name="platform" value="facebook" class="peer sr-only" onchange="onPlatformToggle()">
+                        <div class="flex flex-col lg:flex-row items-center justify-center lg:justify-start justify-between gap-2 lg:gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/50 hover:border-slate-500 transition-all">
+                            <div class="flex flex-col lg:flex-row items-center gap-2 lg:gap-3">
+                                <i class="fab fa-facebook text-xl sm:text-2xl text-slate-400 platform-icon transition-colors"></i>
+                                <span class="font-medium text-xs sm:text-sm">Facebook</span>
+                            </div>
+                            <span id="platform-count-facebook" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-400">0 pages</span>
+                        </div>
+                    </label>
+                    <label class="relative cursor-pointer group block">
+                        <input type="checkbox" name="platform" value="instagram" class="peer sr-only" onchange="onPlatformToggle()">
+                        <div class="flex flex-col lg:flex-row items-center justify-center lg:justify-start justify-between gap-2 lg:gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/50 hover:border-slate-500 transition-all">
+                            <div class="flex flex-col lg:flex-row items-center gap-2 lg:gap-3">
+                                <i class="fab fa-instagram text-xl sm:text-2xl text-slate-400 platform-icon transition-colors"></i>
+                                <span class="font-medium text-xs sm:text-sm">Instagram</span>
+                            </div>
+                            <span id="platform-count-instagram" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-400">0 accts</span>
+                        </div>
+                    </label>
+                    <label class="relative cursor-pointer group block">
+                        <input type="checkbox" name="platform" value="tiktok" class="peer sr-only" onchange="onPlatformToggle()">
+                        <div class="flex flex-col lg:flex-row items-center justify-center lg:justify-start justify-between gap-2 lg:gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/50 hover:border-slate-500 transition-all">
+                            <div class="flex flex-col lg:flex-row items-center gap-2 lg:gap-3">
+                                <i class="fab fa-tiktok text-xl sm:text-2xl text-slate-400 platform-icon transition-colors"></i>
+                                <span class="font-medium text-xs sm:text-sm">TikTok</span>
+                            </div>
+                            <span id="platform-count-tiktok" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-400">0 accts</span>
+                        </div>
+                    </label>
+                    <label class="relative cursor-pointer group block">
+                        <input type="checkbox" name="platform" value="youtube" class="peer sr-only" onchange="onPlatformToggle()">
+                        <div class="flex flex-col lg:flex-row items-center justify-center lg:justify-start justify-between gap-2 lg:gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/50 hover:border-slate-500 transition-all">
+                            <div class="flex flex-col lg:flex-row items-center gap-2 lg:gap-3">
+                                <i class="fab fa-youtube text-xl sm:text-2xl text-slate-400 platform-icon transition-colors"></i>
+                                <span class="font-medium text-xs sm:text-sm">YouTube</span>
+                            </div>
+                            <span id="platform-count-youtube" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-400">0 chnls</span>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- CONNECT SOCIAL MEDIA ACCOUNTS WIDGET -->
+            <div class="p-3.5 rounded-xl bg-slate-900/90 border border-gb-cyan/30 space-y-2.5">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <span class="text-xs font-bold text-white flex items-center gap-1.5">
+                        <i class="fas fa-user-plus text-gb-cyan"></i> Connect Accounts
+                    </span>
+                    <button type="button" onclick="openConnectAccountsModal('manage')" class="text-[10px] text-gb-cyan hover:underline font-semibold">
+                        Manage (<span id="sidebar-connected-count">0</span>)
+                    </button>
+                </div>
+                <p class="text-[11px] text-slate-400 leading-snug">
+                    Log in via External API & choose which Pages or Accounts to manage in GlennBot:
+                </p>
+                <div class="flex flex-col gap-2">
+                    <button type="button" onclick="openConnectAccountsModal('facebook')" class="w-full py-2 px-3 rounded-lg bg-[#1877F2]/20 hover:bg-[#1877F2]/35 border border-[#1877F2]/60 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+                        <i class="fab fa-facebook text-blue-400 text-sm"></i>
+                        <span>Connect with Facebook</span>
+                    </button>
+                    <button type="button" onclick="openConnectAccountsModal('instagram')" class="w-full py-2 px-3 rounded-lg bg-pink-600/20 hover:bg-pink-600/35 border border-pink-500/60 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+                        <i class="fab fa-instagram text-pink-400 text-sm"></i>
+                        <span>Connect with Instagram</span>
+                    </button>
+                    <button type="button" onclick="openConnectAccountsModal('tiktok')" class="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+                        <i class="fab fa-tiktok text-gb-cyan text-sm"></i>
+                        <span>Connect with TikTok</span>
+                    </button>
+                    <button type="button" onclick="openConnectAccountsModal('youtube')" class="w-full py-2 px-3 rounded-lg bg-red-600/20 hover:bg-red-600/35 border border-red-500/60 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+                        <i class="fab fa-youtube text-red-500 text-sm"></i>
+                        <span>Connect with YouTube</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Format & Live Preview Panel -->
+        <div class="glass-panel rounded-2xl p-4 sm:p-5 lg:w-3/4 flex flex-col lg:h-full lg:min-h-0">
+            <div class="flex-none mb-4">
+                <h3 class="text-xs text-slate-400 uppercase tracking-widest mb-2 font-semibold">Format Type</h3>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <label class="cursor-pointer"><input type="radio" name="post_type" value="text" class="peer sr-only" onchange="captureCurrentDraftState(); updatePreviews()"><div class="text-center py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-800/50 font-medium text-xs sm:text-sm transition-all hover:bg-slate-700"><i class="fas fa-align-left mr-1"></i> Text Post</div></label>
+                    <label class="cursor-pointer"><input type="radio" name="post_type" value="reels" class="peer sr-only" checked onchange="captureCurrentDraftState(); updatePreviews()"><div class="text-center py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-800/50 font-medium text-xs sm:text-sm transition-all hover:bg-slate-700"><i class="fas fa-mobile-alt mr-1"></i> Reels/Short</div></label>
+                    <label class="cursor-pointer"><input type="radio" name="post_type" value="video169" class="peer sr-only" onchange="captureCurrentDraftState(); updatePreviews()"><div class="text-center py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-800/50 font-medium text-xs sm:text-sm transition-all hover:bg-slate-700"><i class="fas fa-video mr-1"></i> 16:9 Video</div></label>
+                    <label class="cursor-pointer"><input type="radio" name="post_type" value="image" class="peer sr-only" onchange="captureCurrentDraftState(); updatePreviews()"><div class="text-center py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-800/50 font-medium text-xs sm:text-sm transition-all hover:bg-slate-700"><i class="fas fa-images mr-1"></i> Image/Album</div></label>
+                </div>
+            </div>
+
+            <!-- CLEAN LIVE PREVIEW LABEL + ASK AI ACTION BUTTON -->
+            <div class="flex-none flex items-center justify-between mb-2 gap-2 flex-wrap">
+                <h3 class="text-xs text-slate-400 uppercase tracking-widest font-semibold flex items-center gap-2">
+                    <i class="fas fa-eye text-gb-cyan"></i> Live Preview
+                </h3>
+                <button type="button" onclick="openAskAiModal()"
+                    onmouseenter="showActionBubble(event, 'Ask AI (Gemini 3.5 Flash)', 'Explain your content idea and let Gemini generate titles, captions, and descriptions automatically.', 'text-purple-400')"
+                    onmousemove="movePostTooltip(event)" onmouseleave="hidePostTooltip()"
+                    class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 via-pink-600 to-gb-cyan text-white font-bold text-xs shadow-[0_0_15px_rgba(168,85,247,0.35)] hover:shadow-[0_0_20px_rgba(0,240,255,0.6)] flex items-center gap-1.5 transition-all transform hover:scale-105">
+                    <i class="fas fa-magic text-amber-300"></i>
+                    <span>Ask AI</span>
+                </button>
+            </div>
+            
+            <!-- Preview Cards Container -->
+            <div id="preview-container" class="flex-1 lg:min-h-0 lg:overflow-y-auto pr-0 sm:pr-2 pb-4 flex flex-col gap-5">
+                <div class="flex flex-col items-center justify-center py-12 lg:h-full text-slate-500 opacity-60"><i class="fas fa-spinner fa-spin text-4xl sm:text-5xl mb-3"></i><p class="text-sm sm:text-base">Loading assets...</p></div>
+            </div>
+
+            <div class="flex-none mt-3 pt-3 border-t border-slate-700 flex justify-end">
+                <button id="submit-btn" onclick="submitPost()" class="w-full sm:w-auto justify-center bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-900 font-bold py-3 sm:py-2.5 px-6 rounded-xl sm:rounded-lg shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:shadow-[0_0_25px_rgba(0,240,255,0.6)] sm:hover:scale-105 transition-all flex items-center gap-2 text-sm">
+                    <i class="fas fa-paper-plane"></i> Launch Automation
+                </button>
+            </div>
+        </div>
+    </div>

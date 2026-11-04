@@ -1,0 +1,136 @@
+    <!-- ==================== VIEW 8: CLIENT CONTACTS & LEAD CRM DATABASE ==================== -->
+    <div id="view-contacts" class="hidden flex-1 w-full lg:h-full flex flex-col min-h-0">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex-1 flex flex-col min-h-0 overflow-hidden">
+            <!-- Top CRM Header & Action Toolbar -->
+            <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3.5 mb-3.5 border-b border-slate-700/80 shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fas fa-address-book text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h2 class="text-sm sm:text-base md:text-lg font-bold tracking-wider uppercase text-white">Contacts &amp; Lead CRM Database</h2>
+                            <span class="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 font-semibold flex items-center gap-1">
+                                <i class="fas fa-cloud-upload-alt text-[9px]"></i> Synced to DB + Cloudinary
+                            </span>
+                        </div>
+                        <p class="text-[11px] sm:text-xs text-slate-400">
+                            Manage leads captured from <strong>Messages</strong>, <strong>Comments</strong>, <strong>Email</strong>, or manual entry with smart name auto-detection.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Search + Filter + Create Contact Buttons -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <!-- Real-Time Search Box -->
+                    <div class="relative flex-1 sm:flex-none sm:w-64">
+                        <i class="fas fa-search text-slate-500 text-xs absolute left-3 top-1/2 -translate-y-1/2"></i>
+                        <input type="text" id="crm-contacts-search" oninput="renderCrmContactsTable()" placeholder="Search name, phone, email, @username..." class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl pl-8 pr-3 py-2 text-xs text-white focus:outline-none">
+                    </div>
+
+                    <!-- Source Platform Filter -->
+                    <select id="crm-filter-platform" onchange="renderCrmContactsTable()" class="bg-slate-900 border border-slate-700 focus:border-gb-cyan text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none cursor-pointer">
+                        <option value="all">All Platforms</option>
+                        <option value="sms">SMS (TextBee SIM 2)</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="telegram">Telegram</option>
+                        <option value="facebook">Facebook</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="youtube">YouTube</option>
+                        <option value="google_contacts">Google Contacts</option>
+                        <option value="gmail">Gmail / Email</option>
+                        <option value="manual">Manual Entry</option>
+                    </select>
+
+                    <!-- Category / Status Filter -->
+                    <select id="crm-filter-category" onchange="renderCrmContactsTable()" class="bg-slate-900 border border-slate-700 focus:border-gb-cyan text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none cursor-pointer">
+                        <option value="all">All Categories</option>
+                        <option value="New Lead">New Lead</option>
+                        <option value="Hot Prospect">Hot Prospect</option>
+                        <option value="Active Client">Active Client</option>
+                        <option value="VIP">VIP</option>
+                        <option value="Inquirer">Inquirer</option>
+                        <option value="Follow-Up">Follow-Up</option>
+                        <option value="Partner">Partner</option>
+                    </select>
+
+                    <!-- Quick Link WhatsApp / Telegram Button -->
+                    <button type="button" onclick="openConnectAccountsModal('whatsapp')" class="px-3 py-2 rounded-xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/50 text-[#25D366] text-xs font-semibold flex items-center gap-1.5 transition-all" title="Connect WhatsApp or Telegram via Zernio API">
+                        <i class="fab fa-whatsapp"></i>
+                        <i class="fab fa-telegram-plane text-[#229ED9]"></i>
+                        <span class="hidden sm:inline">Link WA / TG</span>
+                    </button>
+
+                    <!-- Import Google Contacts via Composio OAuth2 Button -->
+                    <button type="button" id="btn-import-google-contacts" onclick="startGoogleContactsOAuthImport()" class="px-3.5 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-400/50 text-red-200 hover:text-white text-xs font-extrabold flex items-center gap-1.5 transition-all shadow-[0_0_14px_rgba(248,113,113,0.2)]" title="Login with Google via Composio OAuth2 and automatically import all your Google Contacts">
+                        <i class="fab fa-google text-red-400"></i>
+                        <span>Import Google Contacts</span>
+                    </button>
+
+                    <!-- Export CSV Button -->
+                    <button type="button" onclick="exportCrmContactsToCsv()" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-all" title="Export CRM Contacts to Excel CSV">
+                        <i class="fas fa-file-csv text-emerald-400"></i>
+                        <span>Export CSV</span>
+                    </button>
+
+                    <!-- Sync CRM (Cloudinary + WhatsApp + Telegram + Auto-Combine Duplicates) Button -->
+                    <button type="button" onclick="syncAllCrmContactsWithDeduplication()" class="px-3 py-2 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan text-xs font-bold flex items-center gap-1.5 transition-all" title="Sync Contacts from Cloudinary, WhatsApp & Telegram and Auto-Combine Duplicate Phone/Email">
+                        <i class="fas fa-sync-alt" id="crm-sync-icon"></i>
+                        <span>Sync &amp; Combine</span>
+                    </button>
+
+                    <!-- + Create Contact Primary Button -->
+                    <button type="button" onclick="openCrmContactModal()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:shadow-[0_0_22px_rgba(0,240,255,0.55)] transition-all">
+                        <i class="fas fa-user-plus"></i>
+                        <span>+ Create Contact</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- CRM Summary KPI Strip -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-3.5 shrink-0">
+                <div class="p-3 rounded-xl bg-slate-900/85 border border-slate-800 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Contacts</div>
+                        <div id="crm-stat-total" class="text-lg sm:text-xl font-extrabold text-white mt-0.5">0</div>
+                    </div>
+                    <div class="w-9 h-9 rounded-xl bg-gb-cyan/15 border border-gb-cyan/30 flex items-center justify-center text-gb-cyan">
+                        <i class="fas fa-users"></i>
+                    </div>
+                </div>
+                <div class="p-3 rounded-xl bg-slate-900/85 border border-slate-800 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">From Messages &amp; Comments</div>
+                        <div id="crm-stat-social" class="text-lg sm:text-xl font-extrabold text-pink-400 mt-0.5">0</div>
+                    </div>
+                    <div class="w-9 h-9 rounded-xl bg-pink-500/15 border border-pink-500/30 flex items-center justify-center text-pink-400">
+                        <i class="fas fa-comment-dots"></i>
+                    </div>
+                </div>
+                <div class="p-3 rounded-xl bg-slate-900/85 border border-slate-800 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">With Phone or Email</div>
+                        <div id="crm-stat-reachable" class="text-lg sm:text-xl font-extrabold text-amber-300 mt-0.5">0</div>
+                    </div>
+                    <div class="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-300">
+                        <i class="fas fa-phone-alt"></i>
+                    </div>
+                </div>
+                <div class="p-3 rounded-xl bg-slate-900/85 border border-slate-800 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Active Clients &amp; VIPs</div>
+                        <div id="crm-stat-clients" class="text-lg sm:text-xl font-extrabold text-emerald-400 mt-0.5">0</div>
+                    </div>
+                    <div class="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                        <i class="fas fa-star"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CRM Contacts Table Container -->
+            <div id="crm-contacts-table-container" class="flex-1 min-h-0 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+                <!-- Populated dynamically by renderCrmContactsTable() -->
+            </div>
+        </div>
+    </div>

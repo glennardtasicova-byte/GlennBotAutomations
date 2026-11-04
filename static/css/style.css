@@ -1,0 +1,370 @@
+body { background-color: #050b14; background-image: radial-gradient(at 0% 0%, rgba(0, 240, 255, 0.15) 0px, transparent 50%), radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.15) 0px, transparent 50%); background-attachment: fixed; color: #f8fafc; }
+.glass-panel { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(0, 240, 255, 0.2); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); }
+.neon-text { color: #00f0ff; text-shadow: 0 0 10px rgba(0, 240, 255, 0.5), 0 0 20px rgba(0, 240, 255, 0.3); }
+::-webkit-scrollbar { width: 6px; height: 6px; } ::-webkit-scrollbar-track { background: rgba(5, 11, 20, 0.8); border-radius: 4px; } ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; border: 1px solid rgba(0, 240, 255, 0.3); } ::-webkit-scrollbar-thumb:hover { background: #00f0ff; box-shadow: 0 0 10px #00f0ff; }
+input[type="checkbox"]:checked + div, input[type="radio"]:checked + div { border-color: #00f0ff; background: rgba(0, 240, 255, 0.12); box-shadow: inset 0 0 10px rgba(0, 240, 255, 0.2); }
+input[type="checkbox"]:checked + div i.platform-icon { color: #00f0ff; text-shadow: 0 0 8px rgba(0,240,255,0.6); }
+.media-box { transition: all 0.3s ease; } .media-box .overlay { transition: opacity 0.3s; } .media-box.has-media .overlay { display: none; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
+.tab-btn.active { border-color: #00f0ff; background: rgba(0, 240, 255, 0.15); color: #00f0ff; box-shadow: 0 0 15px rgba(0, 240, 255, 0.25); }
+
+/* Docked Folder-Style Action Tabs above the First Platform Card */
+.docked-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-left: 8px;
+    padding-right: 8px;
+    margin-bottom: -1px;
+    position: relative;
+    z-index: 10;
+}
+.docked-tab-btn {
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(71, 85, 105, 0.85);
+    border-bottom: 1px solid rgba(30, 41, 59, 0.95);
+    border-top-left-radius: 0.65rem;
+    border-top-right-radius: 0.65rem;
+    padding: 0.42rem 0.85rem;
+    font-size: 11px;
+    font-weight: 600;
+    color: #cbd5e1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: all 0.2s ease;
+}
+.docked-tab-btn:hover {
+    background: rgba(0, 240, 255, 0.14);
+    border-color: #00f0ff;
+    color: #ffffff;
+    box-shadow: 0 -4px 12px rgba(0, 240, 255, 0.15);
+}
+.docked-tab-btn.primary-tab {
+    background: rgba(0, 240, 255, 0.12);
+    border-color: rgba(0, 240, 255, 0.55);
+    color: #00f0ff;
+}
+.docked-tab-btn.primary-tab:hover {
+    background: rgba(0, 240, 255, 0.22);
+    color: #ffffff;
+}
+
+/* Custom Windows-style Floating Bubble Tooltip */
+#gb-tooltip {
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85), 0 0 15px rgba(0, 240, 255, 0.25);
+}
+
+/* Smooth Fade-In / Fade-Out Effects for Pop-up Windows, Modals & Notifications */
+@keyframes gbFadeInScale {
+    0% { opacity: 0; transform: translateY(8px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes gbFadeOutScale {
+    0% { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(8px) scale(0.97); }
+}
+@keyframes gbBackdropFadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+}
+@keyframes gbBackdropFadeOut {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
+}
+.gb-fade-in {
+    animation: gbFadeInScale 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.gb-fade-out {
+    animation: gbFadeOutScale 0.22s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+.gb-modal-backdrop-in {
+    animation: gbBackdropFadeIn 0.24s ease-out forwards;
+}
+.gb-modal-backdrop-out {
+    animation: gbBackdropFadeOut 0.2s ease-in forwards;
+}
+body.gb-no-fade .gb-fade-in,
+body.gb-no-fade .gb-fade-out,
+body.gb-no-fade .gb-modal-backdrop-in,
+body.gb-no-fade .gb-modal-backdrop-out {
+    animation: none !important;
+    transition: none !important;
+}
+
+/* ========================================================================= */
+/* --- THEME 2: DARK MODE (CARBON OBSIDIAN • MATTE EYE-FRIENDLY DARK) ---    */
+/* ========================================================================= */
+body.gb-theme-dark {
+    background-color: #09090b !important;
+    background-image: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.06) 0px, transparent 55%),
+                      radial-gradient(at 100% 100%, rgba(161, 161, 170, 0.05) 0px, transparent 55%) !important;
+    color: #f4f4f5 !important;
+}
+body.gb-theme-dark .glass-panel {
+    background: rgba(18, 18, 21, 0.94) !important;
+    border-color: rgba(63, 63, 70, 0.85) !important;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.75) !important;
+}
+body.gb-theme-dark .neon-text {
+    color: #38bdf8 !important;
+    text-shadow: none !important;
+}
+body.gb-theme-dark [class*="bg-slate-950"] {
+    background-color: #0c0c0f !important;
+}
+body.gb-theme-dark [class*="bg-slate-900"] {
+    background-color: #141418 !important;
+}
+body.gb-theme-dark [class*="bg-slate-800"] {
+    background-color: #1f1f25 !important;
+}
+body.gb-theme-dark [class*="border-slate-800"],
+body.gb-theme-dark [class*="border-slate-700"],
+body.gb-theme-dark [class*="border-slate-600"] {
+    border-color: #2e2e36 !important;
+}
+body.gb-theme-dark .tab-btn.active {
+    background: rgba(56, 189, 248, 0.16) !important;
+    border-color: #38bdf8 !important;
+    color: #38bdf8 !important;
+    box-shadow: none !important;
+}
+body.gb-theme-dark .docked-tab-btn {
+    background: #141418 !important;
+    border-color: #2e2e36 !important;
+    color: #d4d4d8 !important;
+}
+body.gb-theme-dark .docked-tab-btn.primary-tab {
+    background: rgba(56, 189, 248, 0.14) !important;
+    border-color: rgba(56, 189, 248, 0.5) !important;
+    color: #38bdf8 !important;
+}
+
+/* ========================================================================= */
+/* --- THEME 3: LIGHT MODE (CRISP DAYLIGHT • AUTO-READABLE DARK FONTS) ---   */
+/* ========================================================================= */
+body.gb-theme-light {
+    background-color: #f1f5f9 !important;
+    background-image: radial-gradient(at 0% 0%, rgba(2, 132, 199, 0.10) 0px, transparent 50%),
+                      radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.08) 0px, transparent 50%) !important;
+    color: #0f172a !important;
+    color-scheme: light !important;
+}
+body.gb-theme-light .glass-panel {
+    background: rgba(255, 255, 255, 0.96) !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 8px 26px rgba(15, 23, 42, 0.08) !important;
+}
+body.gb-theme-light .neon-text {
+    color: #0284c7 !important;
+    text-shadow: none !important;
+}
+body.gb-theme-light ::-webkit-scrollbar-track {
+    background: #e2e8f0 !important;
+}
+body.gb-theme-light ::-webkit-scrollbar-thumb {
+    background: #94a3b8 !important;
+    border: 1px solid #cbd5e1 !important;
+}
+body.gb-theme-light ::-webkit-scrollbar-thumb:hover {
+    background: #0284c7 !important;
+    box-shadow: none !important;
+}
+
+/* Light Mode: Remap dark slate surfaces to clean daylight whites & soft grays */
+body.gb-theme-light #glennbot-login-gate-overlay {
+    background-color: #e2e8f0 !important;
+    background-image: radial-gradient(at 15% 15%, rgba(2, 132, 199, 0.14) 0px, transparent 50%),
+                      radial-gradient(at 85% 85%, rgba(16, 185, 129, 0.12) 0px, transparent 50%) !important;
+}
+body.gb-theme-light .bg-\[#0b1324\],
+body.gb-theme-light .bg-\[#030711\],
+body.gb-theme-light .bg-\[#050b14\] {
+    background-color: #f8fafc !important;
+}
+body.gb-theme-light [class*="bg-slate-950"] {
+    background-color: #f8fafc !important;
+}
+body.gb-theme-light [class*="bg-slate-900"] {
+    background-color: #ffffff !important;
+}
+body.gb-theme-light [class*="bg-slate-800"] {
+    background-color: #f1f5f9 !important;
+}
+body.gb-theme-light [class*="bg-slate-700"] {
+    background-color: #cbd5e1 !important;
+}
+body.gb-theme-light [class*="hover:bg-slate-800"]:hover,
+body.gb-theme-light [class*="hover:bg-slate-700"]:hover {
+    background-color: #e2e8f0 !important;
+}
+body.gb-theme-light [class*="bg-rose-950"] {
+    background-color: #ffe4e6 !important;
+}
+body.gb-theme-light [class*="bg-emerald-950"] {
+    background-color: #d1fae5 !important;
+}
+body.gb-theme-light [class*="bg-amber-950"] {
+    background-color: #fef3c7 !important;
+}
+body.gb-theme-light [class*="bg-purple-950"] {
+    background-color: #f3e8ff !important;
+}
+
+/* Light Mode: Borders */
+body.gb-theme-light [class*="border-slate-800"],
+body.gb-theme-light [class*="border-slate-700"],
+body.gb-theme-light [class*="border-slate-600"],
+body.gb-theme-light [class*="border-slate-500"] {
+    border-color: #cbd5e1 !important;
+}
+
+/* Light Mode: Automatic Font & Typography Contrast Adaptation */
+body.gb-theme-light .text-white,
+body.gb-theme-light .text-slate-100,
+body.gb-theme-light .text-slate-200 {
+    color: #0f172a !important;
+}
+body.gb-theme-light .text-slate-300 {
+    color: #334155 !important;
+}
+body.gb-theme-light .text-slate-400 {
+    color: #475569 !important;
+}
+body.gb-theme-light .text-slate-500,
+body.gb-theme-light .text-slate-600 {
+    color: #64748b !important;
+}
+body.gb-theme-light .text-gb-cyan {
+    color: #0284c7 !important;
+}
+body.gb-theme-light .text-emerald-300,
+body.gb-theme-light .text-emerald-200,
+body.gb-theme-light .text-emerald-400 {
+    color: #047857 !important;
+}
+body.gb-theme-light .text-amber-300,
+body.gb-theme-light .text-amber-200,
+body.gb-theme-light .text-amber-400 {
+    color: #b45309 !important;
+}
+body.gb-theme-light .text-rose-300,
+body.gb-theme-light .text-rose-200,
+body.gb-theme-light .text-rose-400 {
+    color: #be123c !important;
+}
+body.gb-theme-light .text-purple-300,
+body.gb-theme-light .text-purple-200,
+body.gb-theme-light .text-purple-400 {
+    color: #6d28d9 !important;
+}
+body.gb-theme-light .text-sky-300,
+body.gb-theme-light .text-sky-200,
+body.gb-theme-light .text-sky-400 {
+    color: #0369a1 !important;
+}
+body.gb-theme-light .text-indigo-300,
+body.gb-theme-light .text-indigo-200,
+body.gb-theme-light .text-indigo-400 {
+    color: #4338ca !important;
+}
+body.gb-theme-light .text-blue-300,
+body.gb-theme-light .text-blue-400 {
+    color: #1d4ed8 !important;
+}
+body.gb-theme-light .text-pink-400,
+body.gb-theme-light .text-pink-300 {
+    color: #db2777 !important;
+}
+
+/* Keep white text inside solid colored badges & primary gradient buttons in Light Mode */
+body.gb-theme-light .bg-blue-600,
+body.gb-theme-light .bg-blue-600 *,
+body.gb-theme-light .bg-rose-500,
+body.gb-theme-light .bg-rose-500 *,
+body.gb-theme-light .bg-rose-600,
+body.gb-theme-light .bg-rose-600 *,
+body.gb-theme-light .bg-red-500,
+body.gb-theme-light .bg-red-500 *,
+body.gb-theme-light .bg-red-600,
+body.gb-theme-light .bg-red-600 *,
+body.gb-theme-light .bg-emerald-600,
+body.gb-theme-light .bg-emerald-600 *,
+body.gb-theme-light .bg-sky-600,
+body.gb-theme-light .bg-sky-600 *,
+body.gb-theme-light .bg-amber-600,
+body.gb-theme-light .bg-amber-600 *,
+body.gb-theme-light .bg-\[#1877F2\],
+body.gb-theme-light .bg-\[#1877F2\] *,
+body.gb-theme-light .bg-\[#229ED9\],
+body.gb-theme-light .bg-\[#229ED9\] *,
+body.gb-theme-light .from-purple-600,
+body.gb-theme-light .from-purple-600 * {
+    color: #ffffff !important;
+}
+
+/* Light Mode: Form Inputs, Selects, Textareas & Placeholders */
+body.gb-theme-light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+body.gb-theme-light textarea,
+body.gb-theme-light select {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+    color-scheme: light !important;
+}
+body.gb-theme-light input::placeholder,
+body.gb-theme-light textarea::placeholder {
+    color: #64748b !important;
+}
+body.gb-theme-light select option {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+}
+
+/* Light Mode: Navigation Tabs, Docked Tabs, Tooltip & Spreadsheet Grid */
+body.gb-theme-light .tab-btn {
+    color: #334155 !important;
+}
+body.gb-theme-light .tab-btn:hover {
+    background-color: #e2e8f0 !important;
+    color: #0f172a !important;
+}
+body.gb-theme-light .tab-btn.active {
+    background: rgba(2, 132, 199, 0.12) !important;
+    border-color: #0284c7 !important;
+    color: #0284c7 !important;
+    box-shadow: 0 2px 10px rgba(2, 132, 199, 0.15) !important;
+}
+body.gb-theme-light .docked-tab-btn {
+    background: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #334155 !important;
+}
+body.gb-theme-light .docked-tab-btn:hover {
+    background: #e0f2fe !important;
+    border-color: #0284c7 !important;
+    color: #0369a1 !important;
+}
+body.gb-theme-light .docked-tab-btn.primary-tab {
+    background: #e0f2fe !important;
+    border-color: #38bdf8 !important;
+    color: #0284c7 !important;
+}
+body.gb-theme-light #gb-tooltip,
+body.gb-theme-light #gb-toast {
+    background: rgba(255, 255, 255, 0.98) !important;
+    color: #0f172a !important;
+    border-color: #0284c7 !important;
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15) !important;
+}
+body.gb-theme-light #ss-grid-table th,
+body.gb-theme-light #ss-grid-table td {
+    border-color: #cbd5e1 !important;
+}
+body.gb-theme-light #ss-grid-table input {
+    background-color: transparent !important;
+    color: #0f172a !important;
+}

@@ -1,0 +1,137 @@
+    <!-- ==================== VIEW 10: "SPREAD SHEET" MODAL / VIEW (CUSTOM A,B,C,D x 1,2,3,4 + RENAMEABLE SHEETS + GOOGLE DRIVE .XLSX/.XLS + TWO-WAY AUTO-SYNC) ==================== -->
+    <div id="view-spreadsheet" class="hidden flex-1 w-full lg:h-full flex flex-col min-h-0">
+        <div class="glass-panel rounded-2xl p-3 sm:p-4 flex-1 flex flex-col min-h-0 overflow-hidden">
+            <!-- Top Spreadsheet Header & Action Bar -->
+            <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 pb-3 mb-2.5 border-b border-slate-700/80 shrink-0">
+                <div class="flex items-center gap-2.5 min-w-0">
+                    <div class="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fas fa-file-excel text-base"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <input type="text" id="ss-workbook-title" value="Untitled_Spreadsheet.xlsx" class="bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-lg px-2.5 py-1 text-xs sm:text-sm font-extrabold text-white focus:outline-none w-56 sm:w-64" title="Workbook Filename (.xlsx)">
+                            <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 font-semibold">
+                                <i class="fab fa-google-drive text-[9px] mr-1"></i>Saves as <code class="font-mono">.xlsx</code> in Google Drive
+                            </span>
+                            <span id="ss-gdrive-sync-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-600 font-mono">
+                                Blank Worksheet • Select a file to load
+                            </span>
+                            <button type="button" id="btn-ss-sync-now" onclick="syncActiveSpreadsheetFromGoogleDriveNow(true)" class="px-2 py-0.5 rounded-full bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/50 text-gb-cyan text-[10px] font-bold flex items-center gap-1 transition-all" title="Instant Live Sync from Google Sheets / Google Drive">
+                                <i id="icon-ss-sync-now" class="fas fa-sync-alt text-[9px]"></i>
+                                <span>Sync Now</span>
+                            </button>
+                        </div>
+                        <p class="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
+                            Starts on a blank worksheet • Select any <code class="text-emerald-300">.xlsx</code> / <code class="text-emerald-300">.xls</code> file from the dropdown next to <strong>New</strong> • Two-Way Auto-Sync with Google Drive &amp; Files Modal
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Workbook Actions: Spreadsheet Files Dropdown, New Blank Button, Add Row/Col, Import .xlsx/.xls, Download .xlsx, Save .xlsx to Google Drive -->
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <!-- Saved Google Drive / Files Vault .xlsx & .xls Spreadsheets Selector -->
+                    <select id="ss-saved-workbooks-select" onchange="onSelectSavedSpreadsheetWorkbook(this.value)" class="bg-slate-900 border border-slate-700 focus:border-gb-cyan text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none cursor-pointer max-w-[230px] truncate" title="Select a saved .xlsx or .xls spreadsheet from Google Drive / Files Vault">
+                        <option value="" selected>-- Select Spreadsheet (.xlsx / .xls) --</option>
+                    </select>
+
+                    <button type="button" onclick="createNewBlankSpreadsheetWorkbook()" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1" title="Reset to a new blank worksheet">
+                        <i class="fas fa-file-medical text-gb-cyan"></i>
+                        <span>New</span>
+                    </button>
+
+                    <button type="button" onclick="addSpreadsheetColumn()" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1" title="Add next column letter (E, F, G...)">
+                        <i class="fas fa-columns text-gb-cyan"></i>
+                        <span>+ Col</span>
+                    </button>
+
+                    <button type="button" onclick="addSpreadsheetRows(10)" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1" title="Add 10 more rows">
+                        <i class="fas fa-plus-square text-gb-cyan"></i>
+                        <span>+10 Rows</span>
+                    </button>
+
+                    <!-- Upload / Import .xlsx or .xls from Local Device (Strict Python Validation) -->
+                    <input type="file" id="ss-import-xlsx-input" accept=".xlsx,.xls" class="hidden" onchange="handleLocalXlsxImport(this)">
+                    <button type="button" id="btn-import-local-xlsx" onclick="document.getElementById('ss-import-xlsx-input')?.click()" class="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/50 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all" title="Import .xlsx or .xls from local device">
+                        <i class="fas fa-file-import"></i>
+                        <span>Import .xlsx / .xls</span>
+                    </button>
+
+                    <!-- Download .xlsx -->
+                    <button type="button" onclick="downloadCurrentSpreadsheetXlsx()" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition-all" title="Download current workbook as .xlsx file">
+                        <i class="fas fa-download"></i>
+                        <span>Download .xlsx</span>
+                    </button>
+
+                    <!-- Delete Workbook from Google Drive & Files Vault -->
+                    <button type="button" onclick="deleteCurrentSpreadsheetFromCloudinary()" class="px-2.5 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/50 text-rose-300 text-xs font-semibold flex items-center gap-1 transition-all" title="Delete this saved spreadsheet from Google Drive &amp; Files Vault">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+
+                    <!-- Save as .xlsx to Google Drive -->
+                    <button type="button" id="btn-save-xlsx-cloudinary" onclick="saveCurrentSpreadsheetToCloudinary()" class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.35)] hover:opacity-95 transition-all" title="Save as .xlsx to connected Google Drive and register in Files Modal with a File ID">
+                        <i class="fab fa-google-drive"></i>
+                        <span>Save .xlsx to Google Drive</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Python Strict .xlsx Rejection Banner (Shown when an imported .xlsx has Graphs, Charts, Images, or Shapes) -->
+            <div id="ss-import-reject-banner" class="hidden mb-2.5 p-3 rounded-xl bg-rose-950/90 border border-rose-500/70 text-xs text-rose-100 flex items-start justify-between gap-3 shrink-0 shadow-[0_0_20px_rgba(244,63,94,0.25)]">
+                <div class="flex items-start gap-2.5">
+                    <i class="fas fa-ban text-rose-400 text-base mt-0.5"></i>
+                    <div>
+                        <div class="font-extrabold text-rose-300 uppercase tracking-wider text-[11px]">Python .xlsx Import Validation — File Rejected</div>
+                        <p id="ss-import-reject-text" class="text-xs text-rose-100 mt-0.5 leading-relaxed"></p>
+                        <div id="ss-import-reject-tags" class="flex flex-wrap gap-1.5 mt-1.5"></div>
+                    </div>
+                </div>
+                <button type="button" onclick="document.getElementById('ss-import-reject-banner')?.classList.add('hidden')" class="text-rose-300 hover:text-white px-1.5">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Formula / Active Cell Coordinate Bar -->
+            <div class="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
+                <span id="ss-active-cell-badge" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs min-w-[48px] text-center">A1</span>
+                <span class="text-slate-500 font-serif italic font-bold text-sm px-1">fx</span>
+                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type cell value or formula (e.g. =SUM(A1:A10), =AVERAGE(B1:B5))..." class="flex-1 bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <button type="button" onclick="clearActiveSheetCells()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-slate-300 hover:text-rose-200 text-[11px] font-semibold shrink-0" title="Clear all cells in current sheet">
+                    <i class="fas fa-eraser mr-1"></i>Clear Sheet
+                </button>
+            </div>
+
+            <!-- Main Spreadsheet Grid (Columns A, B, C, D... x Rows 1, 2, 3, 4...) -->
+            <div id="ss-grid-scroll-wrapper" class="flex-1 min-h-0 overflow-auto rounded-xl border border-slate-700/90 bg-slate-950/90 relative">
+                <table id="ss-grid-table" class="border-collapse select-none min-w-full text-xs">
+                    <!-- Rendered dynamically by renderSpreadsheetGrid() -->
+                </table>
+            </div>
+
+            <!-- Bottom Sheet Tabs Bar (With Rename Sheet Name + Add Sheet + Switch Sheets) -->
+            <div class="mt-2 pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div class="flex items-center gap-1.5 flex-wrap overflow-x-auto max-w-full py-0.5">
+                    <div id="ss-sheet-tabs-container" class="flex items-center gap-1.5 flex-wrap">
+                        <!-- Rendered dynamically by renderSpreadsheetSheetTabs() -->
+                    </div>
+                    <button type="button" onclick="addNewSpreadsheetSheetTab()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-gb-cyan/20 border border-slate-600 hover:border-gb-cyan text-gb-cyan text-xs font-bold flex items-center gap-1 transition-all" title="Add New Sheet Tab">
+                        <i class="fas fa-plus text-[10px]"></i>
+                        <span>Add Sheet</span>
+                    </button>
+                </div>
+
+                <!-- Inline Sheet Rename Box (Always works cleanly without browser prompt popups) -->
+                <div class="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1">
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        <i class="fas fa-tag text-emerald-400 mr-1"></i>Sheet Name:
+                    </span>
+                    <input type="text" id="ss-rename-sheet-input" value="Sheet1" onkeydown="if(event.key==='Enter'){event.preventDefault(); applyRenameActiveSheet();}" class="bg-slate-950 border border-slate-700 focus:border-emerald-400 rounded-lg px-2 py-0.5 text-xs font-bold text-emerald-300 w-32 sm:w-40 focus:outline-none" placeholder="Rename sheet...">
+                    <button type="button" onclick="applyRenameActiveSheet()" class="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-300 text-[11px] font-bold transition-all">
+                        Rename
+                    </button>
+                    <button type="button" onclick="deleteActiveSpreadsheetSheetTab()" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 hover:border-rose-500/50 text-slate-400 hover:text-rose-200 text-[11px] transition-all" title="Delete Active Sheet Tab">
+                        <i class="fas fa-trash-alt text-[10px]"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>

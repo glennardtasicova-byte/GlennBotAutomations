@@ -1,0 +1,432 @@
+    <!-- ========================================================================= -->
+    <!-- VIEW 11: AUTOMATIONS MODAL / BLANK VISUAL NODE CANVAS (N8N JSON COMPATIBLE) -->
+    <!-- Starts as a strictly locked Blank Canvas until the user uploads a .JSON    -->
+    <!-- file or generates one via "Ask AI". Supports Dashboard Event Trigger       -->
+    <!-- (Webhook), IF, Wait, Code, HTTP Request, and Set nodes!                    -->
+    <!-- ========================================================================= -->
+    <div id="view-automations" class="hidden flex-1 w-full lg:h-full flex flex-col min-h-0 gap-3 overflow-y-auto lg:overflow-hidden">
+        <input type="file" id="automations-canvas-json-file-input" class="hidden" accept=".json,application/json" onchange="handleAutomationsCanvasFileUpload(this)">
+
+        <!-- Top Header & Toolbar (Normal Dashboard Mode) -->
+        <div id="auto-canvas-top-header-card" class="glass-panel rounded-2xl p-3.5 sm:p-4 border border-purple-500/40 shadow-[0_0_30px_rgba(168,85,247,0.12)] shrink-0">
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div class="flex items-start sm:items-center gap-3.5">
+                    <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-purple-500/25 to-gb-cyan/20 border border-purple-400/50 flex items-center justify-center text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.25)] shrink-0">
+                        <i class="fas fa-project-diagram text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <h2 class="text-base sm:text-lg font-extrabold text-white tracking-tight">Automations Visual Canvas</h2>
+                            <span id="auto-canvas-status-pill" class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1.5">
+                                <i class="fas fa-lock text-[9px]"></i>
+                                <span>Blank Canvas (Locked — Upload .JSON or Ask AI)</span>
+                            </span>
+                            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-gb-cyan/15 text-gb-cyan border border-gb-cyan/30">
+                                n8n .JSON Native Engine
+                            </span>
+                        </div>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            Blank canvas by default — upload an <code class="text-purple-300 font-mono">.json</code> file or generate one via <strong class="text-gb-cyan">Ask AI</strong> to unlock visual editing for <span class="text-slate-200 font-semibold">Dashboard Trigger (Webhook), IF, Wait, Code, HTTP Request &amp; Set</span> nodes.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Primary Unlock / Import Actions + Fullscreen Button (Always Enabled) -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" onclick="toggleAutomationsCanvasFullscreen(true)"
+                        class="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-purple-500/25 border border-purple-400/60 text-purple-200 font-extrabold text-xs shadow-[0_0_16px_rgba(168,85,247,0.25)] flex items-center gap-2 transition-all cursor-pointer" title="Open Fullscreen Canvas Mode with Floating Settings">
+                        <i class="fas fa-expand text-gb-cyan"></i>
+                        <span>Fullscreen Canvas</span>
+                    </button>
+
+                    <button type="button" onclick="document.getElementById('automations-canvas-json-file-input').click()"
+                        class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white font-extrabold text-xs shadow-[0_0_18px_rgba(168,85,247,0.4)] flex items-center gap-2 transition-all cursor-pointer">
+                        <i class="fas fa-file-upload"></i>
+                        <span>Upload .JSON File</span>
+                    </button>
+
+                    <button type="button" onclick="openAskAiN8nModal()"
+                        class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-gb-cyan to-emerald-400 text-slate-950 font-extrabold text-xs shadow-[0_0_18px_rgba(0,240,255,0.35)] flex items-center gap-2 transition-all cursor-pointer">
+                        <i class="fas fa-robot"></i>
+                        <span>Ask AI (.JSON)</span>
+                    </button>
+
+                    <button type="button" onclick="openPasteAutomationJsonPrompt()"
+                        class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Paste raw n8n JSON code directly">
+                        <i class="fas fa-paste text-purple-300"></i>
+                        <span>Paste JSON</span>
+                    </button>
+
+                    <select id="auto-canvas-saved-wf-select" onchange="loadSavedAutomationWorkflowFromSelect(this.value)"
+                        class="bg-slate-900 border border-slate-700 focus:border-purple-400 rounded-xl px-3 py-2 text-xs text-slate-200 font-semibold focus:outline-none cursor-pointer max-w-[220px]">
+                        <option value="">-- Blank Canvas (No .JSON Loaded) --</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Secondary Generic Nodes & Execution Toolbar (STRICTLY LOCKED until a .JSON file is loaded!) -->
+            <div id="auto-canvas-editing-toolbar" class="mt-4 pt-3.5 border-t border-slate-800/90 flex flex-wrap items-center justify-between gap-3 opacity-45 pointer-events-none select-none transition-all">
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mr-1 flex items-center gap-1">
+                        <i class="fas fa-cubes text-purple-400"></i> Add Generic Node:
+                    </span>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('if')"
+                        class="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/50 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add IF / Conditional Branch Node (True / False)">
+                        <i class="fas fa-code-branch"></i>
+                        <span>+ IF</span>
+                    </button>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('wait')"
+                        class="px-2.5 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/50 text-sky-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add Wait / Delay Timer Node">
+                        <i class="fas fa-hourglass-half"></i>
+                        <span>+ Wait</span>
+                    </button>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('code')"
+                        class="px-2.5 py-1.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/50 text-purple-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add JavaScript / Expression Code Node">
+                        <i class="fas fa-code"></i>
+                        <span>+ Code</span>
+                    </button>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('httpRequest')"
+                        class="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add HTTP Request / GlennBot Internal API Action Node">
+                        <i class="fas fa-globe"></i>
+                        <span>+ HTTP / GlennBot API</span>
+                    </button>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('set')"
+                        class="px-2.5 py-1.5 rounded-lg bg-pink-500/15 hover:bg-pink-500/25 border border-pink-400/50 text-pink-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add Set / Edit Fields Node">
+                        <i class="fas fa-Sliders-h fa-pen-fancy"></i>
+                        <span>+ Set Fields</span>
+                    </button>
+                    <button type="button" onclick="addGenericNodeToAutomationsCanvas('webhook')"
+                        class="px-2.5 py-1.5 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Add Dashboard Native Event Trigger (n8n Webhook Compatible)">
+                        <i class="fas fa-bolt"></i>
+                        <span>+ Dashboard Trigger (Webhook)</span>
+                    </button>
+                </div>
+
+                <!-- Workflow Name, Active Toggle, Run Test, Save, Export, Clear -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <input type="text" id="auto-canvas-wf-name-input" placeholder="Workflow Name..."
+                        oninput="onAutomationsCanvasWorkflowNameInput(this.value)"
+                        class="bg-slate-950 border border-slate-700 focus:border-purple-400 rounded-xl px-3 py-1.5 text-xs font-bold text-white w-48 sm:w-56 focus:outline-none">
+
+                    <button type="button" id="auto-canvas-active-toggle-btn" onclick="toggleAutomationsCanvasWorkflowActive()"
+                        class="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer" title="When ACTIVE, this workflow runs automatically inside the GlennBot Dashboard whenever its trigger event occurs!">
+                        <span id="auto-canvas-active-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span id="auto-canvas-active-label">ACTIVE IN DASHBOARD</span>
+                    </button>
+
+                    <button type="button" id="auto-canvas-run-btn" onclick="executeAutomationsCanvasWorkflowTest()"
+                        class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs shadow-[0_0_15px_rgba(16,185,129,0.35)] flex items-center gap-1.5 transition-all cursor-pointer" title="Execute this workflow natively inside GlennBot right now and trace every node!">
+                        <i class="fas fa-play"></i>
+                        <span>Test Run</span>
+                    </button>
+
+                    <button type="button" onclick="saveCurrentAutomationsCanvasWorkflow()"
+                        class="px-3 py-1.5 rounded-xl bg-purple-500/25 hover:bg-purple-500/40 border border-purple-400/60 text-purple-200 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer">
+                        <i class="fas fa-save"></i>
+                        <span>Save</span>
+                    </button>
+
+                    <button type="button" onclick="downloadCurrentAutomationsCanvasJson()"
+                        class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Download 100% n8n-compatible .JSON file">
+                        <i class="fas fa-download"></i>
+                        <span>.JSON</span>
+                    </button>
+
+                    <button type="button" onclick="clearAutomationsCanvasToBlankLocked()"
+                        class="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-rose-950/70 border border-slate-700 hover:border-rose-500/50 text-slate-400 hover:text-rose-300 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer" title="Reset back to Blank Locked Canvas">
+                        <i class="fas fa-eraser"></i>
+                        <span>Lock / Clear</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Split Workspace: Visual Graph Canvas (Left) + Node Inspector / Raw JSON Drawer (Right) -->
+        <div id="auto-canvas-workspace-grid" class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-3.5">
+            <!-- Visual Node Canvas Container (Becomes 100vw x 100vh fixed in Fullscreen Mode!) -->
+            <div id="auto-canvas-main-card" class="xl:col-span-8 glass-panel rounded-2xl border border-slate-800 overflow-hidden relative flex flex-col min-h-[540px] lg:h-full">
+                <!-- Normal Mode Canvas Top Sub-bar (Hidden in Fullscreen Mode in favor of Floating HUD) -->
+                <div id="auto-canvas-normal-subbar" class="px-4 py-2.5 bg-slate-950/90 border-b border-slate-800/90 flex flex-wrap items-center justify-between gap-2 z-20">
+                    <div class="flex flex-wrap items-center gap-2 text-[11px]">
+                        <span class="text-slate-400 font-semibold flex items-center gap-1.5">
+                            <i class="fas fa-satellite-dish text-gb-cyan"></i>
+                            <span>Dashboard Webhook Bridge:</span>
+                        </span>
+                        <span id="auto-canvas-trigger-bridge-info" class="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-slate-400 font-mono text-[10px]">
+                            No .JSON loaded — Upload or Ask AI to bind internal dashboard events
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button type="button" onclick="autoLayoutAutomationsCanvasNodes()" id="auto-canvas-autolayout-btn" disabled
+                            class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 border border-slate-700 text-slate-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer" title="Auto-align nodes cleanly left-to-right">
+                            <i class="fas fa-magic text-purple-400"></i>
+                            <span>Auto-Align</span>
+                        </button>
+                        <button type="button" onclick="fitAutomationsCanvasNodesToViewport()"
+                            class="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-gb-cyan text-[11px] font-semibold flex items-center gap-1 cursor-pointer" title="Center and fit all nodes in the canvas">
+                            <i class="fas fa-crosshairs"></i>
+                            <span>Fit All</span>
+                        </button>
+                        <button type="button" onclick="zoomAutomationsCanvas(-0.12)" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs flex items-center justify-center cursor-pointer" title="Zoom Out">
+                            <i class="fas fa-search-minus"></i>
+                        </button>
+                        <span id="auto-canvas-zoom-label" class="text-[11px] font-mono text-slate-400 px-1.5">100%</span>
+                        <button type="button" onclick="zoomAutomationsCanvas(0.12)" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs flex items-center justify-center cursor-pointer" title="Zoom In">
+                            <i class="fas fa-search-plus"></i>
+                        </button>
+                        <button type="button" onclick="resetAutomationsCanvasViewport()" class="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-semibold cursor-pointer" title="Reset Pan & Zoom">
+                            Reset View
+                        </button>
+                        <button type="button" onclick="toggleAutomationsCanvasFullscreen(true)"
+                            class="px-2.5 py-1 rounded-lg bg-purple-500/20 hover:bg-purple-500/35 border border-purple-400/60 text-purple-200 text-[11px] font-extrabold flex items-center gap-1.5 cursor-pointer shadow-[0_0_12px_rgba(168,85,247,0.3)]" title="Fullscreen Canvas Mode">
+                            <i class="fas fa-expand text-gb-cyan"></i>
+                            <span>Fullscreen</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ===================================================================== -->
+                <!-- FULLSCREEN FLOATING SETTINGS HUD (Visible ONLY in Fullscreen Mode!)   -->
+                <!-- Shows pure canvas underneath with compact floating glass pill bars    -->
+                <!-- ===================================================================== -->
+                <div id="auto-canvas-floating-hud" class="hidden pointer-events-none absolute inset-x-0 top-0 z-40 p-3 sm:p-4 flex flex-wrap items-start justify-between gap-2.5">
+                    <!-- Top-Left Floating Pill: Workflow Identity, Active Toggle & Quick Add Nodes -->
+                    <div class="pointer-events-auto flex flex-wrap items-center gap-1.5 px-3 py-2 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-700/80 shadow-[0_12px_40px_rgba(0,0,0,0.75)] max-w-full">
+                        <div class="flex items-center gap-2 pr-2 border-r border-slate-800">
+                            <span class="w-7 h-7 rounded-xl bg-purple-500/20 border border-purple-400/50 flex items-center justify-center text-purple-300 text-xs">
+                                <i class="fas fa-project-diagram"></i>
+                            </span>
+                            <input type="text" id="auto-canvas-fs-name-input" placeholder="Workflow Name..."
+                                oninput="onAutomationsCanvasWorkflowNameInput(this.value)"
+                                class="bg-slate-900/90 border border-slate-700 focus:border-purple-400 rounded-xl px-2.5 py-1 text-xs font-extrabold text-white w-44 sm:w-56 focus:outline-none">
+                            <button type="button" id="auto-canvas-fs-active-btn" onclick="toggleAutomationsCanvasWorkflowActive()"
+                                class="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[11px] font-extrabold flex items-center gap-1.5 cursor-pointer">
+                                <span id="auto-canvas-fs-active-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                <span id="auto-canvas-fs-active-label">ACTIVE</span>
+                            </button>
+                        </div>
+
+                        <!-- Quick Add Generic Nodes in Fullscreen -->
+                        <div id="auto-canvas-fs-add-nodes-group" class="flex flex-wrap items-center gap-1 pr-2 border-r border-slate-800">
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('if')"
+                                class="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 text-[11px] font-bold cursor-pointer" title="Add IF Node">+ IF</button>
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('wait')"
+                                class="px-2 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/30 border border-sky-400/40 text-sky-300 text-[11px] font-bold cursor-pointer" title="Add Wait Node">+ Wait</button>
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('code')"
+                                class="px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 text-[11px] font-bold cursor-pointer" title="Add Code Node">+ Code</button>
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('httpRequest')"
+                                class="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 text-[11px] font-bold cursor-pointer" title="Add HTTP / GlennBot API Node">+ HTTP</button>
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('set')"
+                                class="px-2 py-1 rounded-lg bg-pink-500/15 hover:bg-pink-500/30 border border-pink-400/40 text-pink-300 text-[11px] font-bold cursor-pointer" title="Add Set Node">+ Set</button>
+                            <button type="button" onclick="addGenericNodeToAutomationsCanvas('webhook')"
+                                class="px-2 py-1 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/40 text-gb-cyan text-[11px] font-bold cursor-pointer" title="Add Webhook Trigger Node">+ Trigger</button>
+                        </div>
+
+                        <!-- Quick Import / Switch Workflow in Fullscreen -->
+                        <div class="flex items-center gap-1">
+                            <button type="button" onclick="document.getElementById('automations-canvas-json-file-input').click()"
+                                class="px-2.5 py-1 rounded-xl bg-purple-500/25 hover:bg-purple-500/40 border border-purple-400/50 text-purple-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer" title="Upload .JSON File">
+                                <i class="fas fa-file-upload"></i>
+                                <span class="hidden sm:inline">Upload .JSON</span>
+                            </button>
+                            <button type="button" onclick="openAskAiN8nModal()"
+                                class="px-2.5 py-1 rounded-xl bg-gb-cyan/20 hover:bg-gb-cyan/35 border border-gb-cyan/50 text-gb-cyan text-[11px] font-bold flex items-center gap-1 cursor-pointer" title="Ask AI (.JSON)">
+                                <i class="fas fa-robot"></i>
+                                <span class="hidden sm:inline">Ask AI</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Top-Right Floating Pill: Test Run, Save, Layout, Zoom, Floating Inspector Toggle & Exit Fullscreen -->
+                    <div class="pointer-events-auto flex flex-wrap items-center gap-1.5 px-3 py-2 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-700/80 shadow-[0_12px_40px_rgba(0,0,0,0.75)]">
+                        <button type="button" id="auto-canvas-fs-run-btn" onclick="executeAutomationsCanvasWorkflowTest()"
+                            class="px-3 py-1 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs shadow-[0_0_15px_rgba(16,185,129,0.4)] flex items-center gap-1.5 cursor-pointer">
+                            <i class="fas fa-play"></i>
+                            <span>Test Run</span>
+                        </button>
+
+                        <button type="button" onclick="saveCurrentAutomationsCanvasWorkflow()"
+                            class="px-2.5 py-1 rounded-xl bg-purple-500/25 hover:bg-purple-500/40 border border-purple-400/60 text-purple-200 text-xs font-bold flex items-center gap-1 cursor-pointer" title="Save Workflow">
+                            <i class="fas fa-save"></i>
+                            <span>Save</span>
+                        </button>
+
+                        <button type="button" onclick="downloadCurrentAutomationsCanvasJson()"
+                            class="px-2 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-gb-cyan text-[11px] font-bold cursor-pointer" title="Download .JSON">
+                            <i class="fas fa-download"></i>
+                        </button>
+
+                        <div class="h-4 w-[1px] bg-slate-800 mx-0.5"></div>
+
+                        <button type="button" onclick="autoLayoutAutomationsCanvasNodes()"
+                            class="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer" title="Auto-Align Nodes Left to Right">
+                            <i class="fas fa-magic text-purple-400"></i>
+                            <span class="hidden md:inline">Auto-Align</span>
+                        </button>
+
+                        <button type="button" onclick="fitAutomationsCanvasNodesToViewport()"
+                            class="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-gb-cyan text-[11px] font-semibold flex items-center gap-1 cursor-pointer" title="Fit & Center All Nodes on Screen">
+                            <i class="fas fa-crosshairs"></i>
+                            <span class="hidden md:inline">Fit Screen</span>
+                        </button>
+
+                        <div class="flex items-center gap-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-1.5 py-0.5">
+                            <button type="button" onclick="zoomAutomationsCanvas(-0.12)" class="w-6 h-6 rounded-lg hover:bg-slate-800 text-slate-300 text-[11px] flex items-center justify-center cursor-pointer" title="Zoom Out">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                            <span id="auto-canvas-fs-zoom-label" class="text-[11px] font-mono text-slate-300 px-1 min-w-[40px] text-center">100%</span>
+                            <button type="button" onclick="zoomAutomationsCanvas(0.12)" class="w-6 h-6 rounded-lg hover:bg-slate-800 text-slate-300 text-[11px] flex items-center justify-center cursor-pointer" title="Zoom In">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+
+                        <button type="button" id="auto-canvas-fs-drawer-btn" onclick="toggleAutomationsCanvasFloatingDrawer()"
+                            class="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-purple-500/25 border border-purple-400/50 text-purple-200 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer" title="Toggle Floating Node Inspector / JSON / Execution Log Drawer">
+                            <i class="fas fa-sliders-h text-purple-400"></i>
+                            <span>Inspector / Logs</span>
+                        </button>
+
+                        <button type="button" onclick="toggleAutomationsCanvasFullscreen(false)"
+                            class="px-3 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-400/60 text-rose-200 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer" title="Exit Fullscreen Mode (ESC)">
+                            <i class="fas fa-compress"></i>
+                            <span>Exit Fullscreen</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Interactive Pan/Zoom Viewport -->
+                <div id="auto-canvas-viewport"
+                    onmousedown="onAutomationsCanvasViewportMouseDown(event)"
+                    onmousemove="onAutomationsCanvasViewportMouseMove(event)"
+                    onmouseup="onAutomationsCanvasViewportMouseUp(event)"
+                    onwheel="onAutomationsCanvasWheel(event)"
+                    class="relative flex-1 overflow-hidden select-none cursor-grab active:cursor-grabbing"
+                    style="background-color: #060b16; background-image: radial-gradient(rgba(148, 163, 184, 0.16) 1.25px, transparent 1.25px); background-size: 24px 24px;">
+
+                    <!-- Locked Blank Canvas Overlay (Shown whenever no .JSON is loaded) -->
+                    <div id="auto-canvas-locked-overlay" class="absolute inset-0 z-30 flex items-center justify-center p-6 bg-slate-950/60 backdrop-blur-[2px]">
+                        <div class="max-w-lg w-full rounded-2xl bg-slate-900/95 border border-purple-500/40 p-6 sm:p-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.75)] space-y-4">
+                            <div class="w-16 h-16 rounded-2xl bg-purple-500/15 border border-purple-400/40 flex items-center justify-center mx-auto text-purple-300 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
+                                <i class="fas fa-lock text-2xl"></i>
+                            </div>
+                            <div class="space-y-1.5">
+                                <h3 class="text-base sm:text-lg font-extrabold text-white">Blank Automation Canvas (Locked)</h3>
+                                <p class="text-xs text-slate-300 leading-relaxed">
+                                    Hindi ka makakapag-edit o makakapag-dagdag ng nodes hangga't hindi ka nag-a-upload ng <code class="text-purple-300 font-mono font-bold">.JSON</code> workflow file na galing sa <strong class="text-gb-cyan">Ask AI</strong> o exported mula sa <strong class="text-emerald-300">n8n</strong>.
+                                </p>
+                            </div>
+                            <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-left text-[11px] text-slate-400 space-y-1">
+                                <div class="text-slate-200 font-bold flex items-center gap-1.5">
+                                    <i class="fas fa-check-circle text-emerald-400"></i>
+                                    <span>Supported n8n Generic Nodes &amp; In-Dashboard Webhook:</span>
+                                </div>
+                                <p>• <strong class="text-gb-cyan">Webhook Trigger</strong>: Automatically acts as an <em>In-Dashboard Event Trigger</em> (`comment.received`, `message.received`, `email.received`, `sms.*`, `calendar.*`) — no external webhook server needed!</p>
+                                <p>• <strong class="text-amber-300">IF Node</strong>, <strong class="text-sky-300">Wait Node</strong>, <strong class="text-purple-300">Code Node (JS/Thread Grouping)</strong>, <strong class="text-emerald-300">HTTP Request (`/api/v1/*`)</strong> &amp; <strong class="text-pink-300">Set Fields</strong>.</p>
+                            </div>
+                            <div class="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                                <button type="button" onclick="document.getElementById('automations-canvas-json-file-input').click()"
+                                    class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white font-extrabold text-xs shadow-[0_0_20px_rgba(168,85,247,0.45)] flex items-center gap-2 transition-all cursor-pointer">
+                                    <i class="fas fa-file-upload"></i>
+                                    <span>Upload .JSON File</span>
+                                </button>
+                                <button type="button" onclick="openAskAiN8nModal()"
+                                    class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-gb-cyan to-emerald-400 text-slate-950 font-extrabold text-xs shadow-[0_0_20px_rgba(0,240,255,0.4)] flex items-center gap-2 transition-all cursor-pointer">
+                                    <i class="fas fa-robot"></i>
+                                    <span>Generate .JSON with Ask AI</span>
+                                </button>
+                                <button type="button" onclick="loadSavvyFindsPresetIntoAutomationsCanvas()"
+                                    class="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Load the optimized Savvy Finds Single-Row Thread Grouping .JSON directly onto the canvas!">
+                                    <i class="fas fa-bolt"></i>
+                                    <span>Load Savvy Finds Thread .JSON</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Transform Stage (SVG Edges + Draggable HTML Node Cards) -->
+                    <div id="auto-canvas-stage" style="transform: translate(0px, 0px) scale(1); transform-origin: 0 0; width: 3200px; height: 2000px; position: absolute; top: 0; left: 0;">
+                        <svg id="auto-canvas-edges-svg" width="3200" height="2000" class="absolute inset-0 pointer-events-none" style="overflow: visible;"></svg>
+                        <div id="auto-canvas-nodes-layer" class="absolute inset-0"></div>
+                    </div>
+                </div>
+
+                <!-- Canvas Footer Execution Trace Bar (Floats at bottom in Fullscreen Mode) -->
+                <div id="auto-canvas-trace-footer" class="px-4 py-2 bg-slate-950/95 border-t border-slate-800 text-[11px] text-slate-400 flex flex-wrap items-center justify-between gap-2 z-30">
+                    <div id="auto-canvas-last-trace-summary" class="flex items-center gap-2 truncate">
+                        <i class="fas fa-info-circle text-slate-500"></i>
+                        <span>Tip: Drag nodes to rearrange, scroll to zoom, or click Fullscreen for an edge-to-edge canvas view.</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span id="auto-canvas-node-count-badge" class="font-mono text-[10px] text-slate-400">0 nodes • 0 connections</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Inspector & Live .JSON Sync Panel (In Fullscreen Mode, floats as a collapsible right drawer!) -->
+            <div id="auto-canvas-inspector-panel" class="xl:col-span-4 glass-panel rounded-2xl border border-slate-800 flex flex-col overflow-hidden min-h-[540px] lg:h-full">
+                <div class="px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-sliders-h text-purple-400"></i>
+                        <h3 class="text-xs sm:text-sm font-extrabold text-white">Node Inspector &amp; n8n JSON</h3>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <button type="button" id="auto-insp-tab-node" onclick="switchAutomationsInspectorTab('node')"
+                            class="px-2.5 py-1 rounded-lg bg-purple-500/25 border border-purple-400/50 text-purple-200 text-[11px] font-bold cursor-pointer">
+                            Node Config
+                        </button>
+                        <button type="button" id="auto-insp-tab-json" onclick="switchAutomationsInspectorTab('json')"
+                            class="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 text-[11px] font-bold cursor-pointer">
+                            Raw .JSON
+                        </button>
+                        <button type="button" id="auto-insp-tab-runs" onclick="switchAutomationsInspectorTab('runs')"
+                            class="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 text-[11px] font-bold cursor-pointer">
+                            Execution Log
+                        </button>
+                        <button type="button" id="auto-insp-close-floating-btn" onclick="toggleAutomationsCanvasFloatingDrawer(false)"
+                            class="hidden ml-1 w-7 h-7 rounded-lg bg-slate-800 hover:bg-rose-500/25 border border-slate-700 hover:border-rose-400/50 text-slate-300 hover:text-rose-200 text-xs items-center justify-center cursor-pointer" title="Hide Floating Panel">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab 1: Selected Node Configuration Form -->
+                <div id="auto-inspector-node-pane" class="p-4 overflow-y-auto flex-1 space-y-3.5 text-xs">
+                    <div class="text-center py-14 text-slate-500 space-y-2">
+                        <i class="fas fa-mouse-pointer text-2xl text-slate-600"></i>
+                        <p class="text-xs font-semibold text-slate-400">No Node Selected</p>
+                        <p class="text-[11px] text-slate-500 max-w-xs mx-auto">
+                            Upload a <code class="text-purple-300">.json</code> workflow or generate one with <strong>Ask AI</strong>, then click any node card on the canvas to inspect and edit its parameters.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Live Two-Way Synced n8n .JSON Editor -->
+                <div id="auto-inspector-json-pane" class="hidden p-4 overflow-y-auto flex-1 flex flex-col gap-2.5">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[11px] font-bold text-slate-300">Live n8n Workflow JSON</span>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="applyRawJsonEditToAutomationsCanvas()"
+                                class="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-300 text-[11px] font-bold cursor-pointer">
+                                Apply JSON to Canvas
+                            </button>
+                            <button type="button" onclick="copyCurrentAutomationsCanvasJson()"
+                                class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-[11px] font-bold cursor-pointer">
+                                Copy
+                            </button>
+                        </div>
+                    </div>
+                    <textarea id="auto-inspector-raw-json-textarea" spellcheck="false"
+                        placeholder="Upload or generate a .JSON file first to unlock raw JSON editing..."
+                        class="w-full flex-1 p-3 rounded-xl bg-slate-950 border border-slate-800 focus:border-purple-400 font-mono text-[11px] text-emerald-300 focus:outline-none resize-none"></textarea>
+                </div>
+
+                <!-- Tab 3: Native Execution Trace & Run History -->
+                <div id="auto-inspector-runs-pane" class="hidden p-4 overflow-y-auto flex-1 space-y-2.5 text-xs">
+                    <div class="text-center py-12 text-slate-500">
+                        <i class="fas fa-history text-xl mb-1.5"></i>
+                        <p>No workflow executions recorded in this session yet. Click <strong>Test Run</strong> to execute the loaded canvas natively.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GlennBot Automations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: { gb: { dark: '#050b14', panel: '#0f172a', cyan: '#00f0ff', blue: '#3b82f6' } }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<!-- MOBILE-ADAPTIVE BODY: Scrollable on mobile/tablet, locked full-screen dashboard on desktop -->
+<body class="min-h-screen lg:h-screen w-full max-w-none overflow-x-hidden overflow-y-auto lg:overflow-hidden flex flex-col p-2 sm:p-3 lg:px-4 lg:py-3">
+
+    {% include 'partials/modals.html' %}
+    {% include 'partials/header_nav.html' %}
+
+        <!-- RIGHT MAIN VIEWPORT -->
+        <main class="flex-1 lg:min-h-0 flex flex-col min-w-0 overflow-hidden">
+            {% include 'partials/view_scheduler.html' %}
+            {% include 'partials/view_calendar.html' %}
+            {% include 'partials/view_queue.html' %}
+            {% include 'partials/view_messages.html' %}
+            {% include 'partials/view_comments.html' %}
+            {% include 'partials/view_analytics.html' %}
+            {% include 'partials/view_email.html' %}
+            {% include 'partials/view_contacts.html' %}
+            {% include 'partials/view_files.html' %}
+            {% include 'partials/view_spreadsheet.html' %}
+            {% include 'partials/view_automations.html' %}
+        </main>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+    <!-- ==================== TAB 6: SOCIAL MEDIA ANALYTICS & PER-PAGE INSIGHTS (EXTERNAL API) ==================== -->
+    <div id="view-analytics" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
+        <div class="glass-panel rounded-2xl p-3 sm:p-5 flex flex-col lg:h-full lg:min-h-0 overflow-hidden">
+            <!-- Top Header & Filter Controls -->
+            <div class="flex-none flex flex-col xl:flex-row items-start xl:items-center justify-between gap-3 pb-3.5 mb-3.5 border-b border-slate-700/90">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0 shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+                        <i class="fas fa-chart-line text-lg"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-base sm:text-lg font-bold text-white flex flex-wrap items-center gap-2">
+                            <span>Social Media Analytics & Page Insights</span>
+                            <span class="inline-flex items-center gap-1.5 text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold" title="Analytics powered by External API & Live Page Engagement">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> External API Analytics
+                            </span>
+                        </h2>
+                        <p class="text-[11px] sm:text-xs text-slate-400">
+                            Per-Social Media Page breakdown • Filter by connected platform, individual page, or time range
+                            <span id="analytics-last-updated" class="text-slate-500 ml-1"></span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Right Controls: Page Selector, Time Period, Sync Button -->
+                <div class="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+                    <div class="relative flex-1 sm:flex-none min-w-[210px]">
+                        <select id="analytics-filter-page" onchange="onAnalyticsPageFilterChange()" class="w-full bg-slate-800 border border-gb-cyan/50 text-white text-xs rounded-lg px-3 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer truncate" title="Filter analytics by specific Social Media Page">
+                            <option value="all">All Connected Social Media Pages</option>
+                        </select>
+                    </div>
+
+                    <select id="analytics-filter-period" onchange="onAnalyticsPeriodChange()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer">
+                        <option value="7d">Last 7 Days</option>
+                        <option value="30d">Last 30 Days</option>
+                        <option value="90d" selected>Last 90 Days</option>
+                        <option value="all">All Time (365d)</option>
+                    </select>
+
+                    <button onclick="fetchAnalyticsData(true)" id="btn-sync-analytics" class="bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shrink-0 shadow-[0_0_12px_rgba(0,240,255,0.12)]">
+                        <i id="sync-analytics-icon" class="fas fa-sync-alt"></i> <span>Sync Analytics</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Connected Platform Filter Bar (Interactive Pills) -->
+            <div id="analytics-platform-pills" class="flex-none flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-800/90">
+                <div class="flex flex-wrap items-center gap-1.5" id="analytics-platform-buttons-container">
+                    <!-- Populated dynamically based on connected social media platforms -->
+                </div>
+                <div id="analytics-active-filter-indicator" class="text-[11px] text-slate-400 flex items-center gap-2"></div>
+            </div>
+
+            <!-- Scrollable Analytics Workspace -->
+            <div id="analytics-workspace-scroll" class="flex-1 lg:min-h-0 overflow-y-auto pr-1 space-y-5">
+                <!-- KPI Summary Row -->
+                <div id="analytics-kpi-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"></div>
+
+                <!-- Per-Social Media Page Performance Section -->
+                <div class="space-y-2.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-white flex items-center gap-2">
+                            <i class="fas fa-layer-group text-gb-cyan"></i>
+                            <span>Performance Per Social Media Page</span>
+                            <span id="analytics-pages-section-count" class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-gb-cyan border border-slate-700">0 Pages</span>
+                        </h3>
+                        <span class="text-[11px] text-slate-400">Click any Page card to filter posts & metrics for that page</span>
+                    </div>
+                    <div id="analytics-pages-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5"></div>
+                </div>
+
+                <!-- Post-Level Performance Breakdown Section -->
+                <div class="space-y-2.5 pb-2">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                        <div class="flex items-center gap-2">
+                            <h3 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-white flex items-center gap-2">
+                                <i class="fas fa-photo-video text-gb-cyan"></i>
+                                <span>Published Posts Analytics Breakdown</span>
+                                <span id="analytics-posts-section-count" class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-gb-cyan border border-slate-700">0 Posts</span>
+                            </h3>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <div class="relative">
+                                <i class="fas fa-search text-slate-500 text-[11px] absolute left-2.5 top-1/2 -translate-y-1/2"></i>
+                                <input type="text" id="analytics-post-search" oninput="renderAnalyticsPostsTable()" placeholder="Search post caption or page..." class="bg-slate-900 border border-slate-700 text-white text-xs rounded-lg pl-7 pr-2.5 py-1.5 focus:border-gb-cyan focus:outline-none w-48 sm:w-56">
+                            </div>
+                            <select id="analytics-post-sort" onchange="renderAnalyticsPostsTable()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer">
+                                <option value="engagement">Sort: Highest Engagement</option>
+                                <option value="views">Sort: Most Views / Reach</option>
+                                <option value="likes">Sort: Most Likes</option>
+                                <option value="comments">Sort: Most Comments</option>
+                                <option value="newest">Sort: Newest Published</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="analytics-posts-container" class="rounded-xl border border-slate-700/80 bg-slate-900/60 overflow-x-auto"></div>
+                </div>
+            </div>
+        </div>
+    </div>
