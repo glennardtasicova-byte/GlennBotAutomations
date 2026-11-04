@@ -233,7 +233,7 @@
             const origHTML = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Uploading to Google Drive &amp; Generating File ID...</span>`;
+                btn.innerHTML = `<i class="fas fa-circle-notch fa-spin shrink-0"></i> <span class="truncate">Uploading to Google Drive...</span>`;
             }
 
             try {
@@ -270,7 +270,7 @@
                         const chunkBlob = file.slice(startByte, endByte);
                         const pct = Math.min(99, Math.round((partNum / totalParts) * 100));
                         if (btn) {
-                            btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Uploading ${escapeHTML(file.name)} to Google Drive (${pct}% • Part ${partNum}/${totalParts})...</span>`;
+                            btn.innerHTML = `<i class="fas fa-circle-notch fa-spin shrink-0"></i> <span class="truncate">Uploading (${pct}% • Part ${partNum}/${totalParts})...</span>`;
                         }
 
                         let partOk = false;
@@ -333,7 +333,7 @@
             } finally {
                 if (btn) {
                     btn.disabled = false;
-                    btn.innerHTML = origHTML || `<i class="fab fa-google-drive"></i> <span>Upload to Google Drive &amp; Generate File ID</span>`;
+                    btn.innerHTML = origHTML || `<i class="fab fa-google-drive shrink-0"></i> <span class="truncate">Upload to Google Drive &amp; Generate File ID</span>`;
                 }
             }
         }
@@ -545,6 +545,47 @@
         let ssIsPullSyncInFlight = false;
         let ssFocusListenersAttached = false;
         let lastSyncedSpreadsheetSignature = '';
+        let ssWrapTextEnabled = (function () {
+            try {
+                const saved = localStorage.getItem('gb_ss_wrap_text');
+                return saved === null ? true : saved === '1';
+            } catch (_) {
+                return true;
+            }
+        })();
+
+        function ssSyncWrapMirror(inputEl) {
+            if (!inputEl) return;
+            const mirror = inputEl.previousElementSibling;
+            if (mirror && mirror.classList.contains('ss-wrap-cell-mirror')) {
+                mirror.textContent = String(inputEl.value || '') + ' ';
+            }
+        }
+
+        function updateSpreadsheetWrapTextButtonUI() {
+            const btn = document.getElementById('btn-ss-wrap-text');
+            const lbl = document.getElementById('btn-ss-wrap-text-label');
+            if (!btn) return;
+            if (ssWrapTextEnabled) {
+                btn.className = 'px-2.5 py-1 rounded-lg bg-gb-cyan/20 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition-all shadow-[0_0_10px_rgba(0,240,255,0.18)]';
+                if (lbl) lbl.textContent = 'Wrap Text: ON';
+            } else {
+                btn.className = 'px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold flex items-center gap-1.5 shrink-0 transition-all';
+                if (lbl) lbl.textContent = 'Wrap Text: OFF';
+            }
+        }
+
+        function toggleSpreadsheetWrapText() {
+            ssWrapTextEnabled = !ssWrapTextEnabled;
+            try {
+                localStorage.setItem('gb_ss_wrap_text', ssWrapTextEnabled ? '1' : '0');
+            } catch (_) {}
+            updateSpreadsheetWrapTextButtonUI();
+            renderSpreadsheetGrid();
+            const activeEl = document.getElementById(`ss-cell-${activeCellCoord}`);
+            if (activeEl) activeEl.focus();
+            showToast(ssWrapTextEnabled ? '📝 Wrap Text ON — Long cell contents now wrap and display in full!' : '📏 Wrap Text OFF — Compact single-line cells enabled.');
+        }
 
         function ssNormalizeCellValue(rawVal) {
             if (rawVal === null || rawVal === undefined) return '';
@@ -839,6 +880,7 @@
                             const dispVal = ssEvaluateCellDisplay(rawVal, cells);
                             if (inputEl.value !== dispVal) {
                                 inputEl.value = dispVal;
+                                ssSyncWrapMirror(inputEl);
                             }
                         }
                     }
@@ -934,6 +976,7 @@
 
         function initSpreadsheetView() {
             startSpreadsheetLiveAutoSyncPoller();
+            updateSpreadsheetWrapTextButtonUI();
             if (!spreadsheetInitialized) {
                 // Start on a clean blank worksheet by default!
                 currentSpreadsheetWorkbook = createBlankSpreadsheetWorkbookState();
@@ -956,6 +999,7 @@
         function renderSpreadsheetGrid() {
             const table = document.getElementById('ss-grid-table');
             if (!table) return;
+            updateSpreadsheetWrapTextButtonUI();
             const sheet = ssGetActiveSheet();
             const colCount = sheet.col_count || 10;
             const rowCount = sheet.row_count || 25;
@@ -965,6 +1009,7 @@
             const wrapperEl = document.getElementById('ss-grid-scroll-wrapper');
             const wrapperWidth = wrapperEl ? Math.max(0, wrapperEl.clientWidth - 48) : 0;
             const colWidthsPx = [];
+            const maxColCap = ssWrapTextEnabled ? 460 : 560;
             for (let c = 0; c < colCount; c++) {
                 const colLetter = ssColIdxToLetter(c);
                 let maxChars = 12;
@@ -974,7 +1019,7 @@
                         maxChars = val.length;
                     }
                 }
-                const px = Math.max(130, Math.min(560, Math.round(maxChars * 7.4 + 28)));
+                const px = Math.max(130, Math.min(maxColCap, Math.round(maxChars * 7.4 + 28)));
                 colWidthsPx.push(px);
             }
             const totalColsWidth = colWidthsPx.reduce((acc, w) => acc + w, 0);
@@ -991,13 +1036,14 @@
                 const colLetter = ssColIdxToLetter(c);
                 const isActiveCol = activeCellCoord.replace(/\d+/g, '') === colLetter;
                 const wPx = colWidthsPx[c] || 130;
-                theadCols += `<th id="ss-col-hdr-${colLetter}" style="min-width:${wPx}px;" class="sticky top-0 z-20 ${isActiveCol ? 'bg-gb-cyan/20 text-gb-cyan border-gb-cyan/60' : 'bg-slate-900 text-slate-300 border-slate-700'} border px-2 py-1.5 text-center font-mono font-extrabold text-xs">${colLetter}</th>`;
+                const maxStyle = ssWrapTextEnabled ? `min-width:${wPx}px; max-width:${ Math.max(wPx, 520) }px;` : `min-width:${wPx}px;`;
+                theadCols += `<th id="ss-col-hdr-${colLetter}" style="${maxStyle}" class="sticky top-0 z-20 ${isActiveCol ? 'bg-gb-cyan/20 text-gb-cyan border-gb-cyan/60' : 'bg-slate-900 text-slate-300 border-slate-700'} border px-2 py-1.5 text-center font-mono font-extrabold text-xs">${colLetter}</th>`;
             }
 
             let tbodyRows = '';
             for (let r = 1; r <= rowCount; r++) {
                 const isActiveRow = Number(activeCellCoord.replace(/[A-Za-z]+/g, '')) === r;
-                let rowCells = `<td id="ss-row-hdr-${r}" class="sticky left-0 z-10 ${isActiveRow ? 'bg-gb-cyan/20 text-gb-cyan border-gb-cyan/60' : 'bg-slate-900 text-slate-400 border-slate-700'} border px-2 py-1 text-center font-mono font-bold text-[11px] select-none">${r}</td>`;
+                let rowCells = `<td id="ss-row-hdr-${r}" class="sticky left-0 z-10 ${isActiveRow ? 'bg-gb-cyan/20 text-gb-cyan border-gb-cyan/60' : 'bg-slate-900 text-slate-400 border-slate-700'} border px-2 py-1 text-center font-mono font-bold text-[11px] select-none align-top">${r}</td>`;
                 for (let c = 0; c < colCount; c++) {
                     const colLetter = ssColIdxToLetter(c);
                     const coord = `${colLetter}${r}`;
@@ -1005,21 +1051,42 @@
                     const displayVal = ssEvaluateCellDisplay(rawVal, cells);
                     const isSelected = coord === activeCellCoord;
                     const wPx = colWidthsPx[c] || 130;
-                    rowCells += `
-                        <td style="min-width:${wPx}px;" class="border border-slate-800 p-0 ${isSelected ? 'ring-2 ring-gb-cyan z-10 relative bg-gb-cyan/5' : 'hover:bg-slate-900/60'}">
-                            <input
-                                type="text"
-                                id="ss-cell-${coord}"
-                                data-coord="${coord}"
-                                value="${escapeHTML(displayVal)}"
-                                onfocus="onSpreadsheetCellFocus('${coord}', this)"
-                                oninput="onSpreadsheetCellInput('${coord}', this.value)"
-                                onblur="onSpreadsheetCellBlur('${coord}', this)"
-                                onkeydown="onSpreadsheetCellKeyDown(event, ${c}, ${r})"
-                                class="w-full h-7 px-2 bg-transparent text-xs text-white focus:outline-none font-sans"
-                            >
-                        </td>
-                    `;
+                    if (ssWrapTextEnabled) {
+                        const maxCellW = Math.max(wPx, 520);
+                        rowCells += `
+                            <td style="min-width:${wPx}px; max-width:${maxCellW}px;" class="border border-slate-800 p-0 align-top ${isSelected ? 'ring-2 ring-gb-cyan z-10 relative bg-gb-cyan/5' : 'hover:bg-slate-900/60'}">
+                                <div class="ss-wrap-cell-grid">
+                                    <div class="ss-wrap-cell-mirror" aria-hidden="true">${escapeHTML(displayVal)} </div>
+                                    <textarea
+                                        rows="1"
+                                        id="ss-cell-${coord}"
+                                        data-coord="${coord}"
+                                        onfocus="onSpreadsheetCellFocus('${coord}', this)"
+                                        oninput="onSpreadsheetCellInput('${coord}', this.value); ssSyncWrapMirror(this)"
+                                        onblur="onSpreadsheetCellBlur('${coord}', this)"
+                                        onkeydown="onSpreadsheetCellKeyDown(event, ${c}, ${r})"
+                                        class="ss-wrap-cell-textarea text-white"
+                                    >${escapeHTML(displayVal)}</textarea>
+                                </div>
+                            </td>
+                        `;
+                    } else {
+                        rowCells += `
+                            <td style="min-width:${wPx}px;" class="border border-slate-800 p-0 ${isSelected ? 'ring-2 ring-gb-cyan z-10 relative bg-gb-cyan/5' : 'hover:bg-slate-900/60'}">
+                                <input
+                                    type="text"
+                                    id="ss-cell-${coord}"
+                                    data-coord="${coord}"
+                                    value="${escapeHTML(displayVal)}"
+                                    onfocus="onSpreadsheetCellFocus('${coord}', this)"
+                                    oninput="onSpreadsheetCellInput('${coord}', this.value)"
+                                    onblur="onSpreadsheetCellBlur('${coord}', this)"
+                                    onkeydown="onSpreadsheetCellKeyDown(event, ${c}, ${r})"
+                                    class="w-full h-7 px-2 bg-transparent text-xs text-white focus:outline-none font-sans"
+                                >
+                            </td>
+                        `;
+                    }
                 }
                 tbodyRows += `<tr>${rowCells}</tr>`;
             }
@@ -1043,13 +1110,15 @@
             const rawVal = ssNormalizeCellValue(sheet.cells[coord] ?? '');
             if (inputEl && rawVal.startsWith('=')) {
                 inputEl.value = rawVal;
+                ssSyncWrapMirror(inputEl);
             }
             syncFormulaBarWithActiveCell();
             document.querySelectorAll('#ss-grid-table td.ring-2').forEach(td => {
                 td.classList.remove('ring-2', 'ring-gb-cyan', 'z-10', 'relative', 'bg-gb-cyan/5');
             });
-            if (inputEl && inputEl.parentElement) {
-                inputEl.parentElement.classList.add('ring-2', 'ring-gb-cyan', 'z-10', 'relative', 'bg-gb-cyan/5');
+            const tdEl = inputEl ? inputEl.closest('td') : null;
+            if (tdEl) {
+                tdEl.classList.add('ring-2', 'ring-gb-cyan', 'z-10', 'relative', 'bg-gb-cyan/5');
             }
         }
 
@@ -1072,6 +1141,7 @@
             const rawVal = sheet.cells[coord] ?? '';
             if (inputEl) {
                 inputEl.value = ssEvaluateCellDisplay(rawVal, sheet.cells);
+                ssSyncWrapMirror(inputEl);
             }
             // Refresh any formula cells that depend on this cell
             Object.keys(sheet.cells).forEach(k => {
@@ -1079,6 +1149,7 @@
                     const depInput = document.getElementById(`ss-cell-${k}`);
                     if (depInput && document.activeElement !== depInput) {
                         depInput.value = ssEvaluateCellDisplay(sheet.cells[k], sheet.cells);
+                        ssSyncWrapMirror(depInput);
                     }
                 }
             });
@@ -1094,6 +1165,7 @@
             const cellInput = document.getElementById(`ss-cell-${activeCellCoord}`);
             if (cellInput) {
                 cellInput.value = ssEvaluateCellDisplay(val, sheet.cells);
+                ssSyncWrapMirror(cellInput);
             }
             scheduleSpreadsheetAutoSyncToGoogleDrive();
         }

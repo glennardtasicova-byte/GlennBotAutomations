@@ -82,24 +82,24 @@
             </div>
 
             <!-- Upload Bar (Drag/Drop + Automation Note + Upload Trigger) -->
-            <div class="p-3.5 rounded-xl bg-slate-900/90 border border-dashed border-emerald-400/50 mb-3.5 shrink-0 space-y-2.5">
+            <div class="p-3.5 rounded-xl bg-slate-900/90 border border-dashed border-emerald-400/50 mb-3.5 shrink-0 space-y-2.5 overflow-hidden">
                 <input type="file" id="vault-files-input" multiple class="hidden" onchange="onVaultFilesInputSelected(this)">
-                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                    <div class="flex items-center gap-3 min-w-0">
+                <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3 flex-wrap">
+                    <div class="flex items-center gap-3 min-w-0 flex-1">
                         <button type="button" onclick="document.getElementById('vault-files-input')?.click()" class="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/50 text-emerald-300 text-xs font-bold flex items-center gap-2 shrink-0 transition-all">
                             <i class="fas fa-file-upload"></i>
                             <span>Select File(s)</span>
                         </button>
-                        <div class="min-w-0">
+                        <div class="min-w-0 flex-1">
                             <div id="vault-selected-files-label" class="text-xs font-bold text-white truncate">No file selected yet — click "Select File(s)" to upload to Google Drive</div>
-                            <div class="text-[11px] text-slate-400">Python automatically generates a unique <code class="text-gb-cyan font-mono">file_id</code> per uploaded file and stores it in your Google Drive (<code class="text-emerald-300">GlennBot_Media_Vault</code>).</div>
+                            <div class="text-[11px] text-slate-400 leading-snug">Python automatically generates a unique <code class="text-gb-cyan font-mono">file_id</code> per uploaded file and stores it in your Google Drive (<code class="text-emerald-300">GlennBot_Media_Vault</code>).</div>
                         </div>
                     </div>
-                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                        <input type="text" id="vault-files-note-input" placeholder="Optional automation note / tag (e.g. Brochure PDF, Intro Video)..." class="sm:w-64 bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
-                        <button type="button" id="btn-upload-vault-files" onclick="uploadSelectedVaultFilesToGoogleDrive()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:opacity-95 transition-all shrink-0">
-                            <i class="fab fa-google-drive"></i>
-                            <span>Upload to Google Drive &amp; Generate File ID</span>
+                    <div class="flex flex-col sm:flex-row flex-wrap sm:flex-nowrap items-stretch sm:items-center justify-end gap-2 w-full xl:w-auto max-w-full">
+                        <input type="text" id="vault-files-note-input" placeholder="Optional automation note / tag..." class="w-full sm:w-52 md:w-60 min-w-0 bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
+                        <button type="button" id="btn-upload-vault-files" onclick="uploadSelectedVaultFilesToGoogleDrive()" class="max-w-full px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:opacity-95 transition-all shrink-0">
+                            <i class="fab fa-google-drive shrink-0"></i>
+                            <span class="truncate">Upload to Google Drive &amp; Generate File ID</span>
                         </button>
                     </div>
                 </div>

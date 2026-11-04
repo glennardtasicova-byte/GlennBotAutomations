@@ -90,11 +90,15 @@
                 </button>
             </div>
 
-            <!-- Formula / Active Cell Coordinate Bar -->
-            <div class="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
+            <!-- Formula / Active Cell Coordinate Bar + Wrap Text Toggle -->
+            <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
                 <span id="ss-active-cell-badge" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs min-w-[48px] text-center">A1</span>
                 <span class="text-slate-500 font-serif italic font-bold text-sm px-1">fx</span>
-                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type cell value or formula (e.g. =SUM(A1:A10), =AVERAGE(B1:B5))..." class="flex-1 bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type cell value or formula (e.g. =SUM(A1:A10), =AVERAGE(B1:B5))..." class="flex-1 min-w-[160px] bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <button type="button" id="btn-ss-wrap-text" onclick="toggleSpreadsheetWrapText()" class="px-2.5 py-1 rounded-lg bg-gb-cyan/20 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition-all shadow-[0_0_10px_rgba(0,240,255,0.18)]" title="Toggle Wrap Text so long cell contents expand and display in full without cutting off">
+                    <i class="fas fa-align-left"></i>
+                    <span id="btn-ss-wrap-text-label">Wrap Text: ON</span>
+                </button>
                 <button type="button" onclick="clearActiveSheetCells()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-slate-300 hover:text-rose-200 text-[11px] font-semibold shrink-0" title="Clear all cells in current sheet">
                     <i class="fas fa-eraser mr-1"></i>Clear Sheet
                 </button>
