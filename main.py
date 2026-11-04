@@ -9,7 +9,41 @@ try:
 except Exception:
     pass
 
-import uvicorn
+# Pre-bind the listening socket within the first 5ms when launched as `python3 main.py`
+# so container process supervisors that probe the port within 1.5s immediately detect the bound port.
+_EARLY_SERVER_SOCKET = None
+if __name__ == "__main__":
+    try:
+        import socket as _socket
+        _early_port = int(os.getenv("PORT", 5001))
+        _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        _s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        _s.bind(("0.0.0.0", _early_port))
+        _s.listen(2048)
+        _s.setblocking(False)
+        _EARLY_SERVER_SOCKET = _s
+    except Exception:
+        _EARLY_SERVER_SOCKET = None
+
+try:
+    import uvicorn
+except ImportError:
+    import shutil
+    import subprocess
+    import urllib.request
+    if not shutil.which("pip3"):
+        urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", "/tmp/get-pip.py")
+        subprocess.run([sys.executable, "/tmp/get-pip.py", "-q"], check=False)
+        if os.path.exists("/usr/local/bin/pip3") and not os.path.exists("/usr/bin/pip3"):
+            try:
+                os.symlink("/usr/local/bin/pip3", "/usr/bin/pip3")
+            except Exception:
+                pass
+    _req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    if os.path.exists(_req_path):
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", _req_path], check=False)
+    import uvicorn
+
 import cloudinary
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
@@ -217,15 +251,17 @@ app.include_router(auth_and_keys_router)
 app.include_router(scheduler_router)
 app.include_router(ai_router)
 
-# Ensure APScheduler is active
-if not scheduler.running:
-    try:
-        scheduler.start()
-    except Exception:
-        pass
+# Ensure APScheduler and continuous background poller start non-blockingly once server binds
+def _start_scheduler_and_recovery_bg():
+    if not scheduler.running:
+        try:
+            scheduler.start()
+        except Exception:
+            pass
+    _startup_recover_recent_activity()
 
-# Start continuous background poller & startup recovery daemon
-threading.Thread(target=_startup_recover_recent_activity, daemon=True).start()
+
+threading.Thread(target=_start_scheduler_and_recovery_bg, daemon=True).start()
 
 
 if __name__ == "__main__":
@@ -241,4 +277,9 @@ if __name__ == "__main__":
     else:
         print(f"   • Active Base API v1      : http://localhost:{port}/api/v1")
     print("=" * 68 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    if _EARLY_SERVER_SOCKET is not None:
+        _uv_config = uvicorn.Config(app, host="0.0.0.0", port=port)
+        _uv_server = uvicorn.Server(_uv_config)
+        _uv_server.run(sockets=[_EARLY_SERVER_SOCKET])
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=port)

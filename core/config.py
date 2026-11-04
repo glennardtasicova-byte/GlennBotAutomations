@@ -86,7 +86,21 @@ def _invalidate_fast_db_cache(keys: Optional[List[str]] = None) -> None:
 
 # --- 1. LOAD SECRETS FROM .env FILE (EXTERNAL API MODE) ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+for _k, _v in list(os.environ.items()):
+    _v_str = str(_v or "").strip().lower()
+    if (
+        not _v_str
+        or _v_str.startswith("your_")
+        or "@host" in _v_str
+        or "example.com" in _v_str
+        or _v_str in ("changeme", "placeholder", "none", "null")
+    ):
+        os.environ.pop(_k, None)
+
+if os.path.exists("/tmp/.glennbot_runtime_env"):
+    load_dotenv("/tmp/.glennbot_runtime_env", override=True)
+
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 
 CLOUDINARY_CLOUD_NAME = (os.getenv("CLOUDINARY_CLOUD_NAME") or "").strip()
 CLOUDINARY_API_KEY = (os.getenv("CLOUDINARY_API_KEY") or "").strip()

@@ -161,7 +161,7 @@ def get_all_zernio_keys() -> List[str]:
     return [r["api_key"] for r in get_all_external_key_records() if r.get("api_key")]
 
 
-load_external_keys_from_cloudinary()
+threading.Thread(target=load_external_keys_from_cloudinary, daemon=True).start()
 
 
 # ==============================================================================
@@ -274,7 +274,7 @@ def save_comments_store_async():
     threading.Thread(target=save_comments_store_to_cloudinary, daemon=True).start()
 
 
-load_comments_store_from_cloudinary()
+threading.Thread(target=load_comments_store_from_cloudinary, daemon=True).start()
 
 
 # ==============================================================================
@@ -372,7 +372,7 @@ def _filter_out_deleted_messages(conv_obj: Dict[str, Any], messages_list: List[D
     ]
 
 
-load_messages_store_from_cloudinary()
+threading.Thread(target=load_messages_store_from_cloudinary, daemon=True).start()
 
 
 # ==============================================================================

@@ -104,7 +104,7 @@ def init_records_db():
         """))
 
 
-init_records_db()
+# init_records_db() is launched in background thread below so uvicorn binds port immediately
 
 jobstores = {
     'default': SQLAlchemyJobStore(
@@ -557,14 +557,26 @@ def cleanup_old_records():
         print(f"[❌ DB RETENTION ERROR]: {e}")
 
 
-scheduler.add_job(
-    cleanup_old_records,
-    'cron',
-    hour=3,
-    minute=0,
-    id='daily_db_retention_cleanup',
-    replace_existing=True
-)
+def _init_db_and_cron_job_bg():
+    try:
+        init_records_db()
+    except Exception as e:
+        print(f"[⚠️ DB INIT WARNING]: {e}")
+    try:
+        scheduler.add_job(
+            cleanup_old_records,
+            'cron',
+            hour=3,
+            minute=0,
+            id='daily_db_retention_cleanup',
+            replace_existing=True
+        )
+    except Exception as e:
+        print(f"[⚠️ SCHEDULER JOB INIT WARNING]: {e}")
+
+
+import threading as _db_threading
+_db_threading.Thread(target=_init_db_and_cron_job_bg, daemon=True).start()
 
 
 def _get_cached_seen_comment_ids(ttl_sec: float = 3.0) -> set:
