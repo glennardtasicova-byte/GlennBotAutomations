@@ -22609,17 +22609,52 @@ async def api_execute_automations_canvas_workflow(request: Request):
 
 
 @router.delete("/api/automations/workflows/{workflow_id}")
-async def api_delete_automations_canvas_workflow(workflow_id: str):
+async def api_delete_automations_canvas_workflow(workflow_id: str, request: Request):
     def _do_del():
         _load_automations_canvas_state(force_cloud=False)
+        _load_internal_api_state(force_cloud=False)
         clean_id = str(workflow_id or "").strip()
+        base_url = get_dynamic_base_url(request=request, prefer_public=True)
+        live_base_api = f"{base_url}/api/v1"
+
         with AUTOMATIONS_CANVAS_LOCK:
             AUTOMATIONS_CANVAS_STATE["workflows"] = [
                 w for w in (AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
                 if isinstance(w, dict) and str(w.get("id")) != clean_id
             ]
         _save_automations_canvas_state()
-        return AUTOMATIONS_CANVAS_STATE.get("workflows") or []
+
+        # Also remove from INTERNAL_API_STATE["n8n_workflows"] if present so it doesn't resurface in the dropdown
+        removed_from_internal = False
+        with INTERNAL_API_LOCK:
+            old_n8n = list(INTERNAL_API_STATE.get("n8n_workflows") or [])
+            new_n8n = [
+                w for w in old_n8n
+                if isinstance(w, dict) and str(w.get("id")) != clean_id
+            ]
+            if len(new_n8n) != len(old_n8n):
+                INTERNAL_API_STATE["n8n_workflows"] = new_n8n
+                removed_from_internal = True
+        if removed_from_internal:
+            _save_internal_api_state()
+
+        canvas_wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
+        existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
+        for n8n_w in (INTERNAL_API_STATE.get("n8n_workflows") or []):
+            if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
+                wid = str(n8n_w.get("id") or "")
+                if wid and wid not in existing_ids:
+                    patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
+                    canvas_wfs.append({
+                        "id": wid,
+                        "name": str(n8n_w.get("name") or patched.get("name") or "n8n Workflow"),
+                        "active": bool(n8n_w.get("canvas_active", False)),
+                        "events": n8n_w.get("events") or _analyze_n8n_workflow_json(patched).get("events") or {},
+                        "detected_conditions": n8n_w.get("detected_conditions") or [],
+                        "workflow_json": patched,
+                        "updated_at": str(n8n_w.get("updated_at") or "")
+                    })
+        return canvas_wfs
 
     remaining = await run_in_threadpool(_do_del)
     return {

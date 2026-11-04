@@ -16066,6 +16066,26 @@
             } catch (_) {}
         }
 
+        function syncAutomationsDeleteWorkflowButtons() {
+            const sel = document.getElementById('auto-canvas-saved-wf-select');
+            const selectedId = String(automationsCanvasCurrentId || (sel && sel.value) || '').trim();
+            const hasSavedSelection = Boolean(selectedId);
+            const delBtn = document.getElementById('auto-canvas-delete-wf-btn');
+            const toolbarDelBtn = document.getElementById('auto-canvas-toolbar-delete-wf-btn');
+            const fsDelBtn = document.getElementById('auto-canvas-fs-delete-wf-btn');
+            if (delBtn) delBtn.disabled = !hasSavedSelection;
+            if (toolbarDelBtn) {
+                toolbarDelBtn.disabled = !hasSavedSelection;
+                toolbarDelBtn.classList.toggle('opacity-40', !hasSavedSelection);
+                toolbarDelBtn.classList.toggle('pointer-events-none', !hasSavedSelection);
+            }
+            if (fsDelBtn) {
+                fsDelBtn.disabled = !hasSavedSelection;
+                fsDelBtn.classList.toggle('opacity-40', !hasSavedSelection);
+                fsDelBtn.classList.toggle('pointer-events-none', !hasSavedSelection);
+            }
+        }
+
         function renderAutomationsSavedWorkflowSelect() {
             const sel = document.getElementById('auto-canvas-saved-wf-select');
             if (!sel) return;
@@ -16076,6 +16096,7 @@
                 html += `<option value="${escapeHtml(String(wf.id))}" ${isSel}>${escapeHtml(wf.name || 'Workflow')} (${stTag})</option>`;
             });
             sel.innerHTML = html;
+            syncAutomationsDeleteWorkflowButtons();
         }
 
         function loadSavedAutomationWorkflowFromSelect(wfId) {
@@ -16091,6 +16112,7 @@
                     active: Boolean(found.active)
                 });
             }
+            syncAutomationsDeleteWorkflowButtons();
         }
 
         function clearAutomationsCanvasToBlankLocked() {
@@ -16487,6 +16509,7 @@
                 fsAddNodesGroup.classList.toggle('opacity-40', !isUnlocked);
                 fsAddNodesGroup.classList.toggle('pointer-events-none', !isUnlocked);
             }
+            syncAutomationsDeleteWorkflowButtons();
 
             if (!isUnlocked) {
                 if (statusPill) {
@@ -17581,6 +17604,42 @@
                 if (!silent) {
                     alert('Error saving workflow: ' + (e.message || e));
                 }
+            }
+        }
+
+        async function deleteSelectedAutomationsCanvasWorkflow() {
+            const sel = document.getElementById('auto-canvas-saved-wf-select');
+            const targetId = String(automationsCanvasCurrentId || (sel && sel.value) || '').trim();
+            if (!targetId) {
+                showToast('⚠️ Pumili muna ng saved .JSON workflow sa dropdown para ma-delete.');
+                return;
+            }
+            const found = automationsCanvasSavedWorkflows.find(w => String(w.id) === targetId);
+            const wfName = (found && found.name) || (automationsCanvasCurrentJson && automationsCanvasCurrentJson.name) || 'Automation Workflow';
+            if (!confirm(`Delete saved .JSON workflow "${wfName}" from Automations?`)) {
+                return;
+            }
+            try {
+                const res = await fetch(`/api/automations/workflows/${encodeURIComponent(targetId)}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    automationsCanvasSavedWorkflows = Array.isArray(data.workflows)
+                        ? data.workflows
+                        : automationsCanvasSavedWorkflows.filter(w => String(w.id) !== targetId);
+                    automationsCanvasCurrentId = '';
+                    automationsCanvasCurrentJson = null;
+                    automationsCanvasSelectedNodeName = '';
+                    automationsCanvasLastTraceByNode = {};
+                    renderAutomationsSavedWorkflowSelect();
+                    renderAutomationsCanvasAll();
+                    showToast(`🗑️ Deleted "${wfName}" (.JSON) from Automations!`);
+                } else {
+                    alert(data.message || 'Failed to delete workflow.');
+                }
+            } catch (e) {
+                alert('Error deleting workflow: ' + (e.message || e));
             }
         }
 

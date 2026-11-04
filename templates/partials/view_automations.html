@@ -57,10 +57,17 @@
                         <span>Paste JSON</span>
                     </button>
 
-                    <select id="auto-canvas-saved-wf-select" onchange="loadSavedAutomationWorkflowFromSelect(this.value)"
-                        class="bg-slate-900 border border-slate-700 focus:border-purple-400 rounded-xl px-3 py-2 text-xs text-slate-200 font-semibold focus:outline-none cursor-pointer max-w-[220px]">
-                        <option value="">-- Blank Canvas (No .JSON Loaded) --</option>
-                    </select>
+                    <div class="flex items-center gap-1.5">
+                        <select id="auto-canvas-saved-wf-select" onchange="loadSavedAutomationWorkflowFromSelect(this.value)"
+                            class="bg-slate-900 border border-slate-700 focus:border-purple-400 rounded-xl px-3 py-2 text-xs text-slate-200 font-semibold focus:outline-none cursor-pointer max-w-[220px]">
+                            <option value="">-- Blank Canvas (No .JSON Loaded) --</option>
+                        </select>
+                        <button type="button" id="auto-canvas-delete-wf-btn" onclick="deleteSelectedAutomationsCanvasWorkflow()" disabled
+                            class="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 disabled:opacity-40 disabled:pointer-events-none border border-rose-500/50 text-rose-300 text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer" title="Delete selected .JSON workflow from the dropdown list">
+                            <i class="fas fa-trash-alt"></i>
+                            <span>Delete .JSON</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -130,6 +137,12 @@
                         class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Download 100% n8n-compatible .JSON file">
                         <i class="fas fa-download"></i>
                         <span>.JSON</span>
+                    </button>
+
+                    <button type="button" id="auto-canvas-toolbar-delete-wf-btn" onclick="deleteSelectedAutomationsCanvasWorkflow()"
+                        class="px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer" title="Delete this saved .JSON workflow permanently">
+                        <i class="fas fa-trash-alt"></i>
+                        <span>Delete .JSON</span>
                     </button>
 
                     <button type="button" onclick="clearAutomationsCanvasToBlankLocked()"
@@ -254,6 +267,11 @@
                         <button type="button" onclick="downloadCurrentAutomationsCanvasJson()"
                             class="px-2 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-gb-cyan text-[11px] font-bold cursor-pointer" title="Download .JSON">
                             <i class="fas fa-download"></i>
+                        </button>
+
+                        <button type="button" id="auto-canvas-fs-delete-wf-btn" onclick="deleteSelectedAutomationsCanvasWorkflow()"
+                            class="px-2 py-1 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/50 text-rose-300 text-[11px] font-bold cursor-pointer" title="Delete this saved .JSON workflow">
+                            <i class="fas fa-trash-alt"></i>
                         </button>
 
                         <div class="h-4 w-[1px] bg-slate-800 mx-0.5"></div>
