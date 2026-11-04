@@ -12,12 +12,20 @@ ENV/
 # Environment Variables (CRITICAL: Do NOT commit secrets!)
 .env
 .env.*
+.env_*
+**/.env
+**/.env.*
+**/.env_*
 !.env.example
 
-# Temporary / Local cache files
+# Temporary / Local cache & archive files
 *.log
+*.zip
 files_vault_cache.json
 spreadsheets_store_cache.json
+automations_canvas_workflows_cache.json
+user_settings_profiles_cache.json
+public/assets/aistudio/
 .pytest_cache/
 .DS_Store
 Thumbs.db

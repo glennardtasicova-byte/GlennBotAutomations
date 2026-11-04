@@ -1,0 +1,987 @@
+    <!-- SCHEDULE MEETING / APPOINTMENT MODAL (AUTO-DETECTS GOOGLE CALENDAR & MEET, MS OUTLOOK & TEAMS, ZOOM) -->
+    <div id="schedule-meeting-modal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+        <div class="glass-panel rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden border border-gb-cyan/50 shadow-[0_0_45px_rgba(0,240,255,0.25)]">
+            <div class="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-700 bg-slate-900/95">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0">
+                        <i class="fas fa-calendar-plus"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-bold text-white">Schedule Calendar Appointment / Video Meeting</h3>
+                        <p class="text-[11px] text-slate-400">Auto-Detects Target Calendar Domain • Sends Email Invites to Recipients Automatically</p>
+                    </div>
+                </div>
+                <button onclick="closeScheduleMeetingModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 hover:border-rose-500 text-slate-300 hover:text-white flex items-center justify-center transition-all shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                <!-- STEP 1: SELECT PLATFORM / MEETING MODE (AUTO-DETECTS TARGET CALENDAR) -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-video text-gb-cyan mr-1"></i> Select Platform &amp; Meeting Option (Auto-Selects Target Calendar) *
+                    </label>
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <label class="cursor-pointer">
+                            <input type="radio" name="sched_meeting_platform" value="google_meet" class="peer sr-only" checked onchange="onScheduleMeetingPlatformChange()">
+                            <div class="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 peer-checked:border-emerald-400 peer-checked:bg-emerald-500/15 text-center transition-all h-full flex flex-col justify-center">
+                                <i class="fas fa-video text-emerald-400 text-base mb-1 block"></i>
+                                <span class="text-[11px] font-bold text-white block">Google Meet</span>
+                                <span class="text-[9px] text-emerald-300 block">Google Calendar</span>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer">
+                            <input type="radio" name="sched_meeting_platform" value="microsoft_teams" class="peer sr-only" onchange="onScheduleMeetingPlatformChange()">
+                            <div class="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 peer-checked:border-indigo-400 peer-checked:bg-indigo-500/15 text-center transition-all h-full flex flex-col justify-center">
+                                <i class="fas fa-users text-indigo-400 text-base mb-1 block"></i>
+                                <span class="text-[11px] font-bold text-white block">MS Teams</span>
+                                <span class="text-[9px] text-indigo-300 block">Outlook &amp; Teams Cal</span>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer">
+                            <input type="radio" name="sched_meeting_platform" value="zoom" class="peer sr-only" onchange="onScheduleMeetingPlatformChange()">
+                            <div class="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 peer-checked:border-sky-400 peer-checked:bg-sky-500/15 text-center transition-all h-full flex flex-col justify-center">
+                                <i class="fas fa-video text-sky-400 text-base mb-1 block"></i>
+                                <span class="text-[11px] font-bold text-white block">Zoom Meeting</span>
+                                <span class="text-[9px] text-sky-300 block">Zoom Calendar</span>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer">
+                            <input type="radio" name="sched_meeting_platform" value="google_calendar_std" class="peer sr-only" onchange="onScheduleMeetingPlatformChange()">
+                            <div class="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 peer-checked:border-red-400 peer-checked:bg-red-500/15 text-center transition-all h-full flex flex-col justify-center">
+                                <i class="fab fa-google text-red-400 text-base mb-1 block"></i>
+                                <span class="text-[11px] font-bold text-white block">Google Cal Only</span>
+                                <span class="text-[9px] text-slate-400 block">Without Video Call</span>
+                            </div>
+                        </label>
+                        <label class="cursor-pointer col-span-2 sm:col-span-1">
+                            <input type="radio" name="sched_meeting_platform" value="outlook_calendar_std" class="peer sr-only" onchange="onScheduleMeetingPlatformChange()">
+                            <div class="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 peer-checked:border-sky-400 peer-checked:bg-sky-500/15 text-center transition-all h-full flex flex-col justify-center">
+                                <i class="fab fa-microsoft text-sky-400 text-base mb-1 block"></i>
+                                <span class="text-[11px] font-bold text-white block">MS Outlook Only</span>
+                                <span class="text-[9px] text-slate-400 block">Without Video Call</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- AUTO-DETECTED TARGET CALENDAR DOMAIN BANNER (NO MANUAL PROVIDER DROPDOWN NEEDED) -->
+                <div id="sched-cal-auto-target-banner" class="p-3 rounded-xl bg-slate-900/95 border border-gb-cyan/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div class="flex items-center gap-2.5">
+                        <span id="sched-cal-auto-icon" class="w-8 h-8 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0">
+                            <i class="fas fa-magic"></i>
+                        </span>
+                        <div>
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-gb-cyan">Auto-Detected Target Calendar Domain</div>
+                            <div id="sched-cal-auto-text" class="text-xs font-semibold text-white">Detecting connected calendar account...</div>
+                        </div>
+                    </div>
+                    <input type="hidden" id="sched-cal-account" value="">
+                    <input type="hidden" id="sched-cal-provider" value="google_calendar">
+                </div>
+
+                <!-- Subject / Title -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-heading text-gb-cyan mr-1"></i> Subject / Appointment Title *
+                    </label>
+                    <input type="text" id="sched-cal-subject" placeholder="e.g. Client Discovery Call & Automation Demo" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:border-gb-cyan focus:outline-none">
+                </div>
+
+                <!-- Date, Start Time, End Time, Duration, Timezone -->
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Date *</label>
+                        <input type="date" id="sched-cal-date" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Start Time *</label>
+                        <input type="time" id="sched-cal-time" value="10:00" onchange="syncScheduleMeetingEndTimeFromDuration()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">End Time *</label>
+                        <input type="time" id="sched-cal-end-time" value="11:00" onchange="syncScheduleMeetingDurationFromEndTime()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Duration</label>
+                        <select id="sched-cal-duration" onchange="syncScheduleMeetingEndTimeFromDuration()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                            <option value="15">15 Minutes</option>
+                            <option value="30">30 Minutes</option>
+                            <option value="45">45 Minutes</option>
+                            <option value="60" selected>1 Hour (60m)</option>
+                            <option value="90">1.5 Hours (90m)</option>
+                            <option value="120">2 Hours (120m)</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2 sm:col-span-1">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Timezone</label>
+                        <select id="sched-cal-timezone" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                            <option value="Asia/Manila" selected>Asia/Manila (PHT)</option>
+                            <option value="UTC">UTC</option>
+                            <option value="America/New_York">America/New_York (EST)</option>
+                            <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                            <option value="Europe/London">Europe/London (GMT)</option>
+                            <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                            <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Optional Custom Meeting URL or Location -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div id="sched-cal-meeting-url-wrap">
+                        <div class="flex items-center justify-between gap-2 mb-1.5">
+                            <label id="sched-cal-meeting-url-label" class="block text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                                <i class="fas fa-link text-gb-cyan mr-1"></i> Custom Meeting URL (Leave Blank to Auto-Generate)
+                            </label>
+                            <a id="sched-cal-teams-link-helper" href="https://teams.live.com/v2/" target="_blank" rel="noopener noreferrer" class="hidden text-[10px] font-bold text-indigo-300 hover:text-white bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-400/50 px-2 py-0.5 rounded-md transition-all">
+                                <i class="fas fa-external-link-alt mr-1"></i>Get Teams Link
+                            </a>
+                        </div>
+                        <input type="url" id="sched-cal-meeting-url" placeholder="Auto-generated by Google Meet / MS Teams / Zoom if blank..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                    </div>
+                    <div id="sched-cal-location-wrap">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            <i class="fas fa-map-marker-alt text-gb-cyan mr-1"></i> Location / Physical Room (Optional)
+                        </label>
+                        <input type="text" id="sched-cal-location" placeholder="e.g. Conference Room A, Makati Office, or Online" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- Attendees, Availability & Reminder -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div class="sm:col-span-2">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            <i class="fas fa-user-friends text-gb-cyan mr-1"></i> Attendees / Recipient Emails (Receives Calendar &amp; Email Invite)
+                        </label>
+                        <input type="text" id="sched-cal-attendees" placeholder="client@gmail.com, partner@outlook.com" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Show As</label>
+                            <select id="sched-cal-availability" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                                <option value="busy" selected>Busy</option>
+                                <option value="free">Free</option>
+                                <option value="tentative">Tentative</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Reminder</label>
+                            <select id="sched-cal-reminder" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                                <option value="10">10m before</option>
+                                <option value="15" selected>15m before</option>
+                                <option value="30">30m before</option>
+                                <option value="60">1h before</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sender Email Account Selector -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-gb-cyan mb-1.5">
+                        <i class="fas fa-paper-plane text-gb-cyan mr-1"></i> Send Invitation Email From (Connected Email Account)
+                    </label>
+                    <select id="sched-cal-sender-email" class="w-full bg-slate-900 border border-gb-cyan/50 rounded-xl px-3.5 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none">
+                        <option value="auto">Auto-Detect Organizer / Connected Gmail Account</option>
+                    </select>
+                </div>
+
+                <!-- Agenda / Description -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-align-left text-gb-cyan mr-1"></i> Agenda / Meeting Notes / Description
+                    </label>
+                    <textarea id="sched-cal-description" rows="3" placeholder="Add meeting agenda, discussion points, or client notes..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:border-gb-cyan focus:outline-none"></textarea>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between px-4 sm:px-6 py-3.5 border-t border-slate-700 bg-slate-900/95">
+                <button type="button" onclick="closeScheduleMeetingModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-semibold text-slate-300 transition-all">
+                    Cancel
+                </button>
+                <button type="button" id="sched-cal-submit-btn" onclick="submitScheduleMeetingForm()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.35)] hover:opacity-95 transition-all">
+                    <i class="fas fa-calendar-check"></i>
+                    <span>Save &amp; Sync to Calendar + Send Invite</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- RESCHEDULE APPOINTMENT / ONLINE MEETING MODAL (DATE, TIME & BODY BUILDER) -->
+    <!-- ========================================================================= -->
+    <div id="reschedule-meeting-modal" class="fixed inset-0 z-[9995] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4" onclick="if(event.target === this) closeRescheduleMeetingModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden border border-amber-500/60 shadow-[0_0_45px_rgba(245,158,11,0.3)]">
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-700 bg-slate-900/95 shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-300 shrink-0 shadow-[0_0_12px_rgba(245,158,11,0.3)]">
+                        <i class="fas fa-calendar-alt text-lg"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="text-sm sm:text-base font-bold text-white flex flex-wrap items-center gap-2">
+                            <span>Reschedule Appointment &amp; Restructure Message Body</span>
+                            <span id="resched-cal-provider-badge" class="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/50">LIVE SYNC</span>
+                        </h3>
+                        <p class="text-[11px] text-slate-400 truncate">Update Date &amp; Time, restructure the guest notification message body, and sync to Calendar + n8n</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeRescheduleMeetingModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 hover:border-rose-500 text-slate-300 hover:text-white flex items-center justify-center transition-all shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-4 sm:p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+                <input type="hidden" id="resched-cal-event-id" value="">
+                <input type="hidden" id="resched-cal-account-id" value="">
+                <input type="hidden" id="resched-cal-provider" value="">
+                <input type="hidden" id="resched-cal-meeting-platform" value="">
+
+                <!-- Previous Schedule Summary Banner -->
+                <div class="p-3 rounded-xl bg-amber-950/25 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div class="flex items-center gap-2.5">
+                        <i class="fas fa-history text-amber-400 text-sm shrink-0"></i>
+                        <div>
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-amber-300">Current / Previous Schedule</div>
+                            <div id="resched-cal-prev-summary" class="font-semibold text-white">Loading current appointment schedule...</div>
+                        </div>
+                    </div>
+                    <span id="resched-cal-organizer-pill" class="text-[10px] font-mono px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-700 text-slate-300 self-start sm:self-center"></span>
+                </div>
+
+                <!-- Subject / Appointment Title -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-heading text-amber-400 mr-1"></i> Appointment / Meeting Subject *
+                    </label>
+                    <input type="text" id="resched-cal-subject" placeholder="Appointment Subject..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:border-amber-400 focus:outline-none">
+                </div>
+
+                <!-- New Date, Start Time, End Time, Duration, Timezone -->
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-amber-300 mb-1.5">New Date *</label>
+                        <input type="date" id="resched-cal-date" class="w-full bg-slate-900 border border-amber-500/50 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-amber-300 mb-1.5">New Start *</label>
+                        <input type="time" id="resched-cal-time" onchange="syncRescheduleMeetingEndTimeFromDuration()" class="w-full bg-slate-900 border border-amber-500/50 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-amber-300 mb-1.5">New End *</label>
+                        <input type="time" id="resched-cal-end-time" onchange="syncRescheduleMeetingDurationFromEndTime()" class="w-full bg-slate-900 border border-amber-500/50 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Duration</label>
+                        <select id="resched-cal-duration" onchange="syncRescheduleMeetingEndTimeFromDuration()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                            <option value="15">15 Minutes</option>
+                            <option value="30">30 Minutes</option>
+                            <option value="45">45 Minutes</option>
+                            <option value="60" selected>1 Hour (60m)</option>
+                            <option value="90">1.5 Hours (90m)</option>
+                            <option value="120">2 Hours (120m)</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2 sm:col-span-1">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">Timezone</label>
+                        <select id="resched-cal-timezone" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                            <option value="Asia/Manila" selected>Asia/Manila (PHT)</option>
+                            <option value="UTC">UTC</option>
+                            <option value="America/New_York">America/New_York (EST)</option>
+                            <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                            <option value="Europe/London">Europe/London (GMT)</option>
+                            <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                            <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Attendees, Sender Email & Reschedule Reason -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            <i class="fas fa-user-friends text-amber-400 mr-1"></i> Guest / Attendee Emails
+                        </label>
+                        <input type="text" id="resched-cal-attendees" placeholder="client@gmail.com, partner@outlook.com" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-amber-300 mb-1.5">
+                            <i class="fas fa-paper-plane text-amber-400 mr-1"></i> Send Reschedule Email From *
+                        </label>
+                        <select id="resched-cal-sender-email" class="w-full bg-slate-900 border border-amber-500/60 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                            <option value="auto">Auto-Detect Organizer / Connected Gmail Account</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-comment-dots text-amber-400 mr-1"></i> Reason for Rescheduling (Optional)
+                    </label>
+                    <input type="text" id="resched-cal-reason" placeholder="e.g. Adjusted per client request / schedule conflict" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                </div>
+
+                <!-- Meeting Link & Physical Location -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            <i class="fas fa-video text-amber-400 mr-1"></i> Meeting Join Link (Optional)
+                        </label>
+                        <input type="url" id="resched-cal-meeting-url" placeholder="https://meet.google.com/... or Zoom/Teams link" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                            <i class="fas fa-map-marker-alt text-amber-400 mr-1"></i> Location / Room (Optional)
+                        </label>
+                        <input type="text" id="resched-cal-location" placeholder="Online / Office / Room" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- Restructure Message Body / Agenda Section -->
+                <div class="space-y-2 p-3.5 rounded-xl bg-slate-900/90 border border-amber-500/35">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <label for="resched-cal-description" class="text-[11px] font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                            <i class="fas fa-edit"></i>
+                            <span>Restructure Notification Message Body &amp; Agenda:</span>
+                        </label>
+                        <button type="button" onclick="autoRestructureRescheduleMessageBody()" class="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500/25 to-gb-cyan/20 hover:from-amber-500/35 hover:to-gb-cyan/30 border border-amber-400/50 text-amber-200 text-[10px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer">
+                            <i class="fas fa-magic text-amber-300"></i>
+                            <span>Auto-Restructure Message Body</span>
+                        </button>
+                    </div>
+
+                    <!-- Quick Restructure Tone / Template Chips -->
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="text-[10px] text-slate-400">Templates:</span>
+                        <button type="button" onclick="applyRescheduleMessageTemplate('polite')" class="px-2 py-0.5 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-amber-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                            🤝 Polite Reschedule Notice
+                        </button>
+                        <button type="button" onclick="applyRescheduleMessageTemplate('client_request')" class="px-2 py-0.5 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-amber-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                            ✅ Confirmed Per Client Request
+                        </button>
+                        <button type="button" onclick="applyRescheduleMessageTemplate('agenda_focus')" class="px-2 py-0.5 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-amber-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                            📋 Structured Agenda + Link
+                        </button>
+                        <button type="button" onclick="applyRescheduleMessageTemplate('urgent')" class="px-2 py-0.5 rounded-md bg-slate-950 hover:bg-slate-800 border border-slate-700 hover:border-amber-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                            ⚡ Urgent Schedule Adjustment
+                        </button>
+                    </div>
+
+                    <textarea id="resched-cal-description" rows="5" placeholder="Write or restructure the updated appointment message body and agenda that will be synced to the calendar and emailed to all guests..." class="w-full bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl px-3.5 py-2.5 text-xs text-white leading-relaxed focus:outline-none"></textarea>
+
+                    <label class="flex items-center gap-2 pt-1 text-xs text-slate-300 cursor-pointer">
+                        <input type="checkbox" id="resched-cal-notify" checked class="accent-amber-400">
+                        <span>Automatically send HTML <strong>Rescheduled Appointment Notification Email</strong> (with Previous vs. New Date/Time &amp; Restructured Message Body) to all invited guests</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="flex items-center justify-between px-4 sm:px-6 py-3.5 border-t border-slate-700 bg-slate-900/95 shrink-0">
+                <button type="button" onclick="closeRescheduleMeetingModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-semibold text-slate-300 transition-all cursor-pointer">
+                    Close
+                </button>
+                <button type="button" id="resched-cal-submit-btn" onclick="submitRescheduleMeetingForm()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-gb-cyan text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_18px_rgba(245,158,11,0.35)] hover:opacity-95 transition-all cursor-pointer">
+                    <i class="fas fa-calendar-check"></i>
+                    <span>Confirm Reschedule &amp; Notify Guests</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- CANCEL APPOINTMENT & SEND CANCELLATION NOTICE MODAL (REASON + SENDER)     -->
+    <!-- ========================================================================= -->
+    <div id="cancel-meeting-modal" class="fixed inset-0 z-[9996] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4" onclick="if(event.target === this) closeCancelMeetingModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-xl max-h-[92vh] flex flex-col overflow-hidden border border-rose-500/60 shadow-[0_0_45px_rgba(244,63,94,0.35)]">
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-700 bg-slate-900/95 shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400/50 flex items-center justify-center text-rose-300 shrink-0 shadow-[0_0_12px_rgba(244,63,94,0.3)]">
+                        <i class="fas fa-ban text-lg"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="text-sm sm:text-base font-bold text-white flex flex-wrap items-center gap-2">
+                            <span>Cancel Appointment &amp; Send Notice</span>
+                            <span id="cancel-cal-provider-badge" class="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-400/50">LIVE CANCEL</span>
+                        </h3>
+                        <p class="text-[11px] text-slate-400 truncate">Specify cancellation reason, choose sender email, and notify guests with deactivated link notice</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeCancelMeetingModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 hover:border-rose-500 text-slate-300 hover:text-white flex items-center justify-center transition-all shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-4 sm:p-6 space-y-4 overflow-y-auto custom-scrollbar flex-1">
+                <input type="hidden" id="cancel-cal-event-id" value="">
+                <input type="hidden" id="cancel-cal-provider" value="">
+
+                <!-- Appointment Summary Banner -->
+                <div class="p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/40 space-y-1.5 text-xs">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-rose-300"><i class="fas fa-calendar-times mr-1"></i>Appointment to Cancel</span>
+                        <span id="cancel-cal-organizer-pill" class="text-[10px] font-mono px-2.5 py-0.5 rounded-lg bg-slate-900/90 border border-slate-700 text-slate-300"></span>
+                    </div>
+                    <div id="cancel-cal-subject-display" class="text-sm font-bold text-white">Appointment Subject</div>
+                    <div id="cancel-cal-schedule-display" class="text-xs text-rose-200 font-medium">Date &amp; Time</div>
+                </div>
+
+                <!-- Deactivated / Invalidated Meeting Link Preview (Zoom URL / Google Meet / Teams) -->
+                <div id="cancel-cal-meeting-url-wrap" class="p-3.5 rounded-xl bg-slate-900/95 border border-rose-500/40 space-y-1.5">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <label class="text-[11px] font-bold uppercase tracking-wider text-rose-300 flex items-center gap-1.5">
+                            <i class="fas fa-unlink text-rose-400"></i>
+                            <span id="cancel-cal-link-label">Meeting Link (Marked No Longer Valid in Email)</span>
+                        </label>
+                        <span class="px-2 py-0.5 rounded bg-rose-500/20 border border-rose-400/50 text-rose-300 text-[9px] font-extrabold uppercase">🚫 LINK NO LONGER VALID</span>
+                    </div>
+                    <input type="url" id="cancel-cal-meeting-url" readonly class="w-full bg-slate-950/90 border border-rose-500/30 rounded-lg px-3 py-1.5 text-xs text-rose-300 line-through font-mono focus:outline-none">
+                    <p class="text-[10px] text-slate-400">This Zoom / Google Meet / Teams URL will be displayed in the cancellation email with a strikethrough &amp; official notice stating that the link is deactivated and no longer valid.</p>
+                </div>
+
+                <!-- Select Sender Email Account -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-rose-300 mb-1.5">
+                        <i class="fas fa-paper-plane text-rose-400 mr-1"></i> Send Cancellation Email From (Select Connected Email) *
+                    </label>
+                    <select id="cancel-cal-sender-email" class="w-full bg-slate-900 border border-rose-500/60 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-rose-400 focus:outline-none">
+                        <option value="auto">Auto-Detect Organizer / Connected Gmail Account</option>
+                    </select>
+                </div>
+
+                <!-- Guest / Attendee Emails -->
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        <i class="fas fa-user-friends text-rose-400 mr-1"></i> Guest / Attendee Emails (To Receive Cancellation Notice)
+                    </label>
+                    <input type="text" id="cancel-cal-attendees" placeholder="guest@gmail.com, client@company.com" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:border-rose-400 focus:outline-none">
+                </div>
+
+                <!-- Reason for Cancellation -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <label for="cancel-cal-reason" class="block text-[11px] font-bold uppercase tracking-wider text-rose-300">
+                            <i class="fas fa-comment-alt text-rose-400 mr-1"></i> Reason for Cancellation <span class="text-slate-400 font-normal normal-case">(Optional)</span>
+                        </label>
+                        <div class="flex flex-wrap items-center gap-1">
+                            <button type="button" onclick="applyCancelReasonPreset('Schedule conflict — we will reach out shortly to coordinate a new time.')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-rose-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                                🗓️ Schedule Conflict
+                            </button>
+                            <button type="button" onclick="applyCancelReasonPreset('Cancelled per client request.')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-rose-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                                🙋 Per Client Request
+                            </button>
+                            <button type="button" onclick="applyCancelReasonPreset('Unexpected urgent priority — we sincerely apologize for the inconvenience.')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-rose-400/50 text-[10px] text-slate-300 hover:text-white transition-all cursor-pointer">
+                                ⚡ Urgent Priority
+                            </button>
+                        </div>
+                    </div>
+                    <textarea id="cancel-cal-reason" rows="3" placeholder="Optional: Enter a reason why this appointment is being cancelled (leave blank if you prefer not to include a reason in the cancellation email)..." class="w-full bg-slate-900 border border-slate-700 focus:border-rose-400 rounded-xl px-3.5 py-2 text-xs text-white leading-relaxed focus:outline-none"></textarea>
+                </div>
+
+                <label class="flex items-center gap-2 pt-1 text-xs text-slate-300 cursor-pointer">
+                    <input type="checkbox" id="cancel-cal-notify" checked class="accent-rose-500">
+                    <span>Send official HTML <strong>Cancellation Notice Email</strong> (with Reason &amp; Invalidated Meeting Link) to all guests</span>
+                </label>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="flex items-center justify-between px-4 sm:px-6 py-3.5 border-t border-slate-700 bg-slate-900/95 shrink-0">
+                <button type="button" onclick="closeCancelMeetingModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-semibold text-slate-300 transition-all cursor-pointer">
+                    Keep Appointment
+                </button>
+                <button type="button" id="cancel-cal-submit-btn" onclick="submitCancelMeetingForm()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_18px_rgba(244,63,94,0.4)] transition-all cursor-pointer">
+                    <i class="fas fa-ban"></i>
+                    <span>Confirm Cancel &amp; Send Email</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- COMPOSE NEW EMAIL MODAL (STRICTLY SENDS FROM ACTIVE SINGLE EMAIL ACCOUNT) -->
+    <div id="compose-email-modal" class="fixed inset-0 z-[9994] hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+        <div class="glass-panel rounded-2xl w-full max-w-xl overflow-hidden border border-gb-cyan/60 shadow-[0_0_45px_rgba(0,240,255,0.25)] flex flex-col max-h-[92vh]">
+            <div class="px-5 py-4 border-b border-slate-700 bg-slate-900/95 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan">
+                        <i class="fas fa-pen-nib"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-bold text-white">Compose New Email</h3>
+                        <p id="compose-email-from-label" class="text-[11px] text-gb-cyan font-medium">From: --</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeComposeEmailModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-5 space-y-3.5 overflow-y-auto">
+                <!-- Connected Email Account Sender Picker -->
+                <div class="p-3 rounded-xl bg-slate-900/90 border border-gb-cyan/40 space-y-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <label for="compose-email-sender-select" class="block text-[11px] font-bold uppercase tracking-wider text-gb-cyan flex items-center gap-1.5">
+                            <i class="fas fa-user-check"></i>
+                            <span>Send From (Connected Email Account) *</span>
+                        </label>
+                        <button type="button" onclick="closeComposeEmailModal(); openConnectAccountsModal('gmail');" class="text-[10px] font-bold text-gb-cyan hover:underline flex items-center gap-1">
+                            <i class="fas fa-plus-circle"></i>
+                            <span>+ Connect Email</span>
+                        </button>
+                    </div>
+                    <select id="compose-email-sender-select" onchange="onComposeEmailSenderAccountChange(this.value)" class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white font-semibold focus:outline-none cursor-pointer">
+                        <option value="">-- Select Connected Email Account --</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <div class="sm:col-span-7">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Recipient Email (To) <span class="text-[10px] font-normal text-slate-500 lowercase">(comma-separated for multiple)</span></label>
+                        <input type="text" id="compose-email-to" placeholder="client@example.com, partner@example.com" class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div class="sm:col-span-5">
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">CC <span class="text-[10px] font-normal text-slate-500 lowercase">(optional)</span></label>
+                        <input type="text" id="compose-email-cc" placeholder="cc@example.com" class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Subject</label>
+                    <input type="text" id="compose-email-subject" placeholder="Enter email subject..." class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Message Body</label>
+                    <textarea id="compose-email-body" rows="6" placeholder="Write your message here..." class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl p-3.5 text-xs sm:text-sm text-white focus:outline-none resize-y"></textarea>
+                </div>
+                <!-- File Attachments Section -->
+                <div class="p-3 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <input type="file" id="compose-email-file-input" multiple class="hidden" onchange="handleComposeEmailFileSelect(event)">
+                            <button type="button" onclick="document.getElementById('compose-email-file-input')?.click()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-gb-cyan/40 text-gb-cyan text-xs font-bold flex items-center gap-1.5 transition-all">
+                                <i class="fas fa-paperclip"></i>
+                                <span>Attach Files</span>
+                            </button>
+                            <span id="compose-email-attachments-count" class="text-[11px] text-slate-400">No files attached</span>
+                        </div>
+                        <button type="button" id="btn-clear-compose-attachments" onclick="clearComposeEmailAttachments()" class="hidden text-[11px] text-rose-400 hover:text-rose-300 font-semibold">
+                            <i class="fas fa-trash-alt mr-1"></i>Clear All
+                        </button>
+                    </div>
+                    <div id="compose-email-attachments-list" class="flex flex-wrap gap-1.5 empty:hidden"></div>
+                </div>
+            </div>
+            <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 flex items-center justify-end gap-2.5 shrink-0">
+                <button type="button" onclick="closeComposeEmailModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold">
+                    Cancel
+                </button>
+                <button type="button" id="btn-send-composed-email" onclick="sendComposedEmail()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-950 font-bold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.35)]">
+                    <i class="fas fa-paper-plane"></i>
+                    <span>Send Email Now</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EXPANDED FULL EMAIL READER MODAL (OPENS ON DOUBLE-CLICKING ANY EMAIL OR CLICKING EXPAND) -->
+    <div id="expanded-email-modal" class="fixed inset-0 z-[9995] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-5" onclick="if(event.target===this) closeExpandedEmailModal()">
+        <div id="expanded-email-modal-content" class="glass-panel rounded-2xl w-full max-w-6xl h-[92vh] overflow-hidden border border-gb-cyan/60 shadow-[0_0_55px_rgba(0,240,255,0.28)] flex flex-col bg-slate-950">
+            <!-- Dynamically populated by renderExpandedEmailModalContent() -->
+        </div>
+    </div>
+
+    <!-- REAL-TIME EMAIL WEBHOOK & SIGNING SECRET MODAL -->
+    <div id="email-webhook-modal" class="fixed inset-0 z-[9996] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5" onclick="if(event.target===this) closeEmailWebhookModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-2xl overflow-hidden border border-emerald-400/60 shadow-[0_0_50px_rgba(16,185,129,0.25)] flex flex-col max-h-[92vh] bg-slate-950">
+            <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400">
+                        <i class="fas fa-bolt text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h3 class="text-sm sm:text-base font-extrabold text-white">Real-Time Email Webhook</h3>
+                            <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-400">Instant push notifications + 2-second live inbox sync across all tabs</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeEmailWebhookModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="p-5 overflow-y-auto space-y-4 text-xs">
+                <div class="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 leading-relaxed">
+                    <i class="fas fa-check-circle text-emerald-400 mr-1.5"></i>
+                    <strong>Your Real-Time Email Webhook is active!</strong> The endpoint <code id="email-webhook-banner-code" class="px-1.5 py-0.5 rounded bg-slate-950 text-gb-cyan font-bold">/webhooks</code> is registered on the backend along with your <strong>Signing Secret</strong> and automatic 2-second background inbox sync.
+                </div>
+
+                <!-- Webhook Endpoint URL -->
+                <div class="space-y-1.5">
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300">Webhook Endpoint URL (Auto-Detected):</label>
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="email-webhook-url-input" value="" placeholder="Auto-detecting live webhook URL..." class="flex-1 bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs text-gb-cyan font-mono focus:outline-none">
+                        <button type="button" onclick="copyEmailWebhookField('email-webhook-url-input', 'Webhook URL')" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold flex items-center gap-1.5 shrink-0">
+                            <i class="fas fa-copy text-gb-cyan"></i>
+                            <span>Copy</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Webhook Signing Secret -->
+                <div class="space-y-1.5">
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300">Webhook Signing Secret (HMAC-SHA256 Verified):</label>
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="email-webhook-secret-input" value="e6747eca1553134a55d78dbe509f20608700580e670cdc4c99ddf52057af5e59" class="flex-1 bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs text-amber-300 font-mono focus:outline-none">
+                        <button type="button" onclick="copyEmailWebhookField('email-webhook-secret-input', 'Signing Secret')" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold flex items-center gap-1.5 shrink-0">
+                            <i class="fas fa-copy text-amber-300"></i>
+                            <span>Copy</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Telemetry Summary -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+                        <span class="text-slate-400">Webhook Events Received:</span>
+                        <strong id="email-webhook-hits-count" class="text-sm text-emerald-400 font-extrabold">0</strong>
+                    </div>
+                    <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+                        <span class="text-slate-400">Last Event Time:</span>
+                        <strong id="email-webhook-last-time" class="text-[11px] text-gb-cyan font-bold">Listening live...</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <button type="button" onclick="sendTestEmailWebhookNotification()" id="btn-test-email-webhook" class="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all">
+                    <i class="fas fa-bell"></i>
+                    <span>Test Real-Time Email Notification</span>
+                </button>
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="closeEmailWebhookModal()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">
+                        Close
+                    </button>
+                    <button type="button" onclick="saveAndActivateEmailWebhook()" id="btn-save-email-webhook" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.35)]">
+                        <i class="fas fa-bolt"></i>
+                        <span>Save &amp; Activate Triggers</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- FLOATING REAL-TIME EMAIL NOTIFICATION BANNER (SLIDES IN ON NEW EMAIL ARRIVAL) -->
+    <div id="realtime-email-notification-container" class="fixed top-16 right-4 z-[9999] flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"></div>
+
+    <!-- CREATE / EDIT CRM CONTACT MODAL (WITH SMART SOCIAL AUTO-FILL & NAME PARSER) -->
+    <div id="crm-contact-modal" class="fixed inset-0 z-[9996] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4" onclick="if(event.target===this) closeCrmContactModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-2xl overflow-hidden border border-gb-cyan/60 shadow-[0_0_50px_rgba(0,240,255,0.28)] flex flex-col max-h-[92vh] bg-slate-950">
+            <!-- Modal Header -->
+            <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shrink-0">
+                        <i class="fas fa-user-plus text-lg"></i>
+                    </div>
+                    <div>
+                        <h3 id="crm-modal-title" class="text-sm sm:text-base font-extrabold text-white">Add Contact to CRM Database</h3>
+                        <p id="crm-modal-subtitle" class="text-[11px] text-slate-400">Auto-detects First, Middle, and Last Name — freely editable before saving</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeCrmContactModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-5 space-y-4 overflow-y-auto">
+                <input type="hidden" id="crm-contact-id" value="">
+                <input type="hidden" id="crm-contact-source-type" value="manual">
+                <input type="hidden" id="crm-contact-source-ref" value="">
+                <input type="hidden" id="crm-contact-avatar" value="">
+
+                <!-- Smart Auto-Detection Banner (Shows when opened from Messages, Comments, or Email) -->
+                <div id="crm-smart-detect-banner" class="hidden p-3.5 rounded-xl bg-gb-cyan/10 border border-gb-cyan/40 text-xs space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="font-bold text-gb-cyan flex items-center gap-1.5">
+                            <i class="fas fa-magic"></i>
+                            <span id="crm-smart-detect-title">Smart Auto-Fill Active</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="swapCrmFirstAndLastName()" class="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-gb-cyan/40 text-gb-cyan text-[10px] font-bold flex items-center gap-1" title="Swap First Name and Last Name">
+                                <i class="fas fa-exchange-alt"></i> Swap First/Last
+                            </button>
+                            <button type="button" onclick="clearCrmNameFields()" class="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-semibold" title="Clear name fields to type manually">
+                                Clear Names
+                            </button>
+                        </div>
+                    </div>
+                    <p id="crm-smart-detect-desc" class="text-[11px] text-slate-200 leading-relaxed"></p>
+                </div>
+
+                <!-- Live Duplicate Phone / Email Detection & Auto-Combine Banner -->
+                <div id="crm-duplicate-merge-banner" class="hidden p-3.5 rounded-xl bg-amber-500/15 border border-amber-400/50 text-xs space-y-1.5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="font-bold text-amber-300 flex items-center gap-1.5">
+                            <i class="fas fa-code-branch"></i>
+                            <span id="crm-duplicate-merge-title">Duplicate Number / Email Detected — Will Auto-Combine!</span>
+                        </div>
+                        <button type="button" id="crm-duplicate-load-btn" onclick="loadDetectedDuplicateContactIntoModal()" class="px-2.5 py-1 rounded-lg bg-amber-500/25 hover:bg-amber-500/40 border border-amber-300/50 text-amber-200 text-[10px] font-bold">
+                            View / Merge Existing Record
+                        </button>
+                    </div>
+                    <p id="crm-duplicate-merge-desc" class="text-[11px] text-amber-100/90 leading-relaxed"></p>
+                </div>
+
+                <!-- Row 1: First Name, Middle Name, Last Name -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-gb-cyan mb-1">First Name <span class="text-rose-400">*</span></label>
+                        <input type="text" id="crm-first-name" placeholder="e.g. Juan" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Middle Name <span class="text-[10px] font-normal text-slate-500 lowercase">(optional)</span></label>
+                        <input type="text" id="crm-middle-name" placeholder="e.g. Santos" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-gb-cyan mb-1">Last Name</label>
+                        <input type="text" id="crm-last-name" placeholder="e.g. Dela Cruz" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- Row 2: Contact Number & Email Address -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1">
+                            <i class="fas fa-phone-alt text-emerald-400 mr-1"></i> Contact Number
+                        </label>
+                        <input type="text" id="crm-contact-number" oninput="checkCrmDuplicatePhoneOrEmailLive()" placeholder="+63 917 123 4567 / 0917..." class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-300 mb-1">
+                            <i class="fas fa-envelope text-gb-cyan mr-1"></i> Email Address
+                        </label>
+                        <input type="email" id="crm-email-address" oninput="checkCrmDuplicatePhoneOrEmailLive()" placeholder="client@example.com" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- Row 3: Platform, Social Username / Handle, & Page / Account -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Source Platform</label>
+                        <select id="crm-platform" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none cursor-pointer">
+                            <option value="manual">Manual / Direct</option>
+                            <option value="whatsapp">WhatsApp</option>
+                            <option value="telegram">Telegram</option>
+                            <option value="facebook">Facebook</option>
+                            <option value="instagram">Instagram</option>
+                            <option value="tiktok">TikTok</option>
+                            <option value="youtube">YouTube</option>
+                            <option value="google_contacts">Google Contacts</option>
+                        <option value="gmail">Gmail / Email</option>
+                            <option value="microsoft">Microsoft Outlook</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Social Username / Handle</label>
+                        <input type="text" id="crm-social-username" placeholder="@username or Profile Name" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Lead Status / Category</label>
+                        <select id="crm-category" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs sm:text-sm text-white focus:outline-none cursor-pointer">
+                            <option value="New Lead">New Lead</option>
+                            <option value="Hot Prospect">Hot Prospect</option>
+                            <option value="Active Client">Active Client</option>
+                            <option value="VIP">VIP</option>
+                            <option value="Inquirer">Inquirer</option>
+                            <option value="Follow-Up">Follow-Up</option>
+                            <option value="Partner">Partner</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Row 4: Company / Page & Notes -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Company / Location</label>
+                        <input type="text" id="crm-company" placeholder="Company Name, City, or Business" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Connected Page / Account Source</label>
+                        <input type="text" id="crm-account-name" placeholder="e.g. GlennBot Official Page" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">CRM Notes / Inquiry Context</label>
+                    <textarea id="crm-notes" rows="3" placeholder="Add notes, last message/comment inquiry, or follow-up details..." class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl p-3 text-xs sm:text-sm text-white focus:outline-none resize-y"></textarea>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between gap-2.5 shrink-0">
+                <span class="text-[11px] text-slate-400 hidden sm:inline">
+                    <i class="fas fa-shield-alt text-emerald-400 mr-1"></i> Automatically backed up to Database &amp; Cloudinary
+                </span>
+                <div class="flex items-center gap-2 ml-auto">
+                    <button type="button" onclick="closeCrmContactModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold">
+                        Cancel
+                    </button>
+                    <button type="button" id="btn-save-crm-contact" onclick="saveCrmContactFromModal()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_15px_rgba(0,240,255,0.35)]">
+                        <i class="fas fa-check-circle"></i>
+                        <span>Save Contact to CRM</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OPEN CHAT IN MESSAGE TAB — PLATFORM SELECTOR MODAL (EMAIL / SMS / WHATSAPP / TELEGRAM) -->
+    <div id="crm-open-chat-platform-modal" class="fixed inset-0 z-[9997] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4" onclick="if(event.target===this) closeCrmOpenChatPlatformModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-lg overflow-hidden border border-gb-cyan/60 shadow-[0_0_50px_rgba(0,240,255,0.28)] flex flex-col max-h-[90vh] bg-slate-950">
+            <!-- Header -->
+            <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fas fa-comments text-lg"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="text-sm sm:text-base font-extrabold text-white truncate">Open Chat in Message Tab</h3>
+                        <p id="crm-open-chat-contact-subtitle" class="text-[11px] text-slate-400 truncate">Choose platform to contact this lead</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeCrmOpenChatPlatformModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div class="p-5 overflow-y-auto space-y-3.5">
+                <div id="crm-open-chat-contact-summary" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
+                    Select Available Platform:
+                </div>
+
+                <div id="crm-open-chat-options-list" class="space-y-2.5">
+                    <!-- Dynamically populated based on contact's mobile number, email, or social username -->
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="px-5 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between gap-2 text-[11px] text-slate-400 shrink-0">
+                <span><i class="fas fa-info-circle text-gb-cyan mr-1"></i>Options depend on saved Mobile, Email, or Social Username</span>
+                <button type="button" onclick="closeCrmOpenChatPlatformModal()" class="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-semibold text-xs">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CREATE NEW SMS MODAL (TEXTBEE.DEV SIM 2 OUTBOUND INITIATOR) -->
+    <div id="create-new-sms-modal" class="fixed inset-0 z-[9997] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4" onclick="if(event.target===this) closeCreateNewSmsModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-xl overflow-hidden border border-emerald-400/60 shadow-[0_0_50px_rgba(16,185,129,0.28)] flex flex-col max-h-[92vh] bg-slate-950">
+            <!-- Header -->
+            <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fas fa-sms text-lg"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                            <span>Create New SMS Message</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-bold">TextBee.dev • SIM 2</span>
+                        </h3>
+                        <p class="text-[11px] text-slate-400">Initiate an outbound SMS to any mobile number even without a prior chat</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeCreateNewSmsModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div class="p-5 overflow-y-auto space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div id="new-sms-gateway-status-badge" class="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/50 text-emerald-300 text-[11px] font-bold flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>TextBee.dev API Active • SIM #2</span>
+                    </div>
+                    <button type="button" onclick="closeCreateNewSmsModal(); openConnectAccountsModal('textbee');" class="text-[11px] text-gb-cyan hover:underline font-semibold flex items-center gap-1">
+                        <i class="fas fa-sliders-h"></i> <span>Gateway & Device ID Settings</span>
+                    </button>
+                </div>
+
+                <!-- Pick from CRM Contacts -->
+                <div class="space-y-1.5">
+                    <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                        <i class="fas fa-address-book text-gb-cyan mr-1"></i> Quick Pick from CRM Contacts (Optional)
+                    </label>
+                    <select id="new-sms-crm-contact-picker" onchange="onNewSmsContactSelectChange(this)" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2 text-xs text-white focus:outline-none cursor-pointer">
+                        <option value="">-- Select a saved contact or type phone number below --</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div class="sm:col-span-2 space-y-1.5">
+                        <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                            <i class="fas fa-phone-alt text-emerald-400 mr-1"></i> Recipient Mobile Number *
+                        </label>
+                        <input type="text" id="new-sms-recipient-phone" placeholder="e.g. 09171234567 or +639171234567"
+                            class="w-full bg-slate-900 border border-slate-700 focus:border-emerald-400 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white font-mono focus:outline-none">
+                    </div>
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                            <i class="fas fa-sim-card text-amber-400 mr-1"></i> SIM Slot
+                        </label>
+                        <select id="new-sms-sim-slot" class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3 py-2.5 text-xs sm:text-sm text-white focus:outline-none cursor-pointer">
+                            <option value="1">SIM 1</option>
+                            <option value="2" selected>SIM 2 (Default)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="space-y-1.5">
+                    <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                        <i class="fas fa-user text-slate-400 mr-1"></i> Recipient Name (Optional — shown in Unified Inbox)
+                    </label>
+                    <input type="text" id="new-sms-recipient-name" placeholder="e.g. Juan Dela Cruz"
+                        class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none">
+                </div>
+
+                <div class="space-y-1.5">
+                    <div class="flex items-center justify-between">
+                        <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                            <i class="fas fa-comment-alt text-emerald-400 mr-1"></i> SMS Message Body *
+                        </label>
+                        <span id="new-sms-char-counter" class="text-[10px] text-slate-400 font-mono">0 chars • 0 SMS segments</span>
+                    </div>
+                    <textarea id="new-sms-message-body" rows="4" oninput="updateNewSmsCharCount()"
+                        placeholder="Type your SMS message here..."
+                        class="w-full bg-slate-900 border border-slate-700 focus:border-emerald-400 rounded-xl p-3 text-xs sm:text-sm text-white focus:outline-none resize-none"></textarea>
+                    <div class="flex flex-wrap gap-1.5 pt-1">
+                        <button type="button" onclick="insertNewSmsQuickTemplate('Hi! This is GlennBot Automations. How can we help you today?')" class="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 px-2.5 py-1 rounded-lg transition-all">Greeting 👋</button>
+                        <button type="button" onclick="insertNewSmsQuickTemplate('Hi! Following up on your inquiry. Let us know if you have any questions!')" class="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 px-2.5 py-1 rounded-lg transition-all">Follow-Up 🔔</button>
+                        <button type="button" onclick="insertNewSmsQuickTemplate('Thank you! Your order/request has been confirmed.')" class="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 px-2.5 py-1 rounded-lg transition-all">Confirmation ✅</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between gap-2">
+                <button type="button" onclick="closeCreateNewSmsModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs font-semibold">
+                    Cancel
+                </button>
+                <button type="button" id="btn-submit-new-sms" onclick="sendNewTextbeeSmsFromModal()" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-[0_0_18px_rgba(16,185,129,0.35)] hover:shadow-[0_0_24px_rgba(0,240,255,0.55)] transition-all">
+                    <i class="fas fa-paper-plane"></i> <span>Send SMS Now</span>
+                </button>
+            </div>
+        </div>
+    </div>

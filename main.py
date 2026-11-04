@@ -127,6 +127,22 @@ from routers.scheduler_routes import (
     _internal_api_admin_rbac_middleware,
     _startup_recover_recent_activity,
 )
+from routers.comments_routes import router as comments_router
+from routers.messages_routes import router as messages_router
+from routers.sms_routes import router as sms_router
+from routers.webhooks_routes import router as webhooks_router
+from routers.comment_actions_routes import router as comment_actions_router
+from routers.analytics_routes import router as analytics_router
+from routers.email_accounts_routes import router as email_accounts_router
+from routers.email_send_webhooks_routes import router as email_send_webhooks_router
+from routers.contacts_routes import router as contacts_router
+from routers.internal_api_routes import router as internal_api_router
+from routers.settings_rbac_routes import router as settings_rbac_router
+from routers.automations_routes import router as automations_router
+from routers.files_routes import router as files_router
+from routers.spreadsheet_routes import router as spreadsheet_router
+from routers.calendar_sync_routes import router as calendar_sync_router
+from routers.calendar_booking_routes import router as calendar_booking_router
 from routers.ai_routes import router as ai_router
 
 # Re-export APScheduler target callables explicitly on module `main`
@@ -260,6 +276,22 @@ def get_notification_sound():
 app.include_router(health_router)
 app.include_router(auth_and_keys_router)
 app.include_router(scheduler_router)
+app.include_router(comments_router)
+app.include_router(messages_router)
+app.include_router(sms_router)
+app.include_router(webhooks_router)
+app.include_router(comment_actions_router)
+app.include_router(analytics_router)
+app.include_router(email_accounts_router)
+app.include_router(email_send_webhooks_router)
+app.include_router(contacts_router)
+app.include_router(internal_api_router)
+app.include_router(settings_rbac_router)
+app.include_router(automations_router)
+app.include_router(files_router)
+app.include_router(spreadsheet_router)
+app.include_router(calendar_sync_router)
+app.include_router(calendar_booking_router)
 app.include_router(ai_router)
 
 # Ensure APScheduler and continuous background poller start non-blockingly once server binds
