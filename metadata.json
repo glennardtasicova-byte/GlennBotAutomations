@@ -1,0 +1,8 @@
+{
+  "name": "GlennBot Automations",
+  "description": "Multi-platform social media scheduling, unified comments & messages inbox, CRM contacts, email & SMS hub, and n8n workflow automation dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

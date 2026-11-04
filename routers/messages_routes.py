@@ -1727,7 +1727,7 @@ def get_conversation_messages_thread(
                             VALUES (:cid, :aid, :iso)
                             ON CONFLICT (conversation_id) DO UPDATE SET
                                 last_seen_iso = EXCLUDED.last_seen_iso,
-                                seen_at = NOW()
+                                seen_at = CURRENT_TIMESTAMP
                         """),
                         {"cid": k_id, "aid": acc_id, "iso": now_iso}
                     )
@@ -2668,7 +2668,7 @@ def mark_conversations_as_read(payload: MarkMessagesReadPayload):
                             VALUES (:cid, '', :iso)
                             ON CONFLICT (conversation_id) DO UPDATE SET
                                 last_seen_iso = EXCLUDED.last_seen_iso,
-                                seen_at = NOW()
+                                seen_at = CURRENT_TIMESTAMP
                         """),
                         {"cid": cid, "iso": now_iso}
                     )

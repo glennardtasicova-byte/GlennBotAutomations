@@ -209,7 +209,7 @@ def parse_meta_timestamp(ts_str: str, fallback_offset_seconds: int = 0, item_id:
             "is_fallback": True
         }
 
-def is_comment_timestamp_valid_for_post(comment_iso: str, post_scheduled_dt: Optional[datetime], is_external_post: bool = False) -> bool:
+def is_comment_timestamp_valid_for_post(comment_iso: str, post_scheduled_dt: Optional[Any], is_external_post: bool = False) -> bool:
     if not comment_iso:
         return True
     try:
@@ -219,8 +219,10 @@ def is_comment_timestamp_valid_for_post(comment_iso: str, post_scheduled_dt: Opt
         if c_dt.year < 2024:
             return False
         if not is_external_post and post_scheduled_dt:
-            p_dt = post_scheduled_dt.astimezone(manila_tz)
-            if c_dt < (p_dt - timedelta(hours=12)):
+            p_dt = _coerce_db_datetime(post_scheduled_dt, manila_tz) if "_coerce_db_datetime" in globals() else (
+                post_scheduled_dt.astimezone(manila_tz) if hasattr(post_scheduled_dt, "astimezone") else None
+            )
+            if p_dt and c_dt < (p_dt - timedelta(hours=12)):
                 return False
         return True
     except Exception:

@@ -15,7 +15,7 @@ _EARLY_SERVER_SOCKET = None
 if __name__ == "__main__":
     try:
         import socket as _socket
-        _early_port = int(os.getenv("PORT", 5001))
+        _early_port = int(os.getenv("PORT", 3000))
         _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         _s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         _s.bind(("0.0.0.0", _early_port))
@@ -296,6 +296,10 @@ app.include_router(ai_router)
 
 # Ensure APScheduler and continuous background poller start non-blockingly once server binds
 def _start_scheduler_and_recovery_bg():
+    try:
+        init_records_db()
+    except Exception:
+        pass
     if not scheduler.running:
         try:
             scheduler.start()
@@ -308,7 +312,7 @@ threading.Thread(target=_start_scheduler_and_recovery_bg, daemon=True).start()
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5001))
+    port = int(os.getenv("PORT", 3000))
     detected_pub = get_dynamic_base_url(prefer_public=True)
     print("\n" + "=" * 68)
     print("🚀 GLENNBOT AUTOMATIONS SERVER STARTING...")

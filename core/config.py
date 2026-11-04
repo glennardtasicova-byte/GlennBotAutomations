@@ -151,6 +151,30 @@ TEXTBEE_ACCOUNT_ID = "textbee_sms_sim_2"
 CLOUDINARY_TEXTBEE_CONFIG_PUBLIC_ID = "glennbot_config/textbee_sms_config_v1.json"
 
 # --- DATABASE URL CONFIGURATION ---
+import sqlite3 as _sqlite3
+
+
+def _parse_sqlite_timestamptz(raw_bytes: bytes) -> datetime:
+    s = raw_bytes.decode("utf-8", errors="replace").strip()
+    if not s:
+        return datetime.now(MANILA_TZ)
+    try:
+        cleaned = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is None:
+            return pytz.utc.localize(dt)
+        return dt
+    except Exception:
+        return datetime.now(MANILA_TZ)
+
+
+_sqlite3.register_converter("TIMESTAMPTZ", _parse_sqlite_timestamptz)
+_sqlite3.register_converter("TIMESTAMP", _parse_sqlite_timestamptz)
+_sqlite3.register_adapter(
+    datetime,
+    lambda dt: (dt if dt.tzinfo is not None else MANILA_TZ.localize(dt)).isoformat()
+)
+
 _raw_database_url = (os.getenv("DATABASE_URL") or "").strip()
 if not _raw_database_url:
     _raw_database_url = "sqlite:////tmp/glennbot_fallback.db"
@@ -164,7 +188,10 @@ if _raw_database_url.startswith("postgresql://"):
         pass
 DATABASE_URL = _raw_database_url
 if DATABASE_URL.startswith("sqlite"):
-    _DB_CONNECT_ARGS = {"check_same_thread": False}
+    _DB_CONNECT_ARGS = {
+        "check_same_thread": False,
+        "detect_types": _sqlite3.PARSE_DECLTYPES | _sqlite3.PARSE_COLNAMES,
+    }
 elif "+psycopg" in DATABASE_URL:
     _DB_CONNECT_ARGS = {"prepare_threshold": None}
 else:
@@ -202,7 +229,7 @@ CLOUDINARY_MESSAGES_PUBLIC_ID = "glennbot_config/messages_inbox.json"
 MAX_ACCOUNTS_PER_EXTERNAL_API = 2
 
 # --- PORT & DYNAMIC BASE URL RESOLUTION ---
-DEFAULT_LOCAL_PORT = int(os.getenv("PORT", 5001))
+DEFAULT_LOCAL_PORT = int(os.getenv("PORT", 3000))
 LOCAL_DEVICE_URL = f"http://localhost:{DEFAULT_LOCAL_PORT}"
 
 _RUNTIME_URL_STATE: Dict[str, Any] = {

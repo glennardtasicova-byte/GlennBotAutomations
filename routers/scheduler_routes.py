@@ -68,6 +68,7 @@ from core.database import (
     _get_cached_seen_comment_ids,
     _get_cached_published_posts,
     _get_cached_seen_messages_map,
+    _coerce_db_datetime,
 )
 from services.gdrive_service import *
 from services.gdrive_service import (
@@ -219,7 +220,7 @@ def sync_single_scheduled_row_with_zernio(
     cur_status = (r_dict.get("status") or "waiting").strip().lower()
     cur_msg = (r_dict.get("status_message") or "").strip()
     cur_permalink = (r_dict.get("permalink_url") or "").strip()
-    sched_dt = r_dict["scheduled_time"].astimezone(manila_tz) if r_dict.get("scheduled_time") else None
+    sched_dt = _coerce_db_datetime(r_dict.get("scheduled_time"), manila_tz)
 
     rec_id_str = str(r_dict.get("id") or "").strip()
     if cur_status == "processing_payload":
@@ -229,16 +230,11 @@ def sync_single_scheduled_row_with_zernio(
             rec_id_str in CHUNKED_SCHEDULE_SESSIONS
             or ("ACTIVE_BACKGROUND_SCHEDULE_JOBS" in globals() and rec_id_str in ACTIVE_BACKGROUND_SCHEDULE_JOBS)
         )
-        created_dt = r_dict.get("created_at")
+        created_dt = _coerce_db_datetime(r_dict.get("created_at"), manila_tz)
         age_seconds = 0.0
         if created_dt:
             try:
-                if getattr(created_dt, "tzinfo", None) is not None:
-                    c_local = created_dt.astimezone(manila_tz)
-                else:
-                    # PostgreSQL CURRENT_TIMESTAMP without tz is stored in UTC
-                    c_local = pytz.utc.localize(created_dt).astimezone(manila_tz)
-                age_seconds = max(0.0, (now_manila - c_local).total_seconds())
+                age_seconds = max(0.0, (now_manila - created_dt).total_seconds())
             except Exception:
                 age_seconds = 0.0
         is_orphaned_after_restart = (not has_active_session and last_hb == 0.0 and age_seconds > 600.0)
@@ -414,6 +410,8 @@ def sync_pending_scheduled_posts_with_zernio() -> None:
     manila_tz = pytz.timezone("Asia/Manila")
     now_manila = datetime.now(manila_tz)
     try:
+        max_sched = now_manila + timedelta(minutes=2)
+        min_sched = now_manila - timedelta(hours=24)
         with db_engine.connect() as conn:
             rows = conn.execute(
                 text("""
@@ -422,11 +420,12 @@ def sync_pending_scheduled_posts_with_zernio() -> None:
                            external_post_id, permalink_url, created_at
                     FROM glennbot_scheduled_posts
                     WHERE status IN ('waiting', 'processing', 'processing_payload', 'published')
-                      AND (status = 'processing_payload' OR scheduled_time <= NOW() + INTERVAL '2 minutes')
-                      AND scheduled_time >= NOW() - INTERVAL '24 hours'
+                      AND (status = 'processing_payload' OR scheduled_time <= :max_sched)
+                      AND scheduled_time >= :min_sched
                     ORDER BY scheduled_time DESC
                     LIMIT 30
-                """)
+                """),
+                {"max_sched": max_sched, "min_sched": min_sched}
             ).mappings().all()
         if not rows:
             return
@@ -449,29 +448,15 @@ def get_scheduled_posts(month: Optional[int] = None, year: Optional[int] = None)
     manila_tz = pytz.timezone("Asia/Manila")
     try:
         with db_engine.connect() as conn:
-            if month and year:
-                rows = conn.execute(
-                    text("""
-                        SELECT id, platform, page_id, account_name, post_type, caption, 
-                               media_preview_url, scheduled_time, status, status_message,
-                               external_post_id, permalink_url, created_at
-                        FROM glennbot_scheduled_posts
-                        WHERE EXTRACT(MONTH FROM scheduled_time AT TIME ZONE 'Asia/Manila') = :m
-                          AND EXTRACT(YEAR FROM scheduled_time AT TIME ZONE 'Asia/Manila') = :y
-                        ORDER BY scheduled_time ASC
-                    """),
-                    {"m": month, "y": year}
-                ).mappings().all()
-            else:
-                rows = conn.execute(
-                    text("""
-                        SELECT id, platform, page_id, account_name, post_type, caption, 
-                               media_preview_url, scheduled_time, status, status_message,
-                               external_post_id, permalink_url, created_at
-                        FROM glennbot_scheduled_posts
-                        ORDER BY scheduled_time ASC
-                    """)
-                ).mappings().all()
+            rows = conn.execute(
+                text("""
+                    SELECT id, platform, page_id, account_name, post_type, caption, 
+                           media_preview_url, scheduled_time, status, status_message,
+                           external_post_id, permalink_url, created_at
+                    FROM glennbot_scheduled_posts
+                    ORDER BY scheduled_time ASC
+                """)
+            ).mappings().all()
 
             connected_items = refresh_connected_accounts_cache(force=False)
             z_map = get_zernio_posts_map(force=False)
@@ -486,7 +471,9 @@ def get_scheduled_posts(month: Optional[int] = None, year: Optional[int] = None)
                 if not is_post_account_connected(r_dict, connected_items):
                     continue
 
-                sched_dt = r_dict["scheduled_time"].astimezone(manila_tz) if r_dict["scheduled_time"] else None
+                sched_dt = _coerce_db_datetime(r_dict.get("scheduled_time"), manila_tz)
+                if month and year and (not sched_dt or sched_dt.month != int(month) or sched_dt.year != int(year)):
+                    continue
                 synced_info = sync_single_scheduled_row_with_zernio(r_dict, z_map, z_list, now_manila)
                 cur_status = synced_info["status"]
                 cur_msg = synced_info["status_message"]
@@ -1526,9 +1513,7 @@ def schedule_chunked_complete(
                 ).fetchone()
             if not db_row:
                 return JSONResponse({"status": "error", "message": f"Upload session '{record_id}' not found."}, status_code=404)
-            sched_dt = db_row[5]
-            if sched_dt and getattr(sched_dt, "tzinfo", None) is None:
-                sched_dt = manila_tz.localize(sched_dt)
+            sched_dt = _coerce_db_datetime(db_row[5], manila_tz)
             parsed_sha1s: List[str] = []
             if part_sha1_json:
                 try:

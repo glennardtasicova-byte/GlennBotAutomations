@@ -852,9 +852,14 @@ def get_social_media_analytics(period: str = "90d", force: bool = False):
         if status_val != "published":
             continue
 
-        sched_dt = r_dict.get("scheduled_time")
-        if sched_dt:
-            sched_dt = sched_dt.astimezone(manila_tz)
+        raw_sched_dt = r_dict.get("scheduled_time")
+        if raw_sched_dt:
+            if hasattr(raw_sched_dt, "astimezone"):
+                sched_dt = raw_sched_dt.astimezone(manila_tz)
+            elif "_coerce_db_datetime" in globals():
+                sched_dt = _coerce_db_datetime(raw_sched_dt, manila_tz) or now_m
+            else:
+                sched_dt = now_m
         else:
             sched_dt = now_m
 

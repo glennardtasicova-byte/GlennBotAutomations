@@ -3,7 +3,7 @@ import sys
 import time
 import hashlib
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import pytz
 from sqlalchemy import create_engine, text
@@ -19,7 +19,7 @@ from core.config import (
     _invalidate_fast_db_cache,
 )
 
-# --- 3. DATABASE ENGINE & SCHEDULER CONFIGURATION (SUPABASE) ---
+# --- 3. DATABASE ENGINE & SCHEDULER CONFIGURATION (SUPABASE / SQLITE) ---
 if DATABASE_URL.startswith("sqlite"):
     db_engine = create_engine(
         DATABASE_URL,
@@ -38,6 +38,26 @@ else:
     )
 
 
+def _coerce_db_datetime(val: Any, default_tz=MANILA_TZ) -> Optional[datetime]:
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        if val.tzinfo is not None:
+            return val.astimezone(default_tz)
+        return pytz.utc.localize(val).astimezone(default_tz)
+    try:
+        s = str(val).strip()
+        if not s:
+            return None
+        cleaned = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is not None:
+            return dt.astimezone(default_tz)
+        return pytz.utc.localize(dt).astimezone(default_tz)
+    except Exception:
+        return None
+
+
 def init_records_db():
     with db_engine.begin() as conn:
         conn.execute(text("""
@@ -54,23 +74,15 @@ def init_records_db():
                 status_message TEXT,
                 external_post_id VARCHAR(128),
                 permalink_url TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW()
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
-        """))
-        conn.execute(text("""
-            ALTER TABLE glennbot_scheduled_posts 
-            ADD COLUMN IF NOT EXISTS external_post_id VARCHAR(128);
-        """))
-        conn.execute(text("""
-            ALTER TABLE glennbot_scheduled_posts 
-            ADD COLUMN IF NOT EXISTS permalink_url TEXT;
         """))
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS glennbot_presets (
                 id VARCHAR(64) PRIMARY KEY,
                 preset_name VARCHAR(255) NOT NULL,
                 selection_json TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         """))
         conn.execute(text("""
@@ -78,14 +90,14 @@ def init_records_db():
                 comment_id VARCHAR(128) PRIMARY KEY,
                 record_id VARCHAR(64),
                 platform VARCHAR(32),
-                seen_at TIMESTAMPTZ DEFAULT NOW()
+                seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         """))
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS glennbot_dismissed_comments (
                 comment_id VARCHAR(128) PRIMARY KEY,
                 record_id VARCHAR(64),
-                dismissed_at TIMESTAMPTZ DEFAULT NOW()
+                dismissed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         """))
         conn.execute(text("""
@@ -93,7 +105,7 @@ def init_records_db():
                 conversation_id VARCHAR(128) PRIMARY KEY,
                 account_id VARCHAR(128),
                 last_seen_iso VARCHAR(128) DEFAULT '',
-                seen_at TIMESTAMPTZ DEFAULT NOW()
+                seen_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         """))
         conn.execute(text("""
@@ -106,12 +118,141 @@ def init_records_db():
                 avatar_url TEXT DEFAULT '',
                 access_token TEXT DEFAULT '',
                 connected_by VARCHAR(255) DEFAULT '',
-                created_at TIMESTAMPTZ DEFAULT NOW()
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_crm_contacts (
+                id TEXT PRIMARY KEY,
+                first_name TEXT,
+                middle_name TEXT,
+                last_name TEXT,
+                contact_number TEXT,
+                email_address TEXT,
+                platform TEXT,
+                social_username TEXT,
+                account_name TEXT,
+                category TEXT DEFAULT 'lead',
+                company TEXT,
+                notes TEXT,
+                source_type TEXT DEFAULT 'manual',
+                source_ref_id TEXT,
+                avatar_url TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_email_accounts (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                email_address TEXT NOT NULL,
+                display_name TEXT,
+                composio_connection_id TEXT,
+                composio_entity_id TEXT,
+                imap_host TEXT,
+                imap_port INTEGER DEFAULT 993,
+                smtp_host TEXT,
+                smtp_port INTEGER DEFAULT 465,
+                imap_password TEXT,
+                avatar_url TEXT,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TEXT
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_internal_api_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                scopes TEXT DEFAULT 'all',
+                status TEXT DEFAULT 'ACTIVE',
+                requests_count INTEGER DEFAULT 0,
+                last_used_at TEXT DEFAULT '',
+                created_at TEXT DEFAULT ''
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_n8n_workflows (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                enabled BOOLEAN DEFAULT TRUE,
+                webhook_url TEXT DEFAULT '',
+                webhook_path TEXT DEFAULT '',
+                webhook_secret TEXT DEFAULT '',
+                events_json TEXT DEFAULT '{}',
+                detected_conditions_json TEXT DEFAULT '[]',
+                workflow_json TEXT DEFAULT '{}',
+                updated_at TEXT DEFAULT ''
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_calendar_accounts (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                toolkit_slug TEXT NOT NULL,
+                email_address TEXT NOT NULL,
+                display_name TEXT,
+                composio_connection_id TEXT,
+                composio_entity_id TEXT,
+                status TEXT DEFAULT 'ACTIVE',
+                created_at TEXT
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_calendar_events (
+                id TEXT PRIMARY KEY,
+                external_event_id TEXT,
+                account_id TEXT,
+                provider TEXT NOT NULL,
+                email_address TEXT,
+                subject TEXT NOT NULL,
+                description TEXT,
+                location TEXT,
+                start_iso TEXT NOT NULL,
+                end_iso TEXT NOT NULL,
+                timezone TEXT DEFAULT 'Asia/Manila',
+                duration_minutes INTEGER DEFAULT 60,
+                meeting_platform TEXT DEFAULT 'none',
+                meeting_url TEXT,
+                is_online_meeting INTEGER DEFAULT 0,
+                organizer_email TEXT,
+                attendees_json TEXT,
+                availability TEXT DEFAULT 'busy',
+                reminder_minutes INTEGER DEFAULT 15,
+                status TEXT DEFAULT 'confirmed',
+                html_link TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_calendar_deleted_events (
+                external_event_id TEXT PRIMARY KEY,
+                provider TEXT,
+                deleted_at TEXT
             );
         """))
 
+    if not DATABASE_URL.startswith("sqlite"):
+        for col_sql in (
+            "ALTER TABLE glennbot_scheduled_posts ADD COLUMN IF NOT EXISTS external_post_id VARCHAR(128);",
+            "ALTER TABLE glennbot_scheduled_posts ADD COLUMN IF NOT EXISTS permalink_url TEXT;",
+        ):
+            try:
+                with db_engine.begin() as conn:
+                    conn.execute(text(col_sql))
+            except Exception:
+                pass
 
-# init_records_db() is launched in background thread below so uvicorn binds port immediately
+
+# Initialize SQLite tables synchronously (< 2ms) so background threads never see 'no such table'
+if DATABASE_URL.startswith("sqlite"):
+    try:
+        init_records_db()
+    except Exception as _sqlite_init_err:
+        print(f"[⚠️ SQLITE DB INIT WARNING]: {_sqlite_init_err}")
+
 
 jobstores = {
     'default': SQLAlchemyJobStore(
@@ -554,12 +695,16 @@ def ensure_external_post_record_in_db(
 
 def cleanup_old_records():
     try:
+        cutoff_dt = datetime.now(pytz.utc) - timedelta(days=30)
         with db_engine.begin() as conn:
-            conn.execute(text("""
-                DELETE FROM glennbot_scheduled_posts 
-                WHERE scheduled_time < NOW() - INTERVAL '30 days'
-                AND status IN ('published', 'failed');
-            """))
+            conn.execute(
+                text("""
+                    DELETE FROM glennbot_scheduled_posts 
+                    WHERE scheduled_time < :cutoff
+                    AND status IN ('published', 'failed');
+                """),
+                {"cutoff": cutoff_dt}
+            )
     except Exception as e:
         print(f"[❌ DB RETENTION ERROR]: {e}")
 
