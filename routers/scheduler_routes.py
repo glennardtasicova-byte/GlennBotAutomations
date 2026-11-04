@@ -1410,13 +1410,59 @@ def _schedule_chunked_part_sync(
                     with CHUNKED_SCHEDULE_LOCK:
                         session["uploaded_video_item"] = gd_vid
                 else:
+                    # Stream each chunk directly to Google Drive Resumable Upload API (0 MB RAM accumulation!)
+                    resumable_uri = str(session.get("gdrive_resumable_url") or "").strip()
+                    if not resumable_uri:
+                        resumable_uri = gdrive_init_resumable_upload(
+                            filename=session["media_filename"],
+                            content_type=session.get("media_content_type") or "video/mp4",
+                            total_size=int(session.get("media_total_size") or 0)
+                        )
+                        with CHUNKED_SCHEDULE_LOCK:
+                            session["gdrive_resumable_url"] = resumable_uri
+                            session["gdrive_uploaded_offset"] = 0
+
+                    start_b = int(session.get("gdrive_uploaded_offset") or 0)
+                    end_b = start_b + len(chunk_bytes) - 1
+                    tot_sz = int(session.get("media_total_size") or 0)
+                    if p_num >= tot_parts or (tot_sz > 0 and (end_b + 1) >= tot_sz):
+                        tot_sz_str = str(end_b + 1)
+                    else:
+                        tot_sz_str = str(tot_sz) if tot_sz > 0 else "*"
+
+                    gd_put = requests.put(
+                        resumable_uri,
+                        headers={
+                            "Content-Type": session.get("media_content_type") or "video/mp4",
+                            "Content-Length": str(len(chunk_bytes)),
+                            "Content-Range": f"bytes {start_b}-{end_b}/{tot_sz_str}"
+                        },
+                        data=chunk_bytes,
+                        timeout=300
+                    )
+                    if gd_put.status_code not in (200, 201, 308):
+                        raise RuntimeError(f"Google Drive chunk #{p_num} PUT failed ({gd_put.status_code}): {gd_put.text[:250]}")
+
                     with CHUNKED_SCHEDULE_LOCK:
-                        session["fallback_buffer"].extend(chunk_bytes)
-                        if p_num >= tot_parts:
-                            full_bytes = bytes(session["fallback_buffer"])
-                            session["fallback_buffer"] = bytearray()
-                            gd_vid = upload_media_to_gdrive(full_bytes, session["media_filename"], media_type="video", is_thumb=False)
-                            session["uploaded_video_item"] = gd_vid
+                        session["gdrive_uploaded_offset"] = end_b + 1
+
+                    if gd_put.status_code in (200, 201):
+                        gd_json = gd_put.json() if gd_put.text else {}
+                        gd_fid = str(gd_json.get("id") or "").strip()
+                        if gd_fid:
+                            gdrive_set_file_public_reader(gd_fid)
+                            stream_u = build_gdrive_direct_stream_url(gd_fid)
+                            with CHUNKED_SCHEDULE_LOCK:
+                                session["uploaded_video_item"] = {
+                                    "url": stream_u,
+                                    "public_id": gd_fid,
+                                    "gdrive_file_id": gd_fid,
+                                    "gdrive_file_name": session["media_filename"],
+                                    "web_view_link": str(gd_json.get("webViewLink") or f"https://drive.google.com/file/d/{gd_fid}/view"),
+                                    "storage": "google_drive",
+                                    "type": "video",
+                                    "is_thumb": False
+                                }
             else:
                 with CHUNKED_SCHEDULE_LOCK:
                     session["fallback_buffer"].extend(chunk_bytes)
@@ -24993,27 +25039,62 @@ async def api_vault_chunked_part(
                     "is_thumb": False
                 }
         else:
+            # True Zero-RAM-Accumulation Resumable Streaming to Google Drive!
+            # Each 15 MB chunk is immediately forwarded to Google Drive's resumable session URI
+            # with Content-Range so 500 MB+ files use only ~15 MB of RAM even on Render Free Tier (512 MB RAM).
+            resumable_url = str(session.get("gdrive_resumable_url") or "").strip()
+            if not resumable_url:
+                resumable_url = gdrive_init_resumable_upload(
+                    filename=session.get("gdrive_file_name") or session["filename"],
+                    content_type=session.get("content_type") or "application/octet-stream",
+                    total_size=int(session.get("total_size") or 0),
+                    vault_file_id=file_id
+                )
+                with CHUNKED_VAULT_LOCK:
+                    session["gdrive_resumable_url"] = resumable_url
+                    session["uploaded_offset"] = 0
+
+            start_byte = int(session.get("uploaded_offset") or 0)
+            end_byte = start_byte + len(chunk_bytes) - 1
+            total_sz = int(session.get("total_size") or 0)
+            if p_num >= tot_parts or (total_sz > 0 and (end_byte + 1) >= total_sz):
+                total_sz_hdr = str(end_byte + 1)
+            else:
+                total_sz_hdr = str(total_sz) if total_sz > 0 else "*"
+
+            put_resp = requests.put(
+                resumable_url,
+                headers={
+                    "Content-Type": session.get("content_type") or "application/octet-stream",
+                    "Content-Length": str(len(chunk_bytes)),
+                    "Content-Range": f"bytes {start_byte}-{end_byte}/{total_sz_hdr}"
+                },
+                data=chunk_bytes,
+                timeout=300
+            )
+            if put_resp.status_code not in (200, 201, 308):
+                raise RuntimeError(f"Google Drive chunk #{p_num}/{tot_parts} upload failed ({put_resp.status_code}): {put_resp.text[:250]}")
+
             with CHUNKED_VAULT_LOCK:
-                session.setdefault("fallback_buffer", bytearray()).extend(chunk_bytes)
-                if p_num >= tot_parts:
-                    full_bytes = bytes(session["fallback_buffer"])
-                    session["fallback_buffer"] = bytearray()
-                    up_info = _upload_vault_file_bytes_with_fallback(
-                        file_bytes=full_bytes,
-                        orig_name=session["filename"],
-                        py_file_id=file_id,
-                        mime_type=session.get("content_type") or "application/octet-stream"
-                    )
+                session["uploaded_offset"] = end_byte + 1
+
+            if put_resp.status_code in (200, 201):
+                res_json = put_resp.json() if put_resp.text else {}
+                gdrive_fid = str(res_json.get("id") or "").strip()
+                if gdrive_fid:
+                    gdrive_set_file_public_reader(gdrive_fid)
+                stream_url = f"/api/files/{file_id}/stream"
+                with CHUNKED_VAULT_LOCK:
                     session["single_item"] = {
-                        "url": up_info["download_url"],
-                        "preview_url": up_info.get("preview_url") or up_info["download_url"],
-                        "zernio_media_url": up_info.get("zernio_media_url") or "",
-                        "web_view_link": up_info.get("web_view_link") or "",
-                        "public_id": up_info.get("gdrive_file_id") or up_info.get("gdrive_file_name") or "",
-                        "gdrive_file_id": up_info.get("gdrive_file_id") or "",
-                        "gdrive_file_name": up_info.get("gdrive_file_name") or "",
-                        "storage": up_info["storage_provider"],
-                        "bucket_name": up_info["bucket_name"],
+                        "url": stream_url,
+                        "preview_url": stream_url,
+                        "zernio_media_url": "",
+                        "web_view_link": str(res_json.get("webViewLink") or (f"https://drive.google.com/file/d/{gdrive_fid}/view" if gdrive_fid else "")),
+                        "public_id": gdrive_fid,
+                        "gdrive_file_id": gdrive_fid,
+                        "gdrive_file_name": session.get("gdrive_file_name") or session["filename"],
+                        "storage": "google_drive",
+                        "bucket_name": GOOGLE_DRIVE_FOLDER_NAME,
                         "type": "file",
                         "is_thumb": False
                     }
