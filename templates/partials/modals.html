@@ -2082,6 +2082,23 @@ POST /api/v1/contacts/sync</pre>
                 </button>
             </div>
             <div class="p-5 space-y-3.5 overflow-y-auto">
+                <!-- Connected Email Account Sender Picker -->
+                <div class="p-3 rounded-xl bg-slate-900/90 border border-gb-cyan/40 space-y-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <label for="compose-email-sender-select" class="block text-[11px] font-bold uppercase tracking-wider text-gb-cyan flex items-center gap-1.5">
+                            <i class="fas fa-user-check"></i>
+                            <span>Send From (Connected Email Account) *</span>
+                        </label>
+                        <button type="button" onclick="closeComposeEmailModal(); openConnectAccountsModal('gmail');" class="text-[10px] font-bold text-gb-cyan hover:underline flex items-center gap-1">
+                            <i class="fas fa-plus-circle"></i>
+                            <span>+ Connect Email</span>
+                        </button>
+                    </div>
+                    <select id="compose-email-sender-select" onchange="onComposeEmailSenderAccountChange(this.value)" class="w-full bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white font-semibold focus:outline-none cursor-pointer">
+                        <option value="">-- Select Connected Email Account --</option>
+                    </select>
+                </div>
+
                 <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
                     <div class="sm:col-span-7">
                         <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Recipient Email (To) <span class="text-[10px] font-normal text-slate-500 lowercase">(comma-separated for multiple)</span></label>
@@ -2382,6 +2399,50 @@ POST /api/v1/contacts/sync</pre>
                         <span>Save Contact to CRM</span>
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OPEN CHAT IN MESSAGE TAB — PLATFORM SELECTOR MODAL (EMAIL / SMS / WHATSAPP / TELEGRAM) -->
+    <div id="crm-open-chat-platform-modal" class="fixed inset-0 z-[9997] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4" onclick="if(event.target===this) closeCrmOpenChatPlatformModal()">
+        <div class="glass-panel rounded-2xl w-full max-w-lg overflow-hidden border border-gb-cyan/60 shadow-[0_0_50px_rgba(0,240,255,0.28)] flex flex-col max-h-[90vh] bg-slate-950">
+            <!-- Header -->
+            <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                        <i class="fas fa-comments text-lg"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="text-sm sm:text-base font-extrabold text-white truncate">Open Chat in Message Tab</h3>
+                        <p id="crm-open-chat-contact-subtitle" class="text-[11px] text-slate-400 truncate">Choose platform to contact this lead</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeCrmOpenChatPlatformModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div class="p-5 overflow-y-auto space-y-3.5">
+                <div id="crm-open-chat-contact-summary" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
+                    Select Available Platform:
+                </div>
+
+                <div id="crm-open-chat-options-list" class="space-y-2.5">
+                    <!-- Dynamically populated based on contact's mobile number, email, or social username -->
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="px-5 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between gap-2 text-[11px] text-slate-400 shrink-0">
+                <span><i class="fas fa-info-circle text-gb-cyan mr-1"></i>Options depend on saved Mobile, Email, or Social Username</span>
+                <button type="button" onclick="closeCrmOpenChatPlatformModal()" class="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-semibold text-xs">
+                    Close
+                </button>
             </div>
         </div>
     </div>

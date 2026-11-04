@@ -5517,6 +5517,7 @@
                     const curInput = document.getElementById('direct-message-input');
                     if (curInput && !curInput.value) curInput.value = message;
                     renderActiveConversationThread(true);
+                    showToast("❌ " + (data.message || "Failed to send message."));
                     alert("❌ Failed to send message:\n" + (data.message || "Unknown error"));
                 }
             } catch (e) {
@@ -10386,16 +10387,63 @@
             }
         }
 
-        function openComposeEmailModal() {
-            if (!activeEmailAccountId) {
-                showToastNotification('Please select or connect an Email account first.', 'error');
-                openConnectAccountsModal('gmail');
-                return;
+        function populateComposeEmailSenderSelect(preferredAccountId = '') {
+            const sel = document.getElementById('compose-email-sender-select');
+            const fromLbl = document.getElementById('compose-email-from-label');
+            const accounts = Array.isArray(emailAccountsList) ? emailAccountsList : [];
+            if (accounts.length === 0) {
+                if (sel) {
+                    sel.innerHTML = `<option value="">-- No Connected Email Account (Click + Connect Email) --</option>`;
+                }
+                if (fromLbl) {
+                    fromLbl.textContent = `From: No connected email account selected`;
+                }
+                return '';
             }
-            const activeAcc = emailAccountsList.find(a => a.id === activeEmailAccountId);
+            let chosenId = String(preferredAccountId || activeEmailAccountId || '').trim();
+            if (!chosenId || !accounts.some(a => String(a.id) === chosenId)) {
+                chosenId = String(accounts[0].id || '');
+            }
+            activeEmailAccountId = chosenId;
+            if (sel) {
+                sel.innerHTML = accounts.map(acc => {
+                    const isSel = String(acc.id) === chosenId ? 'selected' : '';
+                    const prov = String(acc.provider || 'email').toUpperCase();
+                    return `<option value="${escapeHTML(String(acc.id))}" ${isSel}>${escapeHTML(acc.email_address)} (${escapeHTML(prov)})</option>`;
+                }).join('');
+            }
+            const activeAcc = accounts.find(a => String(a.id) === chosenId);
+            if (fromLbl && activeAcc) {
+                fromLbl.textContent = `From: ${activeAcc.email_address} (${String(activeAcc.provider || 'email').toUpperCase()})`;
+            }
+            return chosenId;
+        }
+
+        function onComposeEmailSenderAccountChange(accountId) {
+            const cleanId = String(accountId || '').trim();
+            if (!cleanId) return;
+            activeEmailAccountId = cleanId;
+            const activeAcc = (emailAccountsList || []).find(a => String(a.id) === cleanId);
             const fromLbl = document.getElementById('compose-email-from-label');
             if (fromLbl && activeAcc) {
-                fromLbl.textContent = `From: ${activeAcc.email_address} (${activeAcc.provider.toUpperCase()})`;
+                fromLbl.textContent = `From: ${activeAcc.email_address} (${String(activeAcc.provider || 'email').toUpperCase()})`;
+            }
+            const topSel = document.getElementById('email-active-account-select');
+            if (topSel && topSel.value !== cleanId) {
+                topSel.value = cleanId;
+            }
+        }
+
+        async function openComposeEmailModal(prefillTo = '') {
+            if (!Array.isArray(emailAccountsList) || emailAccountsList.length === 0) {
+                try {
+                    await fetchEmailAccounts(false);
+                } catch (_) {}
+            }
+            populateComposeEmailSenderSelect(activeEmailAccountId);
+            if (prefillTo) {
+                const toEl = document.getElementById('compose-email-to');
+                if (toEl) toEl.value = String(prefillTo).trim();
             }
             renderComposeEmailAttachmentsUI();
             openModalWithFade('compose-email-modal');
@@ -10406,7 +10454,14 @@
         }
 
         async function sendComposedEmail() {
-            if (!activeEmailAccountId) return;
+            const senderSelectEl = document.getElementById('compose-email-sender-select');
+            const selectedSenderId = String(senderSelectEl?.value || activeEmailAccountId || '').trim();
+            if (!selectedSenderId) {
+                showToastNotification('Please select or connect a Sender Email account first.', 'error');
+                openConnectAccountsModal('gmail');
+                return;
+            }
+            activeEmailAccountId = selectedSenderId;
             const toVal = (document.getElementById('compose-email-to')?.value || '').trim();
             const ccVal = (document.getElementById('compose-email-cc')?.value || '').trim();
             const subjVal = (document.getElementById('compose-email-subject')?.value || '').trim();
@@ -10427,7 +10482,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        account_id: activeEmailAccountId,
+                        account_id: selectedSenderId,
                         to: toVal,
                         cc: ccVal,
                         subject: subjVal || '(No Subject)',
@@ -11018,7 +11073,7 @@
                     first_name: firstName,
                     middle_name: middleName,
                     last_name: lastName,
-                    social_username: raw,
+                    social_username: '',
                     email_address: detectedEmail,
                     contact_number: detectedPhone,
                     is_username_guess: false,
@@ -11064,11 +11119,14 @@
                 }
             }
 
+            // For Facebook & Instagram, do not auto-populate social_username unless manually added by the user
+            const autoSocialUsername = (plat === 'facebook' || plat === 'instagram') ? '' : handleFormatted;
+
             return {
                 first_name: firstName,
                 middle_name: middleName,
                 last_name: lastName,
-                social_username: handleFormatted,
+                social_username: autoSocialUsername,
                 email_address: detectedEmail,
                 contact_number: detectedPhone,
                 is_username_guess: true,
@@ -11124,7 +11182,13 @@
             if (phoneEl) phoneEl.value = d.contact_number || '';
             if (emailEl) emailEl.value = d.email_address || '';
             if (platEl) platEl.value = (d.platform || 'manual').toLowerCase();
-            if (userEl) userEl.value = d.social_username || '';
+            if (userEl) {
+                const rawU = String(d.social_username || '').trim();
+                const fullNameSpaced = [d.first_name, d.middle_name, d.last_name].filter(Boolean).join(' ').trim().toLowerCase();
+                const firstLastSpaced = [d.first_name, d.last_name].filter(Boolean).join(' ').trim().toLowerCase();
+                const isRedundantFullName = Boolean(rawU && !rawU.startsWith('@') && /\s/.test(rawU) && (rawU.toLowerCase() === fullNameSpaced || rawU.toLowerCase() === firstLastSpaced));
+                userEl.value = isRedundantFullName ? '' : rawU;
+            }
             if (catEl) catEl.value = d.category || 'New Lead';
             if (compEl) compEl.value = d.company || '';
             if (accEl) accEl.value = d.account_name || '';
@@ -11402,24 +11466,275 @@
                 showToast('⚠️ This contact does not have an email address yet.');
                 return;
             }
-            switchTab('email');
-            setTimeout(() => {
-                openComposeEmailModal();
-                const toEl = document.getElementById('compose-email-to');
-                if (toEl) toEl.value = clean;
-            }, 150);
+            openComposeEmailModal(clean);
+        }
+
+        function isValidTelegramUsernameFormat(rawHandle) {
+            const raw = String(rawHandle || '').trim();
+            if (!raw || /\s/.test(raw)) return false;
+            const stripped = raw.replace(/^@+/, '');
+            if (!/^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(stripped)) return false;
+            if (stripped.includes('__') || stripped.endsWith('_')) return false;
+            return true;
+        }
+
+        function getCrmContactEffectiveUsername(c) {
+            if (!c || typeof c !== 'object') return '';
+            const raw = String(c.social_username || '').trim();
+            if (!raw) return '';
+            // Ignore if it's just the contact's email address
+            if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return '';
+            // Ignore if it's purely a phone number
+            if (/^[\+\d\s\-\(\)]+$/.test(raw) && raw.replace(/\D/g, '').length >= 7) return '';
+            // Ignore legacy auto-copied spaced full name on Facebook/Instagram contacts
+            const fullNameSpaced = [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ').trim().toLowerCase();
+            const firstLastSpaced = [c.first_name, c.last_name].filter(Boolean).join(' ').trim().toLowerCase();
+            if (!raw.startsWith('@') && /\s/.test(raw) && (raw.toLowerCase() === fullNameSpaced || raw.toLowerCase() === firstLastSpaced)) {
+                return '';
+            }
+            return raw;
+        }
+
+        function getCrmContactMessagingCapabilities(c) {
+            if (!c || typeof c !== 'object') {
+                return {
+                    hasMobile: false,
+                    mobileNumber: '',
+                    hasEmail: false,
+                    emailAddress: '',
+                    hasUsername: false,
+                    socialUsername: '',
+                    isValidTelegramHandle: false,
+                    isReachable: false
+                };
+            }
+            const mobileNumber = typeof getCrmContactMobileNumber === 'function'
+                ? getCrmContactMobileNumber(c)
+                : String(c.contact_number || '').trim();
+            const hasMobile = Boolean(mobileNumber && mobileNumber.replace(/\D/g, '').length >= 7);
+            const emailAddress = String(c.email_address || '').trim();
+            const hasEmail = Boolean(emailAddress && emailAddress.includes('@'));
+            const socialUsername = getCrmContactEffectiveUsername(c);
+            const hasUsername = Boolean(socialUsername);
+            const isValidTelegramHandle = hasUsername ? isValidTelegramUsernameFormat(socialUsername) : false;
+            const isReachable = Boolean(hasMobile || hasEmail || hasUsername);
+
+            return {
+                hasMobile,
+                mobileNumber,
+                hasEmail,
+                emailAddress,
+                hasUsername,
+                socialUsername,
+                isValidTelegramHandle,
+                isReachable
+            };
+        }
+
+        function closeCrmOpenChatPlatformModal() {
+            closeModalWithFade('crm-open-chat-platform-modal');
+        }
+
+        function handleOpenChatFromCrmContact(contactId, event) {
+            if (event) event.stopPropagation();
+            const c = crmContactsList.find(item => String(item.id) === String(contactId));
+            if (!c) return;
+
+            const caps = getCrmContactMessagingCapabilities(c);
+            // Kapag sinave via Facebook or Instagram (o walang mobile number, email, at username),
+            // HINDI mag-re-react yung "Open Chat in Message Tab" button!
+            if (!caps.isReachable) {
+                return;
+            }
+
+            const fullName = [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ') || caps.socialUsername || caps.emailAddress || caps.mobileNumber || 'Contact';
+            const plat = (c.platform || 'manual').toLowerCase();
+            const subtitleEl = document.getElementById('crm-open-chat-contact-subtitle');
+            const summaryEl = document.getElementById('crm-open-chat-contact-summary');
+            const optionsEl = document.getElementById('crm-open-chat-options-list');
+
+            if (subtitleEl) {
+                subtitleEl.textContent = `Choose how you want to message ${fullName}`;
+            }
+
+            if (summaryEl) {
+                summaryEl.innerHTML = `
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-gb-cyan font-extrabold text-sm shrink-0">
+                            <i class="fas fa-user"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs sm:text-sm font-extrabold text-white truncate">${escapeHTML(fullName)}</div>
+                            <div class="flex flex-wrap items-center gap-1.5 mt-0.5 text-[10px] text-slate-400">
+                                <span>Saved via <strong class="text-slate-200 uppercase">${escapeHTML(plat)}</strong></span>
+                                ${caps.hasMobile ? `<span>• 📱 ${escapeHTML(caps.mobileNumber)}</span>` : ''}
+                                ${caps.hasEmail ? `<span>• ✉️ ${escapeHTML(caps.emailAddress)}</span>` : ''}
+                                ${caps.hasUsername ? `<span>• 👤 ${escapeHTML(caps.socialUsername)}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    ${getCrmCategoryBadgeHTML(c.category)}
+                `;
+            }
+
+            const optionCards = [];
+
+            // 1. EMAIL OPTION (Uses Compose Email Modal + Connected Email Sender Picker)
+            if (caps.hasEmail) {
+                optionCards.push(`
+                    <button type="button" onclick="closeCrmOpenChatPlatformModal(); composeEmailToCrmContact('${escapeHTML(caps.emailAddress)}');"
+                        class="w-full p-3.5 rounded-xl bg-slate-900/90 hover:bg-gb-cyan/15 border border-slate-700 hover:border-gb-cyan text-left flex items-center justify-between gap-3 transition-all cursor-pointer group">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-gb-cyan/15 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shrink-0 group-hover:scale-105 transition-transform">
+                                <i class="fas fa-envelope text-base"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                                    <span>Email (Compose Email Modal)</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-gb-cyan/20 border border-gb-cyan/40 text-gb-cyan text-[9px] font-bold">Choose Sender Email</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                                    To: <strong class="text-gb-cyan">${escapeHTML(caps.emailAddress)}</strong> • Select any connected Gmail / Outlook / IMAP as sender
+                                </div>
+                            </div>
+                        </div>
+                        <i class="fas fa-chevron-right text-slate-500 group-hover:text-gb-cyan text-xs shrink-0"></i>
+                    </button>
+                `);
+            }
+
+            // 2. SMS OPTION (Available when Mobile Number is present)
+            if (caps.hasMobile) {
+                optionCards.push(`
+                    <button type="button" onclick="openCrmContactChatInMessagesTab('${escapeHTML(String(c.id))}', 'sms')"
+                        class="w-full p-3.5 rounded-xl bg-slate-900/90 hover:bg-emerald-500/15 border border-slate-700 hover:border-emerald-400 text-left flex items-center justify-between gap-3 transition-all cursor-pointer group">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-400/40 flex items-center justify-center text-emerald-300 shrink-0 group-hover:scale-105 transition-transform">
+                                <i class="fas fa-sms text-base"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                                    <span>SMS (TextBee SIM 2)</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[9px] font-bold">Open in Messages Tab</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                                    Mobile: <strong class="text-emerald-300 font-mono">${escapeHTML(caps.mobileNumber)}</strong> • Direct SMS thread in Unified Inbox
+                                </div>
+                            </div>
+                        </div>
+                        <i class="fas fa-chevron-right text-slate-500 group-hover:text-emerald-300 text-xs shrink-0"></i>
+                    </button>
+                `);
+
+                // 3. WHATSAPP OPTION (Available when Mobile Number is present)
+                optionCards.push(`
+                    <button type="button" onclick="openCrmContactChatInMessagesTab('${escapeHTML(String(c.id))}', 'whatsapp')"
+                        class="w-full p-3.5 rounded-xl bg-slate-900/90 hover:bg-[#25D366]/15 border border-slate-700 hover:border-[#25D366] text-left flex items-center justify-between gap-3 transition-all cursor-pointer group">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-[#25D366]/15 border border-[#25D366]/40 flex items-center justify-center text-[#25D366] shrink-0 group-hover:scale-105 transition-transform">
+                                <i class="fab fa-whatsapp text-lg"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                                    <span>WhatsApp</span>
+                                    <span class="px-2 py-0.5 rounded-full bg-[#25D366]/20 border border-[#25D366]/40 text-[#25D366] text-[9px] font-bold">Open in Messages Tab</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                                    Mobile: <strong class="text-[#25D366] font-mono">${escapeHTML(caps.mobileNumber)}</strong> • Message via connected WhatsApp
+                                </div>
+                            </div>
+                        </div>
+                        <i class="fas fa-chevron-right text-slate-500 group-hover:text-[#25D366] text-xs shrink-0"></i>
+                    </button>
+                `);
+            }
+
+            // 4. TELEGRAM OPTION (Available when Social Username / Handle is present)
+            if (caps.hasUsername) {
+                const tgBadgeHTML = caps.isValidTelegramHandle
+                    ? `<span class="px-2 py-0.5 rounded-full bg-[#229ED9]/20 border border-[#229ED9]/40 text-[#229ED9] text-[9px] font-bold">Valid @username Format</span>`
+                    : `<span class="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/50 text-amber-300 text-[9px] font-bold" title="Invalid Telegram username format — sending on Telegram will return an error unless a valid @username is set">⚠️ Invalid Telegram Handle</span>`;
+                optionCards.push(`
+                    <button type="button" onclick="openCrmContactChatInMessagesTab('${escapeHTML(String(c.id))}', 'telegram')"
+                        class="w-full p-3.5 rounded-xl bg-slate-900/90 hover:bg-[#229ED9]/15 border border-slate-700 hover:border-[#229ED9] text-left flex items-center justify-between gap-3 transition-all cursor-pointer group">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-[#229ED9]/15 border border-[#229ED9]/40 flex items-center justify-center text-[#229ED9] shrink-0 group-hover:scale-105 transition-transform">
+                                <i class="fab fa-telegram-plane text-lg"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2 flex-wrap">
+                                    <span>Telegram</span>
+                                    ${tgBadgeHTML}
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                                    Social Username / Handle: <strong class="text-[#229ED9] font-mono">${escapeHTML(caps.socialUsername)}</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <i class="fas fa-chevron-right text-slate-500 group-hover:text-[#229ED9] text-xs shrink-0"></i>
+                    </button>
+                `);
+            }
+
+            if (optionsEl) {
+                optionsEl.innerHTML = optionCards.join('');
+            }
+            openModalWithFade('crm-open-chat-platform-modal');
+        }
+
+        async function openCrmContactChatInMessagesTab(contactId, targetPlatform) {
+            closeCrmOpenChatPlatformModal();
+            const plat = String(targetPlatform || '').trim().toLowerCase();
+            if (!plat) return;
+
+            try {
+                const res = await fetch('/api/contacts/open-chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contact_id: contactId,
+                        platform: plat
+                    })
+                });
+                const data = await res.json();
+                if (data.status !== 'success' || !data.conversation) {
+                    showToast('❌ ' + (data.message || `Could not open ${plat.toUpperCase()} chat.`));
+                    return;
+                }
+
+                const conv = data.conversation;
+                switchTab('messages');
+
+                const filterEl = document.getElementById('messages-filter-platform');
+                if (filterEl) {
+                    filterEl.value = plat;
+                }
+                const pageFilterEl = document.getElementById('messages-filter-page');
+                if (pageFilterEl) {
+                    pageFilterEl.value = 'all';
+                }
+
+                await fetchConversations(false);
+
+                // Ensure the conversation is in messagesConversationsList and select it immediately
+                const existingIdx = messagesConversationsList.findIndex(item => item.conv_key === conv.conv_key);
+                if (existingIdx >= 0) {
+                    messagesConversationsList[existingIdx] = Object.assign({}, messagesConversationsList[existingIdx], conv);
+                } else {
+                    messagesConversationsList.unshift(conv);
+                }
+                renderMessagesConversationsList();
+                await selectMessageConversation(conv.conv_key, conv.conversation_id, conv.account_id);
+                setTimeout(() => {
+                    document.getElementById('direct-message-input')?.focus();
+                }, 120);
+            } catch (e) {
+                showToast('❌ Error opening chat in Messages tab: ' + (e.message || e));
+            }
         }
 
         function openChatForCrmContact(contactId) {
-            const c = crmContactsList.find(item => item.id === contactId);
-            if (!c) return;
-            switchTab('messages');
-            const filterEl = document.getElementById('messages-filter-platform');
-            const plat = (c.platform || '').toLowerCase();
-            if (filterEl && ['facebook', 'instagram', 'whatsapp', 'telegram', 'tiktok', 'youtube'].includes(plat)) {
-                filterEl.value = plat;
-                onMessagesPlatformFilterChange();
-            }
+            handleOpenChatFromCrmContact(contactId);
         }
 
         function getCrmCategoryBadgeHTML(category) {
@@ -11542,7 +11857,14 @@
                        </button>`
                     : `<span class="text-[11px] text-slate-600 italic">—</span>`;
 
-                const hasChatSource = uniqueSources.some(s => ['whatsapp', 'telegram', 'facebook', 'instagram', 'tiktok'].includes(s));
+                const caps = getCrmContactMessagingCapabilities(c);
+                const effUsername = caps.socialUsername;
+                const openChatBtnClasses = caps.isReachable
+                    ? 'p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300 text-xs transition-all cursor-pointer shadow-[0_0_10px_rgba(16,185,129,0.18)]'
+                    : 'p-1.5 rounded-lg bg-slate-800/40 border border-slate-700/60 text-slate-600 text-xs transition-all cursor-default';
+                const openChatTitle = caps.isReachable
+                    ? 'Open Chat in Message Tab (Choose Platform: Email, SMS, WhatsApp, or Telegram)'
+                    : 'Open Chat in Message Tab (No Mobile Number, Email, or Social Username saved)';
 
                 return `
                     <tr class="border-b border-slate-800/80 hover:bg-slate-900/80 transition-colors">
@@ -11565,7 +11887,7 @@
                         <td class="py-3 px-3.5 whitespace-nowrap">
                             <div class="flex flex-col gap-1">
                                 <div class="flex items-center gap-1.5 flex-wrap">${multiBadgesHTML} ${combinedBadgeHTML}</div>
-                                ${c.social_username ? `<span class="text-[11px] text-slate-300 font-medium truncate max-w-[180px]" title="${escapeHTML(c.social_username)}">${escapeHTML(c.social_username)}</span>` : ''}
+                                ${effUsername ? `<span class="text-[11px] text-slate-300 font-medium truncate max-w-[180px]" title="${escapeHTML(effUsername)}">${escapeHTML(effUsername)}</span>` : ''}
                                 ${c.account_name ? `<span class="text-[10px] text-slate-500 truncate max-w-[180px]">via ${escapeHTML(c.account_name)}</span>` : ''}
                             </div>
                         </td>
@@ -11581,16 +11903,9 @@
                         </td>
                         <td class="py-3 px-3.5 text-right whitespace-nowrap">
                             <div class="inline-flex items-center gap-1.5">
-                                ${hasChatSource ? `
-                                    <button type="button" onclick="openChatForCrmContact('${escapeHTML(c.id)}')" class="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 text-xs transition-all" title="Open Chat in Messages Tab">
-                                        <i class="fas fa-comments"></i>
-                                    </button>
-                                ` : ''}
-                                ${c.email_address ? `
-                                    <button type="button" onclick="composeEmailToCrmContact('${escapeHTML(c.email_address)}')" class="p-1.5 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/40 text-gb-cyan text-xs transition-all" title="Send Email">
-                                        <i class="fas fa-paper-plane"></i>
-                                    </button>
-                                ` : ''}
+                                <button type="button" onclick="handleOpenChatFromCrmContact('${escapeHTML(c.id)}', event)" class="${openChatBtnClasses}" title="${escapeHTML(openChatTitle)}">
+                                    <i class="fas fa-comments"></i>
+                                </button>
                                 <button type="button" onclick="editCrmContactById('${escapeHTML(c.id)}')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 hover:text-gb-cyan text-xs font-semibold transition-all" title="Edit Contact">
                                     <i class="fas fa-edit mr-1"></i>Edit
                                 </button>
