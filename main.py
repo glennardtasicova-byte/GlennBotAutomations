@@ -33,15 +33,26 @@ except ImportError:
     import urllib.request
     if not shutil.which("pip3"):
         urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", "/tmp/get-pip.py")
-        subprocess.run([sys.executable, "/tmp/get-pip.py", "-q"], check=False)
-        if os.path.exists("/usr/local/bin/pip3") and not os.path.exists("/usr/bin/pip3"):
-            try:
-                os.symlink("/usr/local/bin/pip3", "/usr/bin/pip3")
-            except Exception:
-                pass
+        subprocess.run(
+            [sys.executable, "/tmp/get-pip.py", "-q", "--root-user-action=ignore"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
+        )
+        try:
+            with open("/usr/bin/pip3", "w", encoding="utf-8") as _pf:
+                _pf.write('#!/bin/sh\nPIP_ROOT_USER_ACTION=ignore PIP_QUIET=1 exec python3 -m pip "$@"\n')
+            os.chmod("/usr/bin/pip3", 0o755)
+        except Exception:
+            pass
     _req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
     if os.path.exists(_req_path):
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", _req_path], check=False)
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "--root-user-action=ignore", "-r", _req_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
+        )
     import uvicorn
 
 import cloudinary
