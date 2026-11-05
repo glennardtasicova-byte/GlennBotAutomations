@@ -953,6 +953,122 @@ def _evaluate_spreadsheet_formula(raw_val: str, cells_map: Dict[str, str], depth
             n = _to_float(_eval_expr(raw_args[0]) if raw_args else "", None)
             return "TRUE" if (n is not None and int(math.trunc(n)) % 2 != 0) else "FALSE"
 
+        # --- EXTENDED ALL-10-CATEGORIES BACKEND SUPPORT ---
+        if fn == "NA":
+            return "#N/A"
+        if fn == "ISERR":
+            if not raw_args:
+                return "FALSE"
+            v = str(_eval_expr(raw_args[0]))
+            return "TRUE" if (v.startswith("#") and v != "#N/A") else "FALSE"
+        if fn == "ISLOGICAL":
+            if not raw_args:
+                return "FALSE"
+            return "TRUE" if str(_eval_expr(raw_args[0])).strip().upper() in ("TRUE", "FALSE") else "FALSE"
+        if fn == "ISNONTEXT":
+            if not raw_args:
+                return "TRUE"
+            v = str(_eval_expr(raw_args[0])).strip()
+            return "FALSE" if (v != "" and _to_float(v, None) is None and v.upper() not in ("TRUE", "FALSE") and not v.startswith("#")) else "TRUE"
+        if fn == "ISFORMULA":
+            if not raw_args:
+                return "FALSE"
+            c_ref = raw_args[0].strip().replace("$", "").upper()
+            return "TRUE" if str(cells_map.get(c_ref, "")).strip().startswith("=") else "FALSE"
+        if fn == "FORMULATEXT":
+            if not raw_args:
+                return "#N/A"
+            c_ref = raw_args[0].strip().replace("$", "").upper()
+            raw_f = str(cells_map.get(c_ref, "")).strip()
+            return raw_f if raw_f.startswith("=") else "#N/A"
+        if fn in ("XMATCH", "LOOKUP"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            lv = str(_eval_expr(raw_args[0])).strip()
+            l_coords = [c for row in _expand_range_coords(raw_args[1]) for c in row]
+            r_coords = [c for row in _expand_range_coords(raw_args[2]) for c in row] if len(raw_args) > 2 else l_coords
+            for i_c, lc in enumerate(l_coords):
+                if _matches_excel_criteria(_get_cell_eval(lc).strip(), lv):
+                    return str(i_c + 1) if fn == "XMATCH" else (_get_cell_eval(r_coords[i_c]) if i_c < len(r_coords) else "#REF!")
+            return "#N/A"
+        if fn in ("UNIQUE", "SORT", "TOCOL", "TOROW", "TRANSPOSE"):
+            vals = [v for a in (raw_args[:1] if raw_args else []) for v in _expand_arg_values(a) if str(v).strip() != ""]
+            if fn == "UNIQUE":
+                seen = []
+                for v in vals:
+                    if v not in seen:
+                        seen.append(v)
+                return ", ".join(seen)
+            if fn == "SORT":
+                return ", ".join(sorted(vals, key=lambda x: (_to_float(x, None) is None, _to_float(x, 0.0) if _to_float(x, None) is not None else str(x).lower())))
+            return ", ".join(vals)
+        if fn == "FILTER":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            arr_c = [c for row in _expand_range_coords(raw_args[0]) for c in row]
+            inc_c = [c for row in _expand_range_coords(raw_args[1]) for c in row]
+            not_f = str(_eval_expr(raw_args[2])) if len(raw_args) > 2 else "#CALC!"
+            out = [_get_cell_eval(c) for idx, c in enumerate(arr_c) if idx < len(inc_c) and _to_bool(_get_cell_eval(inc_c[idx]))]
+            return ", ".join(out) if out else not_f
+        if fn in ("TEXTBEFORE", "TEXTAFTER", "TEXTSPLIT"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            txt = str(_eval_expr(raw_args[0]))
+            delim = str(_eval_expr(raw_args[1]))
+            if not delim:
+                return txt
+            if fn == "TEXTSPLIT":
+                return ", ".join(txt.split(delim))
+            pos = txt.find(delim)
+            if pos < 0:
+                return str(_eval_expr(raw_args[5])) if len(raw_args) > 5 else "#N/A"
+            return txt[:pos] if fn == "TEXTBEFORE" else txt[pos + len(delim):]
+        if fn in ("DEC2BIN", "DEC2HEX", "DEC2OCT", "BIN2DEC", "HEX2DEC", "OCT2DEC"):
+            if not raw_args:
+                return "#VALUE!"
+            s_v = str(_eval_expr(raw_args[0])).strip()
+            try:
+                if fn == "DEC2BIN":
+                    return bin(int(_to_float(s_v, 0) or 0))[2:]
+                if fn == "DEC2HEX":
+                    return hex(int(_to_float(s_v, 0) or 0))[2:].upper()
+                if fn == "DEC2OCT":
+                    return oct(int(_to_float(s_v, 0) or 0))[2:]
+                if fn == "BIN2DEC":
+                    return str(int(s_v, 2))
+                if fn == "HEX2DEC":
+                    return str(int(s_v, 16))
+                if fn == "OCT2DEC":
+                    return str(int(s_v, 8))
+            except Exception:
+                return "#NUM!"
+        if fn in ("GCD", "LCM"):
+            nums_i = [abs(int(_to_float(n, 0) or 0)) for a in raw_args for n in _expand_arg_numbers(a)]
+            if not nums_i:
+                return "0"
+            res_i = nums_i[0]
+            for x in nums_i[1:]:
+                res_i = math.gcd(res_i, x) if fn == "GCD" else ((res_i * x) // math.gcd(res_i, x) if (res_i and x) else 0)
+            return str(res_i)
+        if fn == "COMBIN":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            n_c = int(_to_float(_eval_expr(raw_args[0]), 0) or 0)
+            k_c = int(_to_float(_eval_expr(raw_args[1]), 0) or 0)
+            return str(math.comb(n_c, k_c)) if (0 <= k_c <= n_c) else "#NUM!"
+        if fn == "PERMUT":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            n_p = int(_to_float(_eval_expr(raw_args[0]), 0) or 0)
+            k_p = int(_to_float(_eval_expr(raw_args[1]), 0) or 0)
+            return str(math.perm(n_p, k_p)) if (0 <= k_p <= n_p) else "#NUM!"
+        if fn == "SEQUENCE":
+            r_s = max(1, int(_to_float(_eval_expr(raw_args[0]), 1) or 1)) if raw_args else 1
+            c_s = max(1, int(_to_float(_eval_expr(raw_args[1]), 1) or 1)) if len(raw_args) > 1 else 1
+            st_s = _to_float(_eval_expr(raw_args[2]), 1.0) if len(raw_args) > 2 else 1.0
+            sp_s = _to_float(_eval_expr(raw_args[3]), 1.0) if len(raw_args) > 3 else 1.0
+            return ", ".join(_format_formula_number((st_s or 1.0) + i * (sp_s or 1.0)) for i in range(min(200, r_s * c_s)))
+
         return "#NAME?"
 
     def _eval_expr(sub_expr: str) -> Any:

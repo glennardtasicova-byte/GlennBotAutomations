@@ -394,6 +394,12 @@ body.gb-theme-light #ss-grid-table textarea {
     z-index: 15;
     cursor: text;
 }
+#ss-grid-table td.ss-formula-ref-highlight {
+    background-color: rgba(168, 85, 247, 0.18) !important;
+    outline: 2px dashed #c084fc !important;
+    outline-offset: -2px;
+    z-index: 12;
+}
 .ss-cell-input-locked {
     pointer-events: none !important;
     user-select: none !important;

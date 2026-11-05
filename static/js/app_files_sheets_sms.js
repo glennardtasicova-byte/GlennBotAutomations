@@ -1429,7 +1429,27 @@
                 }
                 if (fn === 'SUBSTITUTE') {
                     if (rawArgs.length < 3) return '#VALUE!';
-                    return String(evalExpr(rawArgs[0])).split(String(evalExpr(rawArgs[1]))).join(String(evalExpr(rawArgs[2])));
+                    const srcTxt = String(evalExpr(rawArgs[0]));
+                    const oldTxt = String(evalExpr(rawArgs[1]));
+                    const newTxt = String(evalExpr(rawArgs[2]));
+                    if (!oldTxt) return srcTxt;
+                    if (rawArgs.length >= 4) {
+                        const instNum = Math.trunc(toFloat(evalExpr(rawArgs[3]), 0));
+                        if (instNum < 1) return '#VALUE!';
+                        let occ = 0;
+                        let pos = 0;
+                        while (pos <= srcTxt.length) {
+                            const found = srcTxt.indexOf(oldTxt, pos);
+                            if (found === -1) break;
+                            occ++;
+                            if (occ === instNum) {
+                                return srcTxt.slice(0, found) + newTxt + srcTxt.slice(found + oldTxt.length);
+                            }
+                            pos = found + oldTxt.length;
+                        }
+                        return srcTxt;
+                    }
+                    return srcTxt.split(oldTxt).join(newTxt);
                 }
                 if (fn === 'REPLACE') {
                     if (rawArgs.length < 4) return '#VALUE!';
@@ -1462,7 +1482,6 @@
                     const fv = toFloat(rawArgs.length ? evalExpr(rawArgs[0]) : '', null);
                     return fv !== null ? ssFormatFormulaNumber(fv) : '#VALUE!';
                 }
-                if (fn === 'TEXT') return rawArgs.length ? String(evalExpr(rawArgs[0])) : '';
 
                 // --- DATE & TIME ---
                 if (fn === 'TODAY') return new Date().toISOString().slice(0, 10);
@@ -1479,7 +1498,14 @@
                     return Number.isNaN(dt.getTime()) ? '#VALUE!' : dt.toISOString().slice(0, 10);
                 }
                 if (fn === 'YEAR' || fn === 'MONTH' || fn === 'DAY') {
-                    const dt = new Date(rawArgs.length ? String(evalExpr(rawArgs[0])) : '');
+                    const rawD = rawArgs.length ? String(evalExpr(rawArgs[0])).trim() : '';
+                    const isoM = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(rawD);
+                    if (isoM) {
+                        if (fn === 'YEAR') return String(parseInt(isoM[1], 10));
+                        if (fn === 'MONTH') return String(parseInt(isoM[2], 10));
+                        return String(parseInt(isoM[3], 10));
+                    }
+                    const dt = new Date(rawD);
                     if (Number.isNaN(dt.getTime())) return '#VALUE!';
                     if (fn === 'YEAR') return String(dt.getFullYear());
                     if (fn === 'MONTH') return String(dt.getMonth() + 1);
@@ -1500,9 +1526,11 @@
                     const nper = toFloat(evalExpr(rawArgs[1]), 0);
                     const pv = toFloat(evalExpr(rawArgs[2]), 0);
                     const fv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    const type = rawArgs.length > 4 && toFloat(evalExpr(rawArgs[4]), 0) ? 1 : 0;
                     if (nper === 0) return '#DIV/0!';
                     if (rate === 0) return ssFormatFormulaNumber(-(pv + fv) / nper);
-                    const pmt = -(rate * (pv * Math.pow(1 + rate, nper) + fv)) / (Math.pow(1 + rate, nper) - 1);
+                    const factor = Math.pow(1 + rate, nper);
+                    const pmt = -(rate * (pv * factor + fv)) / ((1 + rate * type) * (factor - 1));
                     return ssFormatFormulaNumber(pmt);
                 }
                 if (fn === 'FV') {
@@ -1511,8 +1539,10 @@
                     const nper = toFloat(evalExpr(rawArgs[1]), 0);
                     const pmt = toFloat(evalExpr(rawArgs[2]), 0);
                     const pv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    const type = rawArgs.length > 4 && toFloat(evalExpr(rawArgs[4]), 0) ? 1 : 0;
                     if (rate === 0) return ssFormatFormulaNumber(-(pv + pmt * nper));
-                    return ssFormatFormulaNumber(-(pv * Math.pow(1 + rate, nper) + pmt * (Math.pow(1 + rate, nper) - 1) / rate));
+                    const factor = Math.pow(1 + rate, nper);
+                    return ssFormatFormulaNumber(-(pv * factor + pmt * (1 + rate * type) * (factor - 1) / rate));
                 }
                 if (fn === 'PV') {
                     if (rawArgs.length < 3) return '#VALUE!';
@@ -1520,8 +1550,10 @@
                     const nper = toFloat(evalExpr(rawArgs[1]), 0);
                     const pmt = toFloat(evalExpr(rawArgs[2]), 0);
                     const fv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    const type = rawArgs.length > 4 && toFloat(evalExpr(rawArgs[4]), 0) ? 1 : 0;
                     if (rate === 0) return ssFormatFormulaNumber(-(fv + pmt * nper));
-                    return ssFormatFormulaNumber(-(fv + pmt * (Math.pow(1 + rate, nper) - 1) / rate) / Math.pow(1 + rate, nper));
+                    const factor = Math.pow(1 + rate, nper);
+                    return ssFormatFormulaNumber(-(fv + pmt * (1 + rate * type) * (factor - 1) / rate) / factor);
                 }
                 if (fn === 'NPV') {
                     if (rawArgs.length < 2) return '#VALUE!';
@@ -1561,6 +1593,26 @@
                 if (fn === 'ISODD') {
                     const n = toFloat(rawArgs.length ? evalExpr(rawArgs[0]) : '', null);
                     return n !== null && Math.trunc(n) % 2 !== 0 ? 'TRUE' : 'FALSE';
+                }
+
+                // --- EXTENDED EXCEL FORMULA ENGINE (ALL 10 CATEGORIES) ---
+                if (typeof window.ssEvaluateExtendedFormula === 'function') {
+                    const extResult = window.ssEvaluateExtendedFormula(fn, rawArgs, {
+                        cellsMap,
+                        getCellEval,
+                        toFloat,
+                        toBool,
+                        expandRangeCoords,
+                        expandArgValues,
+                        expandArgNumbers,
+                        evalExpr,
+                        formatNum: ssFormatFormulaNumber,
+                        matchesCriteria: ssMatchesExcelCriteria,
+                        splitArgs: ssSplitFormulaArgs
+                    });
+                    if (extResult !== null && extResult !== undefined) {
+                        return extResult;
+                    }
                 }
 
                 return '#NAME?';
@@ -2267,6 +2319,12 @@
         }
 
         function ssExitCellEditMode() {
+            if (typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
+            if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                window.ssHighlightFormulaReferencedCells('');
+            }
             if (!ssEditingCellCoord) return;
             const prevCoord = ssEditingCellCoord;
             ssEditingCellCoord = null;
@@ -2293,6 +2351,9 @@
             if (ssEditingCellCoord && ssEditingCellCoord !== coord) {
                 ssExitCellEditMode();
             }
+            if (typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
             activeCellCoord = coord;
             ssSelectedCells = new Set([coord]);
             ssSelectedCols.clear();
@@ -2313,6 +2374,9 @@
                 onSpreadsheetCellInput(coord, initialChar);
             } else {
                 inputEl.value = rawVal;
+            }
+            if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                window.ssHighlightFormulaReferencedCells(inputEl.value);
             }
             ssSyncWrapMirror(inputEl);
             ssRefreshSelectionHighlights();
@@ -2366,6 +2430,12 @@
             if (ssEditingCellCoord === coord) {
                 return;
             }
+            // Formula Point Mode: Click / Drag / Ctrl+Click / Shift+Click inserts cell/range reference into active formula!
+            if (typeof window.ssShouldInterceptGridForFormulaPointing === 'function' && window.ssShouldInterceptGridForFormulaPointing()) {
+                if (window.ssHandleFormulaPointCellMouseDown(event, coord)) {
+                    return;
+                }
+            }
             if (event) event.preventDefault();
             if (ssEditingCellCoord) {
                 ssExitCellEditMode();
@@ -2418,6 +2488,9 @@
         }
 
         function onSpreadsheetCellMouseEnter(event, coord) {
+            if (typeof window.ssHandleFormulaPointCellMouseEnter === 'function' && window.ssHandleFormulaPointCellMouseEnter(event, coord)) {
+                return;
+            }
             if (!ssIsMouseDraggingSelection || ssDragSelectMode !== 'cells' || !ssDragStartCoord || !coord) return;
             if (event && event.buttons !== undefined && (event.buttons & 1) === 0) {
                 ssIsMouseDraggingSelection = false;
@@ -2447,6 +2520,13 @@
         function onSpreadsheetColHeaderMouseDown(event, colLetter) {
             if (!colLetter) return;
             if (event && event.target && event.target.classList && event.target.classList.contains('ss-col-resizer')) return;
+            if (typeof window.ssShouldInterceptGridForFormulaPointing === 'function' && window.ssShouldInterceptGridForFormulaPointing()) {
+                const sheetForRef = ssGetActiveSheet();
+                const maxR = sheetForRef.row_count || 25;
+                if (window.ssHandleFormulaPointCellMouseDown(event, `${colLetter}1`, `${colLetter}${maxR}`)) {
+                    return;
+                }
+            }
             if (event) event.preventDefault();
             ssExitCellEditMode();
             ssEnsureGlobalDragMouseUpListener();
@@ -2532,6 +2612,13 @@
             const r = Number(rowNum || 0);
             if (r < 1) return;
             if (event && event.target && event.target.classList && event.target.classList.contains('ss-row-resizer')) return;
+            if (typeof window.ssShouldInterceptGridForFormulaPointing === 'function' && window.ssShouldInterceptGridForFormulaPointing()) {
+                const sheetForRef = ssGetActiveSheet();
+                const maxColL = ssColIdxToLetter((sheetForRef.col_count || 10) - 1);
+                if (window.ssHandleFormulaPointCellMouseDown(event, `A${r}`, `${maxColL}${r}`)) {
+                    return;
+                }
+            }
             if (event) event.preventDefault();
             ssExitCellEditMode();
             ssEnsureGlobalDragMouseUpListener();
@@ -2753,6 +2840,21 @@
         }
 
         function onSpreadsheetCellInput(coord, val) {
+            if (typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
+            if (window.ssFormulaPointState) {
+                if (String(val || '').trimStart().startsWith('=')) {
+                    window.ssFormulaPointState.activeInputId = `ss-cell-${coord}`;
+                    window.ssFormulaPointState.formulaCellCoord = coord;
+                } else {
+                    window.ssFormulaPointState.activeInputId = null;
+                    window.ssFormulaPointState.formulaCellCoord = null;
+                }
+            }
+            if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                window.ssHighlightFormulaReferencedCells(val);
+            }
             const sheet = ssGetActiveSheet();
             if (String(val ?? '') === '') {
                 delete sheet.cells[coord];
@@ -2767,10 +2869,23 @@
         }
 
         function onSpreadsheetCellBlur(coord, inputEl) {
+            if (window.ssFormulaPointState && window.ssFormulaPointState.isDraggingRef) {
+                return;
+            }
             const sheet = ssGetActiveSheet();
             const rawVal = sheet.cells[coord] ?? '';
             if (ssEditingCellCoord === coord) {
                 ssEditingCellCoord = null;
+            }
+            if (typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
+            if (window.ssFormulaPointState) {
+                window.ssFormulaPointState.activeInputId = null;
+                window.ssFormulaPointState.formulaCellCoord = null;
+            }
+            if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                window.ssHighlightFormulaReferencedCells('');
             }
             if (inputEl) {
                 inputEl.readOnly = true;
@@ -2800,6 +2915,21 @@
         }
 
         function onFormulaBarInput(val) {
+            if (typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
+            if (window.ssFormulaPointState) {
+                if (String(val || '').trimStart().startsWith('=')) {
+                    window.ssFormulaPointState.activeInputId = 'ss-formula-bar-input';
+                    window.ssFormulaPointState.formulaCellCoord = activeCellCoord || 'A1';
+                } else {
+                    window.ssFormulaPointState.activeInputId = null;
+                    window.ssFormulaPointState.formulaCellCoord = null;
+                }
+            }
+            if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                window.ssHighlightFormulaReferencedCells(val);
+            }
             const sheet = ssGetActiveSheet();
             if (String(val ?? '') === '') {
                 delete sheet.cells[activeCellCoord];
@@ -2828,8 +2958,32 @@
         }
 
         function onFormulaBarKeyDown(event) {
+            if (event.key === 'F4') {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof window.ssToggleDollarSignOnActiveFormula === 'function') {
+                    window.ssToggleDollarSignOnActiveFormula(event.currentTarget);
+                }
+                return;
+            }
+            if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key) && typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                    window.ssHighlightFormulaReferencedCells('');
+                }
+                event.currentTarget.blur();
+                const wrapper = document.getElementById('ss-grid-scroll-wrapper');
+                if (wrapper) wrapper.focus({ preventScroll: true });
+                return;
+            }
             if (event.key === 'Enter') {
                 event.preventDefault();
+                if (typeof window.ssHighlightFormulaReferencedCells === 'function') {
+                    window.ssHighlightFormulaReferencedCells('');
+                }
                 const sheet = ssGetActiveSheet();
                 const parsed = ssParseCoord(activeCellCoord) || { colIndex: 0, rowNum: 1 };
                 const nextRow = Math.min(sheet.row_count || 25, parsed.rowNum + 1);
@@ -2844,6 +2998,17 @@
 
         function onSpreadsheetCellKeyDown(event, colIdx, rowNum) {
             const sheet = ssGetActiveSheet();
+            if (event.key === 'F4') {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof window.ssToggleDollarSignOnActiveFormula === 'function') {
+                    window.ssToggleDollarSignOnActiveFormula(event.currentTarget);
+                }
+                return;
+            }
+            if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key) && typeof window.ssResetFormulaPointToken === 'function') {
+                window.ssResetFormulaPointToken();
+            }
             if (event.key === 'Escape') {
                 event.preventDefault();
                 ssExitCellEditMode();
@@ -2876,6 +3041,14 @@
         }
 
         function onSpreadsheetGridKeyDown(event) {
+            if (event.key === 'F4') {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof window.ssToggleDollarSignOnActiveFormula === 'function') {
+                    window.ssToggleDollarSignOnActiveFormula();
+                }
+                return;
+            }
             // Do not intercept if the user is typing inside an inline editing cell or input box
             const activeTag = (document.activeElement?.tagName || '').toUpperCase();
             if (ssEditingCellCoord || activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') {

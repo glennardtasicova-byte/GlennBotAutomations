@@ -90,11 +90,15 @@
                 </button>
             </div>
 
-            <!-- Formula / Active Cell Coordinate Bar + Per-Cell Wrap Text Toggle -->
+            <!-- Formula / Active Cell Coordinate Bar + F4 ($) Toggle + Per-Cell Wrap Text Toggle -->
             <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
                 <span id="ss-active-cell-badge" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs min-w-[54px] text-center whitespace-nowrap" title="Active Cell / Selection Count">A1</span>
                 <span class="text-slate-500 font-serif italic font-bold text-sm px-1">fx</span>
-                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type value or Excel formula (=SUM, =IF, =VLOOKUP, =SUMIF, =CONCAT, =PMT... • Image formulas excluded)" class="flex-1 min-w-[160px] bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type value or formula (=SUM, =VLOOKUP, =XLOOKUP, =FILTER, =PMT...) then Click/Drag/Ctrl+Click cells or press F4 ($)" class="flex-1 min-w-[160px] bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <button type="button" id="btn-ss-f4-dollar" onmousedown="event.preventDefault()" onclick="ssToggleDollarSignOnActiveFormula()" class="px-2.5 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/30 border border-purple-400/50 text-purple-300 text-[11px] font-mono font-bold flex items-center gap-1 shrink-0 transition-all" title="Shortcut F4: Cycle Absolute/Relative Cell Reference ($A$1 → A$1 → $A1 → A1)">
+                    <i class="fas fa-dollar-sign text-[10px]"></i>
+                    <span>F4 ($A$1)</span>
+                </button>
                 <button type="button" id="btn-ss-wrap-text" onclick="toggleSpreadsheetWrapText()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold flex items-center gap-1.5 shrink-0 transition-all" title="Toggle Wrap Text on the currently selected cell(s), row(s), or column(s)">
                     <i class="fas fa-align-left"></i>
                     <span id="btn-ss-wrap-text-label">Wrap Text</span>
@@ -107,12 +111,12 @@
             <!-- Excel Controls Quick Guide Bar -->
             <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5 px-2.5 py-1 rounded-lg bg-slate-900/60 border border-slate-800/80 text-[10px] text-slate-400 shrink-0">
                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span><i class="fas fa-mouse-pointer text-gb-cyan mr-1"></i><strong class="text-slate-200">Click &amp; Drag:</strong> Select Range</span>
-                    <span><i class="fas fa-object-group text-gb-cyan mr-1"></i><strong class="text-slate-200">Ctrl+Click:</strong> Multi-Select</span>
+                    <span><i class="fas fa-crosshairs text-purple-400 mr-1"></i><strong class="text-slate-200">In Formula (=):</strong> Click / Drag / Ctrl+Click Cells</span>
+                    <span><i class="fas fa-dollar-sign text-purple-400 mr-1"></i><strong class="text-slate-200">F4 Key:</strong> Toggle <code class="text-purple-300">$A$1</code></span>
+                    <span><i class="fas fa-mouse-pointer text-gb-cyan mr-1"></i><strong class="text-slate-200">Drag / Ctrl+Click:</strong> Select Range / Multi</span>
                     <span><i class="fas fa-i-cursor text-emerald-400 mr-1"></i><strong class="text-slate-200">Double-Click:</strong> Edit Cell</span>
                     <span><i class="fas fa-columns text-gb-cyan mr-1"></i><strong class="text-slate-200">Click A,B,C / 1,2,3:</strong> Select Col / Row</span>
                     <span><i class="fas fa-arrows-alt-h text-amber-400 mr-1"></i><strong class="text-slate-200">Drag Borders:</strong> Resize &amp; Save Size</span>
-                    <span><i class="fas fa-calculator text-purple-400 mr-1"></i><strong class="text-slate-200">Formulas:</strong> All Standard Excel (No Image)</span>
                 </div>
                 <span id="ss-selection-status-pill" class="font-mono text-[10px] text-gb-cyan font-semibold">1 cell selected (A1)</span>
             </div>
