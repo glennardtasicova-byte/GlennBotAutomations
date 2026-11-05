@@ -109,6 +109,14 @@ from services.ai_service import (
 )
 from routers.auth_and_keys import *
 from routers.ai_routes import api_ask_ai
+from routers.email_accounts_routes import (
+    EMAIL_HUB_STATE,
+    _is_placeholder_connected_email,
+    _extract_email_from_composio_item,
+    _get_composio_headers,
+    _composio_execute_tool,
+    _composio_execute_proxy,
+)
 
 router = APIRouter()
 
@@ -248,11 +256,14 @@ def _save_calendar_hub_to_cloudinary():
 def _prune_deprecated_or_placeholder_calendar_accounts():
     """
     Removes deprecated separate `google_meet` / `microsoft_teams` account entries
-    (since Google Calendar = Google Meet and MS Outlook = MS Teams) and purges
-    stale `@connected.account` placeholder rows when a real email row exists.
+    (since Google Calendar = Google Meet and MS Outlook = MS Teams), purges
+    stale `@connected.account` placeholder rows when a real email row exists,
+    and auto-heals any remaining `@connected.account` Google Calendar row to the
+    authenticated Google account email (`glennardtasico@gmail.com`).
     """
     _ensure_calendar_hub_tables()
     to_delete_ids = []
+    healed_records = []
     with CALENDAR_HUB_LOCK:
         current_accounts = list(CALENDAR_HUB_STATE.get("accounts") or [])
         real_providers = {
@@ -274,6 +285,33 @@ def _prune_deprecated_or_placeholder_calendar_accounts():
             if _is_placeholder_connected_email(em) and prov in real_providers:
                 to_delete_ids.append(aid)
                 continue
+            if _is_placeholder_connected_email(em) and prov == "google_calendar":
+                fallback_gm = ""
+                try:
+                    for em_acc in (EMAIL_HUB_STATE.get("accounts") or []):
+                        if isinstance(em_acc, dict) and str(em_acc.get("provider") or "").lower() == "gmail":
+                            cand_gm = str(em_acc.get("email_address") or "").strip().lower()
+                            if "@" in cand_gm and not _is_placeholder_connected_email(cand_gm):
+                                fallback_gm = cand_gm
+                                break
+                except Exception:
+                    pass
+                if not fallback_gm:
+                    try:
+                        gd_state = _load_gdrive_auth_store(force_cloud=False)
+                        cand_gd = str(gd_state.get("connected_email") or "").strip().lower()
+                        if "@" in cand_gd and not _is_placeholder_connected_email(cand_gd):
+                            fallback_gm = cand_gd
+                    except Exception:
+                        pass
+                if not fallback_gm:
+                    fallback_gm = str(os.getenv("ADMIN_GOOGLE_EMAIL") or "glennardtasico@gmail.com").strip().lower()
+                if fallback_gm and "@" in fallback_gm:
+                    em = fallback_gm
+                    a["email_address"] = fallback_gm
+                    if not a.get("display_name") or _is_placeholder_connected_email(a.get("display_name")) or "google_calendar_" in str(a.get("display_name") or ""):
+                        a["display_name"] = fallback_gm.split("@")[0]
+                    healed_records.append(dict(a))
             dedup_key = f"{prov}::{em}"
             if em and not _is_placeholder_connected_email(em) and dedup_key in seen_provider_email:
                 to_delete_ids.append(aid)
@@ -283,13 +321,23 @@ def _prune_deprecated_or_placeholder_calendar_accounts():
             cleaned.append(a)
         CALENDAR_HUB_STATE["accounts"] = cleaned
 
-    if to_delete_ids:
+    if to_delete_ids or healed_records:
         try:
             with db_engine.begin() as conn:
                 for did in to_delete_ids:
                     conn.execute(text("DELETE FROM glennbot_calendar_accounts WHERE id = :id"), {"id": did})
+                for hr in healed_records:
+                    conn.execute(
+                        text("UPDATE glennbot_calendar_accounts SET email_address = :em, display_name = :dn WHERE id = :id"),
+                        {"em": hr["email_address"], "dn": hr.get("display_name") or "", "id": hr["id"]}
+                    )
+                    conn.execute(
+                        text("UPDATE glennbot_calendar_events SET email_address = :em, organizer_email = :em WHERE account_id = :id OR provider = 'google_calendar'"),
+                        {"em": hr["email_address"], "id": hr["id"]}
+                    )
         except Exception as e:
-            print(f"[CalendarHub] Prune deprecated accounts warning: {e}")
+            print(f"[CalendarHub] Prune/heal accounts warning: {e}")
+
 
 
 def _load_calendar_hub_state(force_cloud: bool = False):
@@ -719,6 +767,62 @@ def _get_or_create_calendar_composio_auth_config_id(provider_or_toolkit: str, fo
     return str(cached_map.get(toolkit_slug) or "")
 
 
+def _extract_gcal_owner_email_from_events_payload(d_obj: Any) -> Tuple[str, str]:
+    """
+    Extracts the primary Google Calendar owner's real email address and display name
+    from a Google Calendar v3 `events.list` response (`d_obj["summary"]`, `creator.self`, `organizer.self`).
+    """
+    if not isinstance(d_obj, dict):
+        return ("", "")
+    resolved_em = ""
+    resolved_disp = ""
+
+    top_summary = str(d_obj.get("summary") or "").strip()
+    if "@" in top_summary and not _is_placeholder_connected_email(top_summary):
+        m = re.search(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", top_summary)
+        if m and not _is_placeholder_connected_email(m.group(1)):
+            resolved_em = m.group(1).strip().lower()
+    elif top_summary:
+        resolved_disp = top_summary
+
+    ev_items = d_obj.get("items") if isinstance(d_obj.get("items"), list) else []
+    # Pass 1: Look for creator/organizer explicitly marked with `self: True`
+    if not resolved_em:
+        for ev_it in ev_items:
+            if not isinstance(ev_it, dict):
+                continue
+            for role_key in ("organizer", "creator"):
+                role_obj = ev_it.get(role_key)
+                if isinstance(role_obj, dict) and role_obj.get("self"):
+                    cand_em = str(role_obj.get("email") or "").strip().lower()
+                    if "@" in cand_em and not _is_placeholder_connected_email(cand_em):
+                        resolved_em = cand_em
+                        if not resolved_disp:
+                            resolved_disp = str(role_obj.get("displayName") or "").strip()
+                        break
+            if resolved_em:
+                break
+
+    # Pass 2: Look for any non-group organizer/creator email on the primary calendar
+    if not resolved_em:
+        for ev_it in ev_items:
+            if not isinstance(ev_it, dict):
+                continue
+            for role_key in ("organizer", "creator"):
+                role_obj = ev_it.get(role_key)
+                if isinstance(role_obj, dict):
+                    cand_em = str(role_obj.get("email") or "").strip().lower()
+                    if "@" in cand_em and not _is_placeholder_connected_email(cand_em):
+                        resolved_em = cand_em
+                        if not resolved_disp:
+                            resolved_disp = str(role_obj.get("displayName") or "").strip()
+                        break
+            if resolved_em:
+                break
+
+    return (resolved_em, resolved_disp)
+
+
 def _resolve_real_email_for_calendar_toolkit(tk_slug: str, conn_id: str, entity_id: str, item: dict) -> Tuple[str, str]:
     """
     Resolves the exact user email address and display name for a Composio connected account
@@ -728,41 +832,139 @@ def _resolve_real_email_for_calendar_toolkit(tk_slug: str, conn_id: str, entity_
     if email_addr and not _is_placeholder_connected_email(email_addr):
         return (email_addr, display_name or email_addr.split("@")[0])
 
-    # 1. Google Calendar (`googlecalendar`): `calendar_id="primary"` (snake_case) + `GOOGLECALENDAR_LIST_CALENDARS`
-    if tk_slug == "googlecalendar":
+    # Layer 0: Query single connected_account detail endpoint (`GET /connected_accounts/{conn_id}`)
+    # because the list endpoint often omits nested `data` / `state` / `params` fields.
+    if conn_id:
         try:
-            cal_prof = _composio_execute_tool("GOOGLECALENDAR_GET_CALENDAR", conn_id, entity_id, {"calendar_id": "primary"})
-            d_obj = (cal_prof.get("data") or {}).get("response_data") or cal_prof.get("data") or {}
-            if isinstance(d_obj, dict):
-                cand_id = str(d_obj.get("id") or d_obj.get("summary") or "").strip()
-                if "@" in cand_id and not _is_placeholder_connected_email(cand_id):
-                    email_addr = cand_id.lower()
-                display_name = str(d_obj.get("summary") or display_name or "").strip()
+            r_det = HTTP_SESSION.get(
+                f"{COMPOSIO_BASE_URL}/connected_accounts/{conn_id}",
+                headers=_get_composio_headers(),
+                timeout=10
+            )
+            if r_det.status_code == 200:
+                det_json = r_det.json() or {}
+                det_em, det_disp = _extract_email_from_composio_item(det_json)
+                if det_em and not _is_placeholder_connected_email(det_em):
+                    return (det_em, det_disp or display_name or det_em.split("@")[0])
+                if det_disp and not display_name:
+                    display_name = det_disp
         except Exception:
             pass
 
+    # 1. Google Calendar (`googlecalendar`): Multi-layer resolution
+    if tk_slug == "googlecalendar":
+        # Layer 1A: `GOOGLECALENDAR_EVENTS_LIST` on `calendarId="primary"` (always supported; returns primary calendar `summary` = owner email + `organizer.self` / `creator.self`)
+        try:
+            ev_res = _composio_execute_tool(
+                "GOOGLECALENDAR_EVENTS_LIST",
+                conn_id,
+                entity_id,
+                {"calendarId": "primary", "maxResults": 20, "singleEvents": True}
+            )
+            d_obj = (ev_res.get("data") or {}).get("response_data") or ev_res.get("data") or {}
+            ev_em, ev_disp = _extract_gcal_owner_email_from_events_payload(d_obj)
+            if ev_em and not _is_placeholder_connected_email(ev_em):
+                email_addr = ev_em
+            if ev_disp and not display_name:
+                display_name = ev_disp
+        except Exception:
+            pass
+
+        # Layer 1B: Direct REST proxy to Google Calendar v3 `/calendars/primary` & `/users/me/calendarList/primary` & Google OAuth2 `/userinfo`
+        if not email_addr or _is_placeholder_connected_email(email_addr):
+            for proxy_ep in (
+                "/calendars/primary",
+                "/users/me/calendarList/primary",
+                "https://www.googleapis.com/calendar/v3/calendars/primary",
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+            ):
+                try:
+                    p_res = _composio_execute_proxy(conn_id, entity_id, proxy_ep, "GET")
+                    p_data = (p_res.get("data") or {}).get("response_data") or p_res.get("data") or {}
+                    if isinstance(p_data, dict):
+                        cand_id = str(p_data.get("email") or p_data.get("id") or p_data.get("summary") or "").strip()
+                        if "@" in cand_id and not _is_placeholder_connected_email(cand_id):
+                            email_addr = cand_id.lower()
+                            display_name = str(p_data.get("name") or p_data.get("summaryOverride") or p_data.get("summary") or display_name or "").strip()
+                            break
+                except Exception:
+                    pass
+
+        # Layer 1C: Calendar metadata tools with both camelCase (`calendarId`) and snake_case (`calendar_id`)
+        if not email_addr or _is_placeholder_connected_email(email_addr):
+            for cal_tool in ("GOOGLECALENDAR_GET_CALENDAR", "GOOGLECALENDAR_CALENDARS_GET"):
+                try:
+                    cal_prof = _composio_execute_tool(
+                        cal_tool,
+                        conn_id,
+                        entity_id,
+                        {"calendarId": "primary", "calendar_id": "primary"}
+                    )
+                    d_obj = (cal_prof.get("data") or {}).get("response_data") or cal_prof.get("data") or {}
+                    if isinstance(d_obj, dict):
+                        cand_id = str(d_obj.get("id") or d_obj.get("summary") or "").strip()
+                        if "@" in cand_id and not _is_placeholder_connected_email(cand_id):
+                            email_addr = cand_id.lower()
+                            display_name = str(d_obj.get("summary") or display_name or "").strip()
+                            break
+                except Exception:
+                    pass
+
+        if not email_addr or _is_placeholder_connected_email(email_addr):
+            for list_tool in ("GOOGLECALENDAR_LIST_CALENDARS", "GOOGLECALENDAR_CALENDAR_LIST_LIST"):
+                try:
+                    list_res = _composio_execute_tool(list_tool, conn_id, entity_id, {})
+                    d_obj = (list_res.get("data") or {}).get("response_data") or list_res.get("data") or {}
+                    cal_items = d_obj.get("items") if isinstance(d_obj, dict) else []
+                    if isinstance(cal_items, list):
+                        for c_item in cal_items:
+                            if not isinstance(c_item, dict):
+                                continue
+                            cid = str(c_item.get("id") or "").strip()
+                            if c_item.get("primary") and "@" in cid and not _is_placeholder_connected_email(cid):
+                                email_addr = cid.lower()
+                                display_name = str(c_item.get("summaryOverride") or c_item.get("summary") or display_name or "").strip()
+                                break
+                        if not email_addr:
+                            for c_item in cal_items:
+                                cid = str((c_item or {}).get("id") or "").strip()
+                                if "@" in cid and not _is_placeholder_connected_email(cid):
+                                    email_addr = cid.lower()
+                                    break
+                    if email_addr and not _is_placeholder_connected_email(email_addr):
+                        break
+                except Exception:
+                    pass
+
+        # Layer 1D: Same-workspace authenticated Google account fallback (Gmail Hub / Google Drive OAuth / Admin Google account)
         if not email_addr or _is_placeholder_connected_email(email_addr):
             try:
-                list_res = _composio_execute_tool("GOOGLECALENDAR_LIST_CALENDARS", conn_id, entity_id, {})
-                d_obj = (list_res.get("data") or {}).get("response_data") or list_res.get("data") or {}
-                cal_items = d_obj.get("items") if isinstance(d_obj, dict) else []
-                if isinstance(cal_items, list):
-                    for c_item in cal_items:
-                        if not isinstance(c_item, dict):
-                            continue
-                        cid = str(c_item.get("id") or "").strip()
-                        if c_item.get("primary") and "@" in cid and not cid.endswith("calendar.google.com"):
-                            email_addr = cid.lower()
-                            display_name = str(c_item.get("summaryOverride") or c_item.get("summary") or display_name or "").strip()
+                for em_acc in (EMAIL_HUB_STATE.get("accounts") or []):
+                    if isinstance(em_acc, dict) and str(em_acc.get("provider") or "").lower() == "gmail":
+                        cand_gm = str(em_acc.get("email_address") or "").strip().lower()
+                        if "@" in cand_gm and not _is_placeholder_connected_email(cand_gm):
+                            email_addr = cand_gm
+                            if not display_name:
+                                display_name = str(em_acc.get("display_name") or "").strip()
                             break
-                    if not email_addr:
-                        for c_item in cal_items:
-                            cid = str((c_item or {}).get("id") or "").strip()
-                            if "@" in cid and not cid.endswith("calendar.google.com") and not _is_placeholder_connected_email(cid):
-                                email_addr = cid.lower()
-                                break
             except Exception:
                 pass
+
+        if not email_addr or _is_placeholder_connected_email(email_addr):
+            try:
+                gd_state = _load_gdrive_auth_store(force_cloud=False)
+                gd_em = str(gd_state.get("connected_email") or "").strip().lower()
+                if "@" in gd_em and not _is_placeholder_connected_email(gd_em):
+                    email_addr = gd_em
+            except Exception:
+                pass
+
+        if not email_addr or _is_placeholder_connected_email(email_addr):
+            admin_em = str(os.getenv("ADMIN_GOOGLE_EMAIL") or "glennardtasico@gmail.com").strip().lower()
+            if "@" in admin_em:
+                email_addr = admin_em
+                if not display_name:
+                    display_name = "Glennard Tasico"
 
     # 2. Microsoft Outlook & Teams (`outlook`): `OUTLOOK_OUTLOOK_GET_PROFILE`
     elif tk_slug == "outlook":
@@ -1400,6 +1602,18 @@ def _sync_external_composio_calendar_events(month: Optional[int] = None, year: O
                     d_obj = (res.get("data") or {}).get("response_data") or res.get("data") or {}
                     items = d_obj.get("items") if isinstance(d_obj, dict) else None
                     if res.get("successful", False) and isinstance(items, list):
+                        # Auto-heal account email if it was previously saved with a `@connected.account` placeholder
+                        if _is_placeholder_connected_email(acc_email):
+                            healed_em, healed_disp = _extract_gcal_owner_email_from_events_payload(d_obj)
+                            if not healed_em or _is_placeholder_connected_email(healed_em):
+                                healed_em, healed_disp = _resolve_real_email_for_calendar_toolkit("googlecalendar", conn_id, entity_id, {})
+                            if healed_em and not _is_placeholder_connected_email(healed_em):
+                                acc_email = healed_em
+                                acc["email_address"] = healed_em
+                                if healed_disp:
+                                    acc["display_name"] = healed_disp
+                                _upsert_calendar_account_in_db(acc, sync_cloud=False)
+
                         deleted_ext_set = set(CALENDAR_HUB_STATE.get("deleted_external_ids") or set())
                         live_gcal_ext_ids = set()
                         for item in items:

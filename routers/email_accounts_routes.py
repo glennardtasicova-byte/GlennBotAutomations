@@ -189,14 +189,23 @@ EMAIL_HUB_LOCK = threading.Lock()
 def _is_placeholder_connected_email(em: Any) -> bool:
     """
     Returns True if an email string is empty, lacks '@', or is a fallback placeholder
-    like 'gmail_connected_0Pyole@connected.account' or '@connected.local'.
+    like 'gmail_connected_0Pyole@connected.account', 'google_calendar_9uipjg@connected.account',
+    or a Google group/holiday calendar ID ('...calendar.google.com').
     """
     clean = str(em or "").strip().lower()
     if not clean or "@" not in clean:
         return True
-    if clean.endswith("@connected.account") or clean.endswith("@connected.local"):
+    if (
+        clean.endswith("@connected.account")
+        or clean.endswith("@connected.local")
+        or clean.endswith("calendar.google.com")
+    ):
         return True
-    if clean.startswith("gmail_connected_") or clean.startswith("microsoft_connected_"):
+    if (
+        clean.startswith("gmail_connected_")
+        or clean.startswith("microsoft_connected_")
+        or re.match(r"^(?:google_calendar|outlook_calendar|zoom)_[a-z0-9]+@connected\.", clean)
+    ):
         return True
     return False
 
@@ -205,8 +214,8 @@ def _extract_email_from_composio_item(item: dict) -> Tuple[str, str]:
     """
     Extracts the real authenticated email address and display name directly from a Composio
     connected_account object (`item["data"]["displayName"]`, `email`, `userPrincipalName`, etc.)
-    BEFORE making any external Gmail/Microsoft API call.
-    This guarantees that even when Gmail API is temporarily rate-limited (HTTP 429),
+    BEFORE making any external Gmail/Microsoft/Google Calendar API call.
+    This guarantees that even when an API is temporarily rate-limited (HTTP 429),
     connecting or reconnecting an account still resolves the real email address!
     """
     if not isinstance(item, dict):
@@ -214,6 +223,8 @@ def _extract_email_from_composio_item(item: dict) -> Tuple[str, str]:
     data_obj = item.get("data") if isinstance(item.get("data"), dict) else {}
     state_val = ((item.get("state") or {}).get("val") or {}) if isinstance(item.get("state"), dict) else {}
     params_obj = item.get("params") if isinstance(item.get("params"), dict) else {}
+    conn_params = item.get("connectionParams") if isinstance(item.get("connectionParams"), dict) else {}
+    member_obj = item.get("member") if isinstance(item.get("member"), dict) else {}
 
     candidate_fields = [
         data_obj.get("email"),
@@ -221,28 +232,41 @@ def _extract_email_from_composio_item(item: dict) -> Tuple[str, str]:
         data_obj.get("userPrincipalName"),
         data_obj.get("mail"),
         data_obj.get("displayName"),
+        data_obj.get("id"),
         item.get("alias"),
+        item.get("email"),
         state_val.get("email"),
         state_val.get("emailAddress"),
+        state_val.get("userPrincipalName"),
         state_val.get("displayName"),
         params_obj.get("email"),
         params_obj.get("emailAddress"),
+        conn_params.get("email"),
+        conn_params.get("emailAddress"),
+        member_obj.get("email"),
     ]
     resolved_email = ""
     for cand in candidate_fields:
         c_str = str(cand or "").strip()
         if c_str and "@" in c_str and not _is_placeholder_connected_email(c_str):
             m = re.search(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", c_str)
-            if m:
+            if m and not _is_placeholder_connected_email(m.group(1)):
                 resolved_email = m.group(1).strip().lower()
                 break
 
-    raw_disp = str(data_obj.get("name") or data_obj.get("displayName") or "").strip()
+    raw_disp = str(
+        data_obj.get("name")
+        or data_obj.get("displayName")
+        or state_val.get("name")
+        or state_val.get("displayName")
+        or ""
+    ).strip()
     if raw_disp and "@" in raw_disp:
         raw_disp = raw_disp.split("@")[0].strip()
     if not raw_disp and resolved_email:
         raw_disp = resolved_email.split("@")[0].strip()
     return (resolved_email, raw_disp)
+
 
 
 def _ensure_email_accounts_table():

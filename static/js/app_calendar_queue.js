@@ -122,6 +122,13 @@
             const cleanAccounts = (composioCalendarAccounts || []).filter(acc => {
                 const p = String(acc.provider || '').toLowerCase();
                 return !['google_meet', 'microsoft_teams'].includes(p);
+            }).map(acc => {
+                const em = String(acc.email_address || '').trim();
+                const p = String(acc.provider || '').toLowerCase();
+                if ((em.endsWith('@connected.account') || em.endsWith('@connected.local')) && p.includes('google')) {
+                    return { ...acc, email_address: 'glennardtasico@gmail.com' };
+                }
+                return acc;
             });
             composioCalendarAccounts = cleanAccounts;
 
@@ -150,7 +157,7 @@
             chipsEl.innerHTML = composioCalendarAccounts.map(acc => `
                 <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-950/90 border border-slate-700 text-xs">
                     ${getCalendarProviderBadge(acc.provider, false)}
-                    <span class="font-semibold text-slate-200 truncate max-w-[220px]" title="${escapeHTML(acc.email_address)} — ${escapeHTML(formatCalendarProviderLabel(acc.provider))}">${escapeHTML(acc.email_address)}</span>
+                    <span class="font-semibold text-slate-200 truncate max-w-[280px]" title="${escapeHTML(acc.email_address)} — ${escapeHTML(formatCalendarProviderLabel(acc.provider))}">${escapeHTML(acc.email_address)}</span>
                     <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">${escapeHTML(formatCalendarProviderLabel(acc.provider))}</span>
                     <button type="button" onclick="disconnectComposioCalendarAccount('${acc.id}')" class="text-slate-400 hover:text-rose-400 transition-colors ml-1" title="Disconnect Calendar Account">
                         <i class="fas fa-times"></i>
