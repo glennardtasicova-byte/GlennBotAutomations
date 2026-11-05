@@ -90,23 +90,35 @@
                 </button>
             </div>
 
-            <!-- Formula / Active Cell Coordinate Bar + Wrap Text Toggle -->
-            <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
-                <span id="ss-active-cell-badge" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs min-w-[48px] text-center">A1</span>
+            <!-- Formula / Active Cell Coordinate Bar + Per-Cell Wrap Text Toggle -->
+            <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shrink-0">
+                <span id="ss-active-cell-badge" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs min-w-[54px] text-center whitespace-nowrap" title="Active Cell / Selection Count">A1</span>
                 <span class="text-slate-500 font-serif italic font-bold text-sm px-1">fx</span>
-                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Type cell value or formula (e.g. =SUM(A1:A10), =AVERAGE(B1:B5))..." class="flex-1 min-w-[160px] bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
-                <button type="button" id="btn-ss-wrap-text" onclick="toggleSpreadsheetWrapText()" class="px-2.5 py-1 rounded-lg bg-gb-cyan/20 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition-all shadow-[0_0_10px_rgba(0,240,255,0.18)]" title="Toggle Wrap Text so long cell contents expand and display in full without cutting off">
+                <input type="text" id="ss-formula-bar-input" oninput="onFormulaBarInput(this.value)" onkeydown="onFormulaBarKeyDown(event)" placeholder="Select cell(s) or double-click a cell to edit • Type value or formula (=SUM(A1:A10))..." class="flex-1 min-w-[160px] bg-slate-950 border border-slate-700 focus:border-gb-cyan rounded-lg px-3 py-1 text-xs text-white font-mono focus:outline-none">
+                <button type="button" id="btn-ss-wrap-text" onclick="toggleSpreadsheetWrapText()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold flex items-center gap-1.5 shrink-0 transition-all" title="Toggle Wrap Text on the currently selected cell(s), row(s), or column(s)">
                     <i class="fas fa-align-left"></i>
-                    <span id="btn-ss-wrap-text-label">Wrap Text: ON</span>
+                    <span id="btn-ss-wrap-text-label">Wrap Text</span>
                 </button>
                 <button type="button" onclick="clearActiveSheetCells()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-slate-300 hover:text-rose-200 text-[11px] font-semibold shrink-0" title="Clear all cells in current sheet">
                     <i class="fas fa-eraser mr-1"></i>Clear Sheet
                 </button>
             </div>
 
+            <!-- Excel Controls Quick Guide Bar -->
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5 px-2.5 py-1 rounded-lg bg-slate-900/60 border border-slate-800/80 text-[10px] text-slate-400 shrink-0">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span><i class="fas fa-mouse-pointer text-gb-cyan mr-1"></i><strong class="text-slate-200">Click:</strong> Select Cell</span>
+                    <span><i class="fas fa-object-group text-gb-cyan mr-1"></i><strong class="text-slate-200">Ctrl + Click:</strong> Multi-Select Cells</span>
+                    <span><i class="fas fa-i-cursor text-emerald-400 mr-1"></i><strong class="text-slate-200">Double-Click:</strong> Edit Cell</span>
+                    <span><i class="fas fa-columns text-gb-cyan mr-1"></i><strong class="text-slate-200">Click A,B,C / 1,2,3:</strong> Select All in Col / Row</span>
+                    <span><i class="fas fa-arrows-alt-h text-amber-400 mr-1"></i><strong class="text-slate-200">Drag Col/Row Borders:</strong> Resize Width &amp; Height</span>
+                </div>
+                <span id="ss-selection-status-pill" class="font-mono text-[10px] text-gb-cyan font-semibold">1 cell selected (A1)</span>
+            </div>
+
             <!-- Main Spreadsheet Grid (Columns A, B, C, D... x Rows 1, 2, 3, 4...) -->
-            <div id="ss-grid-scroll-wrapper" class="flex-1 min-h-0 overflow-auto rounded-xl border border-slate-700/90 bg-slate-950/90 relative">
-                <table id="ss-grid-table" class="border-collapse select-none min-w-full text-xs">
+            <div id="ss-grid-scroll-wrapper" tabindex="0" onkeydown="onSpreadsheetGridKeyDown(event)" class="flex-1 min-h-0 overflow-auto rounded-xl border border-slate-700/90 bg-slate-950/90 relative focus:outline-none">
+                <table id="ss-grid-table" class="border-collapse select-none text-xs" style="table-layout: fixed;">
                     <!-- Rendered dynamically by renderSpreadsheetGrid() -->
                 </table>
             </div>

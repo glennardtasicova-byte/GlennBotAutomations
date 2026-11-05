@@ -370,10 +370,59 @@ body.gb-theme-light #ss-grid-table textarea {
     color: #0f172a !important;
 }
 
-/* Spreadsheet Wrap Text Auto-Expanding Cell Grid */
+/* Spreadsheet Per-Cell Wrap Text, Drag Resizers, Multi-Select & Double-Click Edit */
+#ss-grid-table {
+    table-layout: fixed;
+}
+#ss-grid-table td.ss-data-cell {
+    cursor: cell;
+    position: relative;
+    transition: background-color 0.1s ease;
+}
+#ss-grid-table td.ss-cell-selected {
+    background-color: rgba(0, 240, 255, 0.12) !important;
+    box-shadow: inset 0 0 0 1px rgba(0, 240, 255, 0.55);
+}
+#ss-grid-table td.ss-cell-active {
+    background-color: rgba(0, 240, 255, 0.16) !important;
+    box-shadow: inset 0 0 0 2px #00f0ff !important;
+    z-index: 10;
+}
+#ss-grid-table td.ss-cell-editing-td {
+    background-color: rgba(16, 185, 129, 0.14) !important;
+    box-shadow: inset 0 0 0 2px #10b981, 0 0 12px rgba(16, 185, 129, 0.25) !important;
+    z-index: 15;
+    cursor: text;
+}
+.ss-cell-input-locked {
+    pointer-events: none !important;
+    user-select: none !important;
+    cursor: cell !important;
+}
+.ss-cell-input-editing {
+    pointer-events: auto !important;
+    user-select: text !important;
+    cursor: text !important;
+}
+.ss-unwrap-cell-input {
+    width: 100%;
+    height: 100%;
+    min-height: 28px;
+    padding: 4px 8px;
+    background: transparent;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: none;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+}
 .ss-wrap-cell-grid {
     display: grid;
     width: 100%;
+    height: 100%;
     min-height: 28px;
     align-items: stretch;
 }
@@ -408,4 +457,44 @@ body.gb-theme-light #ss-grid-table textarea {
     outline: none;
     font-family: 'Inter', sans-serif;
 }
-
+/* Column & Row Manual Drag Resizer Handles */
+.ss-col-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 35;
+    user-select: none;
+}
+.ss-col-resizer:hover,
+.ss-col-resizer.ss-resizing-active {
+    background-color: rgba(0, 240, 255, 0.65);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.6);
+}
+.ss-row-resizer {
+    position: absolute;
+    left: 0;
+    bottom: -3px;
+    width: 100%;
+    height: 7px;
+    cursor: row-resize;
+    z-index: 25;
+    user-select: none;
+}
+.ss-row-resizer:hover,
+.ss-row-resizer.ss-resizing-active {
+    background-color: rgba(0, 240, 255, 0.65);
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.6);
+}
+body.ss-is-resizing-col,
+body.ss-is-resizing-col * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+body.ss-is-resizing-row,
+body.ss-is-resizing-row * {
+    cursor: row-resize !important;
+    user-select: none !important;
+}

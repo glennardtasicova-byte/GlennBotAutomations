@@ -1493,6 +1493,24 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                                 prefer_live_sheets_export=prefer_sheets_live
                             )
                             if fresh_sheets:
+                                old_sheets_list = list(wb.get("sheets") or [])
+                                for idx_fs, fs_item in enumerate(fresh_sheets):
+                                    if not isinstance(fs_item, dict):
+                                        continue
+                                    matched_old = next(
+                                        (
+                                            os_item for os_item in old_sheets_list
+                                            if isinstance(os_item, dict) and str(os_item.get("name") or "") == str(fs_item.get("name") or "")
+                                        ),
+                                        old_sheets_list[idx_fs] if idx_fs < len(old_sheets_list) and isinstance(old_sheets_list[idx_fs], dict) else None
+                                    )
+                                    if matched_old:
+                                        if isinstance(matched_old.get("wrap_cells"), dict):
+                                            fs_item["wrap_cells"] = dict(matched_old["wrap_cells"])
+                                        if isinstance(matched_old.get("col_widths"), dict):
+                                            fs_item["col_widths"] = dict(matched_old["col_widths"])
+                                        if isinstance(matched_old.get("row_heights"), dict):
+                                            fs_item["row_heights"] = dict(matched_old["row_heights"])
                                 old_sig = _compute_sheets_signature(wb.get("sheets"))
                                 new_sig = _compute_sheets_signature(fresh_sheets)
                                 if new_sig != old_sig or is_meta_modified:
@@ -1714,7 +1732,10 @@ async def api_save_spreadsheet_to_gdrive(request: Request):
             "name": s_name,
             "row_count": max(10, min(int(sh.get("row_count") or 25), 500)),
             "col_count": max(5, min(int(sh.get("col_count") or 10), 52)),
-            "cells": s_cells
+            "cells": s_cells,
+            "wrap_cells": dict(sh.get("wrap_cells") or {}) if isinstance(sh.get("wrap_cells"), dict) else {},
+            "col_widths": dict(sh.get("col_widths") or {}) if isinstance(sh.get("col_widths"), dict) else {},
+            "row_heights": dict(sh.get("row_heights") or {}) if isinstance(sh.get("row_heights"), dict) else {},
         })
 
     def _sync_save_to_gdrive():
