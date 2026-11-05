@@ -541,10 +541,21 @@
         let currentSpreadsheetWorkbook = createBlankSpreadsheetWorkbookState();
         let activeSheetIndex = 0;
         let activeCellCoord = 'A1';
+        let ssSelectionAnchorCoord = 'A1';
         let ssSelectedCells = new Set(['A1']);
         let ssSelectedCols = new Set();
         let ssSelectedRows = new Set();
         let ssEditingCellCoord = null;
+        let ssIsMouseDraggingSelection = false;
+        let ssDragSelectMode = null; // 'cells' | 'cols' | 'rows'
+        let ssDragStartCoord = null;
+        let ssDragStartColIdx = null;
+        let ssDragStartRowNum = null;
+        let ssDragBaseSelectedCells = null;
+        let ssDragBaseSelectedCols = null;
+        let ssDragBaseSelectedRows = null;
+        let ssDragMouseUpAttached = false;
+        let ssLayoutSaveTimer = null;
         let spreadsheetInitialized = false;
         let ssAutoSyncPushTimer = null;
         let ssAutoSyncPullInterval = null;
@@ -553,22 +564,48 @@
         let ssFocusListenersAttached = false;
         let lastSyncedSpreadsheetSignature = '';
 
-        function ssGetWorkbookLayoutStorageKey(sheetName) {
-            const wbKey = String(currentSpreadsheetWorkbook?.workbook_id || currentSpreadsheetWorkbook?.file_id || currentSpreadsheetWorkbook?.title || 'blank_wb').trim();
+        function ssGetWorkbookLayoutStorageKeys(sheetName) {
             const shKey = String(sheetName || 'Sheet1').trim();
-            return `gb_ss_layout_v2::${wbKey}::${shKey}`;
+            const keys = [];
+            const wbId = String(currentSpreadsheetWorkbook?.workbook_id || '').trim();
+            const fId = String(currentSpreadsheetWorkbook?.file_id || '').trim();
+            const title = String(currentSpreadsheetWorkbook?.title || 'Untitled_Spreadsheet.xlsx').trim();
+            if (wbId) keys.push(`gb_ss_layout_v2::${wbId}::${shKey}`);
+            if (fId) keys.push(`gb_ss_layout_v2::${fId}::${shKey}`);
+            if (title) keys.push(`gb_ss_layout_v2::${title}::${shKey}`);
+            keys.push(`gb_ss_layout_v2::blank_wb::${shKey}`);
+            return Array.from(new Set(keys));
         }
 
         function ssSaveSheetLayoutToLocalCache(sheet) {
             if (!sheet) return;
             try {
-                const payload = {
+                const payload = JSON.stringify({
                     wrap_cells: sheet.wrap_cells || {},
                     col_widths: sheet.col_widths || {},
                     row_heights: sheet.row_heights || {}
-                };
-                localStorage.setItem(ssGetWorkbookLayoutStorageKey(sheet.name), JSON.stringify(payload));
+                });
+                ssGetWorkbookLayoutStorageKeys(sheet.name).forEach(k => {
+                    localStorage.setItem(k, payload);
+                });
             } catch (_) {}
+            // Also persist layout asynchronously to Python backend store
+            if (ssLayoutSaveTimer) clearTimeout(ssLayoutSaveTimer);
+            ssLayoutSaveTimer = setTimeout(async () => {
+                ssLayoutSaveTimer = null;
+                try {
+                    await fetch('/api/spreadsheets/save-layout', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            workbook_id: currentSpreadsheetWorkbook?.workbook_id || '',
+                            file_id: currentSpreadsheetWorkbook?.file_id || '',
+                            title: currentSpreadsheetWorkbook?.title || '',
+                            sheets: currentSpreadsheetWorkbook?.sheets || []
+                        })
+                    });
+                } catch (_) {}
+            }, 350);
         }
 
         function ssRestoreSheetLayoutFromLocalCache(sheet) {
@@ -577,18 +614,22 @@
             sheet.col_widths = (sheet.col_widths && typeof sheet.col_widths === 'object') ? sheet.col_widths : {};
             sheet.row_heights = (sheet.row_heights && typeof sheet.row_heights === 'object') ? sheet.row_heights : {};
             try {
-                const raw = localStorage.getItem(ssGetWorkbookLayoutStorageKey(sheet.name));
-                if (!raw) return;
-                const parsed = JSON.parse(raw);
-                if (parsed && typeof parsed === 'object') {
-                    if (Object.keys(sheet.wrap_cells).length === 0 && parsed.wrap_cells && typeof parsed.wrap_cells === 'object') {
-                        sheet.wrap_cells = { ...parsed.wrap_cells };
-                    }
-                    if (Object.keys(sheet.col_widths).length === 0 && parsed.col_widths && typeof parsed.col_widths === 'object') {
-                        sheet.col_widths = { ...parsed.col_widths };
-                    }
-                    if (Object.keys(sheet.row_heights).length === 0 && parsed.row_heights && typeof parsed.row_heights === 'object') {
-                        sheet.row_heights = { ...parsed.row_heights };
+                const keys = ssGetWorkbookLayoutStorageKeys(sheet.name);
+                for (let i = 0; i < keys.length; i++) {
+                    const raw = localStorage.getItem(keys[i]);
+                    if (!raw) continue;
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') {
+                        if (Object.keys(sheet.wrap_cells).length === 0 && parsed.wrap_cells && typeof parsed.wrap_cells === 'object') {
+                            sheet.wrap_cells = { ...parsed.wrap_cells };
+                        }
+                        if (Object.keys(sheet.col_widths).length === 0 && parsed.col_widths && typeof parsed.col_widths === 'object') {
+                            sheet.col_widths = { ...parsed.col_widths };
+                        }
+                        if (Object.keys(sheet.row_heights).length === 0 && parsed.row_heights && typeof parsed.row_heights === 'object') {
+                            sheet.row_heights = { ...parsed.row_heights };
+                        }
+                        break;
                     }
                 }
             } catch (_) {}
@@ -733,7 +774,10 @@
                     });
                     return {
                         name: s.name || 'Sheet1',
-                        cells: normCells
+                        cells: normCells,
+                        wrap_cells: s.wrap_cells || {},
+                        col_widths: s.col_widths || {},
+                        row_heights: s.row_heights || {}
                     };
                 }));
             } catch (_) {
@@ -814,46 +858,896 @@
             return sheet;
         }
 
+        const SS_BLOCKED_IMAGE_FORMULAS = new Set([
+            'IMAGE', 'SPARKLINE', 'IMPORTIMAGE', 'EMBEDIMAGE', 'WEBIMAGE', 'PICTURE'
+        ]);
+
+        function ssIsBlockedImageFormula(rawStr) {
+            const s = String(rawStr || '').trim();
+            if (!s.startsWith('=')) return false;
+            const expr = s.slice(1).trim();
+            const re = /\b([A-Za-z_][A-Za-z0-9_.]*)\s*\(/g;
+            let m;
+            while ((m = re.exec(expr)) !== null) {
+                const fn = m[1].toUpperCase();
+                if (SS_BLOCKED_IMAGE_FORMULAS.has(fn) || fn.includes('IMAGE')) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function ssSplitFormulaArgs(argsStr) {
+            const args = [];
+            let cur = '';
+            let depth = 0;
+            let inQuotes = false;
+            for (let i = 0; i < argsStr.length; i++) {
+                const ch = argsStr[i];
+                if (ch === '"') {
+                    if (inQuotes && i + 1 < argsStr.length && argsStr[i + 1] === '"') {
+                        cur += '"';
+                        i++;
+                        continue;
+                    }
+                    inQuotes = !inQuotes;
+                    cur += ch;
+                } else if (!inQuotes) {
+                    if (ch === '(') {
+                        depth++;
+                        cur += ch;
+                    } else if (ch === ')') {
+                        depth = Math.max(0, depth - 1);
+                        cur += ch;
+                    } else if ((ch === ',' || ch === ';') && depth === 0) {
+                        args.push(cur.trim());
+                        cur = '';
+                    } else {
+                        cur += ch;
+                    }
+                } else {
+                    cur += ch;
+                }
+            }
+            if (cur.trim() !== '' || /[,;]\s*$/.test(argsStr)) {
+                args.push(cur.trim());
+            }
+            return args;
+        }
+
+        function ssFormatFormulaNumber(val) {
+            if (!Number.isFinite(val)) return '#NUM!';
+            if (Math.abs(val - Math.round(val)) < 1e-9) return String(Math.round(val));
+            return String(Number(val.toFixed(6)));
+        }
+
+        function ssMatchesExcelCriteria(cellVal, criteriaRaw) {
+            let critStr = String(criteriaRaw ?? '').trim();
+            if (critStr.length >= 2 && critStr.startsWith('"') && critStr.endsWith('"')) {
+                critStr = critStr.slice(1, -1);
+            }
+            const cStr = String(cellVal ?? '').trim();
+            let op = '=';
+            let rhs = critStr;
+            for (const p of ['<>', '>=', '<=', '>', '<', '=']) {
+                if (critStr.startsWith(p)) {
+                    op = p;
+                    rhs = critStr.slice(p.length).trim();
+                    break;
+                }
+            }
+            const lhsNum = cStr !== '' ? Number(cStr.replace(/,/g, '')) : NaN;
+            const rhsNum = rhs !== '' ? Number(rhs.replace(/,/g, '')) : NaN;
+            if (Number.isFinite(lhsNum) && Number.isFinite(rhsNum)) {
+                if (op === '=') return Math.abs(lhsNum - rhsNum) < 1e-9;
+                if (op === '<>') return Math.abs(lhsNum - rhsNum) >= 1e-9;
+                if (op === '>') return lhsNum > rhsNum;
+                if (op === '<') return lhsNum < rhsNum;
+                if (op === '>=') return lhsNum >= rhsNum;
+                if (op === '<=') return lhsNum <= rhsNum;
+            }
+            const lhsL = cStr.toLowerCase();
+            const rhsL = rhs.toLowerCase();
+            if ((op === '=' || op === '<>') && (rhsL.includes('*') || rhsL.includes('?'))) {
+                const escaped = rhsL.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+                const matched = new RegExp(`^${escaped}$`, 'i').test(lhsL);
+                return op === '=' ? matched : !matched;
+            }
+            if (op === '=') return lhsL === rhsL;
+            if (op === '<>') return lhsL !== rhsL;
+            if (op === '>') return lhsL > rhsL;
+            if (op === '<') return lhsL < rhsL;
+            if (op === '>=') return lhsL >= rhsL;
+            if (op === '<=') return lhsL <= rhsL;
+            return false;
+        }
+
         function ssEvaluateCellDisplay(rawVal, cellsMap, depth = 0) {
             const str = ssNormalizeCellValue(rawVal ?? '');
-            if (!str.startsWith('=') || depth > 4) return str;
+            if (!str.startsWith('=')) return str;
+            if (depth > 8) return '#REF!';
             const expr = str.slice(1).trim();
+            if (!expr) return '';
 
-            const resolveNum = (ref) => {
-                const v = ssEvaluateCellDisplay(cellsMap[String(ref).toUpperCase()] || '', cellsMap, depth + 1);
-                const num = Number(v);
-                return Number.isFinite(num) ? num : 0;
+            if (ssIsBlockedImageFormula(str)) {
+                return '#IMAGE_FORMULA_NOT_ALLOWED!';
+            }
+
+            const getCellEval = (coordStr) => {
+                const clean = String(coordStr || '').replace(/\$/g, '').trim().toUpperCase();
+                return ssEvaluateCellDisplay(cellsMap[clean] || '', cellsMap, depth + 1);
             };
 
-            const expandRange = (startRef, endRef) => {
-                const s = ssParseCoord(startRef);
-                const e = ssParseCoord(endRef);
+            const toFloat = (v, fallback = 0) => {
+                if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
+                const sv = String(v ?? '').trim();
+                if (sv.toUpperCase() === 'TRUE') return 1;
+                if (sv.toUpperCase() === 'FALSE') return 0;
+                if (!sv) return fallback;
+                const clean = sv.replace(/[$₱€£¥,\s]/g, '');
+                if (clean.endsWith('%')) {
+                    const p = Number(clean.slice(0, -1));
+                    return Number.isFinite(p) ? p / 100 : fallback;
+                }
+                const n = Number(clean);
+                return Number.isFinite(n) ? n : fallback;
+            };
+
+            const toBool = (v) => {
+                if (typeof v === 'boolean') return v;
+                const sv = String(v ?? '').trim().toUpperCase();
+                if (sv === 'TRUE' || sv === '1' || sv === 'YES') return true;
+                if (sv === 'FALSE' || sv === '0' || sv === '' || sv === 'NO') return false;
+                const n = toFloat(sv, null);
+                return n !== null ? Boolean(n) : true;
+            };
+
+            const expandRangeCoords = (rangeStr) => {
+                const clean = String(rangeStr || '').replace(/\$/g, '').trim();
+                const parts = clean.split(':');
+                if (parts.length !== 2) return [];
+                const s = ssParseCoord(parts[0]);
+                const e = ssParseCoord(parts[1]);
                 if (!s || !e) return [];
-                const vals = [];
                 const cMin = Math.min(s.colIndex, e.colIndex);
                 const cMax = Math.max(s.colIndex, e.colIndex);
                 const rMin = Math.min(s.rowNum, e.rowNum);
                 const rMax = Math.max(s.rowNum, e.rowNum);
+                const matrix = [];
                 for (let r = rMin; r <= rMax; r++) {
+                    const row = [];
                     for (let c = cMin; c <= cMax; c++) {
-                        vals.push(resolveNum(`${ssColIdxToLetter(c)}${r}`));
+                        row.push(`${ssColIdxToLetter(c)}${r}`);
                     }
+                    matrix.push(row);
                 }
-                return vals;
+                return matrix;
             };
 
-            const fnMatch = /^(SUM|AVERAGE|AVG|MIN|MAX|COUNT)\(([A-Za-z]+\d+):([A-Za-z]+\d+)\)$/i.exec(expr);
-            if (fnMatch) {
-                const fn = fnMatch[1].toUpperCase();
-                const nums = expandRange(fnMatch[2], fnMatch[3]);
-                if (nums.length === 0) return '0';
-                if (fn === 'SUM') return String(nums.reduce((a, b) => a + b, 0));
-                if (fn === 'AVERAGE' || fn === 'AVG') return String(Number((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(4)));
-                if (fn === 'MIN') return String(Math.min(...nums));
-                if (fn === 'MAX') return String(Math.max(...nums));
-                if (fn === 'COUNT') return String(nums.length);
+            const expandArgValues = (argExpr) => {
+                const aClean = String(argExpr || '').trim();
+                if (/^\$?[A-Za-z]+\$?\d+:\$?[A-Za-z]+\$?\d+$/.test(aClean)) {
+                    const mat = expandRangeCoords(aClean);
+                    const out = [];
+                    mat.forEach(row => row.forEach(c => out.push(getCellEval(c))));
+                    return out;
+                }
+                return [String(evalExpr(aClean))];
+            };
+
+            const expandArgNumbers = (argExpr) => {
+                const aClean = String(argExpr || '').trim();
+                if (/^\$?[A-Za-z]+\$?\d+:\$?[A-Za-z]+\$?\d+$/.test(aClean)) {
+                    const mat = expandRangeCoords(aClean);
+                    const nums = [];
+                    mat.forEach(row => row.forEach(c => {
+                        const rawCell = String(cellsMap[c] ?? '').trim();
+                        if (!rawCell) return;
+                        const fv = toFloat(getCellEval(c), null);
+                        if (fv !== null) nums.push(fv);
+                    }));
+                    return nums;
+                }
+                if (/^\$?[A-Za-z]+\$?\d+$/.test(aClean)) {
+                    const fv = toFloat(getCellEval(aClean), null);
+                    return fv !== null ? [fv] : [];
+                }
+                const fv = toFloat(evalExpr(aClean), null);
+                return fv !== null ? [fv] : [];
+            };
+
+            const evalFunction = (fnName, rawArgs) => {
+                const fn = String(fnName || '').toUpperCase().replace(/^_XLFN\./, '');
+                if (SS_BLOCKED_IMAGE_FORMULAS.has(fn) || fn.includes('IMAGE')) {
+                    return '#IMAGE_FORMULA_NOT_ALLOWED!';
+                }
+
+                // --- LOGICAL ---
+                if (fn === 'TRUE') return 'TRUE';
+                if (fn === 'FALSE') return 'FALSE';
+                if (fn === 'IF') {
+                    if (!rawArgs.length) return '#VALUE!';
+                    const cond = toBool(evalExpr(rawArgs[0]));
+                    if (cond) return rawArgs.length > 1 ? evalExpr(rawArgs[1]) : 'TRUE';
+                    return rawArgs.length > 2 ? evalExpr(rawArgs[2]) : 'FALSE';
+                }
+                if (fn === 'IFS') {
+                    for (let i = 0; i + 1 < rawArgs.length; i += 2) {
+                        if (toBool(evalExpr(rawArgs[i]))) return evalExpr(rawArgs[i + 1]);
+                    }
+                    return '#N/A';
+                }
+                if (fn === 'IFERROR') {
+                    if (!rawArgs.length) return '';
+                    const v = String(evalExpr(rawArgs[0]));
+                    return v.startsWith('#') ? (rawArgs.length > 1 ? evalExpr(rawArgs[1]) : '') : v;
+                }
+                if (fn === 'IFNA') {
+                    if (!rawArgs.length) return '';
+                    const v = String(evalExpr(rawArgs[0]));
+                    return v === '#N/A' ? (rawArgs.length > 1 ? evalExpr(rawArgs[1]) : '') : v;
+                }
+                if (fn === 'AND') {
+                    const vals = rawArgs.flatMap(a => expandArgValues(a)).filter(v => String(v).trim() !== '');
+                    return vals.length && vals.every(v => toBool(v)) ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'OR') {
+                    const vals = rawArgs.flatMap(a => expandArgValues(a)).filter(v => String(v).trim() !== '');
+                    return vals.some(v => toBool(v)) ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'XOR') {
+                    const vals = rawArgs.flatMap(a => expandArgValues(a)).filter(v => String(v).trim() !== '');
+                    const trues = vals.filter(v => toBool(v)).length;
+                    return trues % 2 === 1 ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'NOT') {
+                    return rawArgs.length && toBool(evalExpr(rawArgs[0])) ? 'FALSE' : 'TRUE';
+                }
+                if (fn === 'SWITCH') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const target = String(evalExpr(rawArgs[0])).trim().toLowerCase();
+                    for (let i = 1; i + 1 < rawArgs.length; i += 2) {
+                        if (String(evalExpr(rawArgs[i])).trim().toLowerCase() === target) {
+                            return evalExpr(rawArgs[i + 1]);
+                        }
+                    }
+                    return rawArgs.length % 2 === 0 ? evalExpr(rawArgs[rawArgs.length - 1]) : '#N/A';
+                }
+
+                // --- AGGREGATE & STATISTICAL ---
+                if (['SUM', 'AVERAGE', 'AVG', 'MIN', 'MAX', 'COUNT', 'COUNTA', 'COUNTBLANK', 'MEDIAN', 'MODE', 'STDEV', 'STDEV.S', 'STDEVP', 'STDEV.P', 'VAR', 'VAR.S', 'VARP', 'VAR.P', 'PRODUCT'].includes(fn)) {
+                    if (fn === 'COUNTA') {
+                        return String(rawArgs.flatMap(a => expandArgValues(a)).filter(v => String(v).trim() !== '').length);
+                    }
+                    if (fn === 'COUNTBLANK') {
+                        return String(rawArgs.flatMap(a => expandArgValues(a)).filter(v => String(v).trim() === '').length);
+                    }
+                    const nums = rawArgs.flatMap(a => expandArgNumbers(a));
+                    if (fn === 'COUNT') return String(nums.length);
+                    if (fn === 'SUM') return ssFormatFormulaNumber(nums.reduce((a, b) => a + b, 0));
+                    if (fn === 'PRODUCT') return nums.length ? ssFormatFormulaNumber(nums.reduce((a, b) => a * b, 1)) : '0';
+                    if (!nums.length) return (fn === 'AVERAGE' || fn === 'AVG') ? '#DIV/0!' : '0';
+                    if (fn === 'AVERAGE' || fn === 'AVG') return ssFormatFormulaNumber(nums.reduce((a, b) => a + b, 0) / nums.length);
+                    if (fn === 'MIN') return ssFormatFormulaNumber(Math.min(...nums));
+                    if (fn === 'MAX') return ssFormatFormulaNumber(Math.max(...nums));
+                    if (fn === 'MEDIAN') {
+                        const s = [...nums].sort((a, b) => a - b);
+                        const mid = Math.floor(s.length / 2);
+                        return ssFormatFormulaNumber(s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2);
+                    }
+                    if (fn === 'MODE') {
+                        const counts = new Map();
+                        let best = nums[0];
+                        let bestCnt = 0;
+                        nums.forEach(n => {
+                            const c = (counts.get(n) || 0) + 1;
+                            counts.set(n, c);
+                            if (c > bestCnt) { bestCnt = c; best = n; }
+                        });
+                        return ssFormatFormulaNumber(best);
+                    }
+                    if (fn === 'VAR' || fn === 'VAR.S' || fn === 'STDEV' || fn === 'STDEV.S') {
+                        if (nums.length < 2) return '#DIV/0!';
+                        const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+                        const v = nums.reduce((a, x) => a + Math.pow(x - mean, 2), 0) / (nums.length - 1);
+                        return ssFormatFormulaNumber(fn.includes('STDEV') ? Math.sqrt(v) : v);
+                    }
+                    if (fn === 'VARP' || fn === 'VAR.P' || fn === 'STDEVP' || fn === 'STDEV.P') {
+                        const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+                        const v = nums.reduce((a, x) => a + Math.pow(x - mean, 2), 0) / nums.length;
+                        return ssFormatFormulaNumber(fn.includes('STDEV') ? Math.sqrt(v) : v);
+                    }
+                }
+                if (fn === 'LARGE' || fn === 'SMALL') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const nums = expandArgNumbers(rawArgs[0]).sort((a, b) => fn === 'LARGE' ? b - a : a - b);
+                    const k = Math.trunc(toFloat(evalExpr(rawArgs[1]), 1));
+                    if (k < 1 || k > nums.length) return '#NUM!';
+                    return ssFormatFormulaNumber(nums[k - 1]);
+                }
+                if (fn === 'SUMPRODUCT') {
+                    if (!rawArgs.length) return '0';
+                    const arrays = rawArgs.map(a => expandArgValues(a).map(v => toFloat(v, 0)));
+                    const minLen = Math.min(...arrays.map(arr => arr.length));
+                    let total = 0;
+                    for (let i = 0; i < minLen; i++) {
+                        let p = 1;
+                        arrays.forEach(arr => { p *= arr[i]; });
+                        total += p;
+                    }
+                    return ssFormatFormulaNumber(total);
+                }
+
+                // --- CONDITIONAL AGGREGATES ---
+                if (fn === 'COUNTIF' || fn === 'SUMIF' || fn === 'AVERAGEIF') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const critCoords = expandRangeCoords(rawArgs[0]).flat();
+                    const critVal = evalExpr(rawArgs[1]);
+                    const valCoords = rawArgs.length > 2 ? expandRangeCoords(rawArgs[2]).flat() : critCoords;
+                    const matchedNums = [];
+                    let matchedCount = 0;
+                    critCoords.forEach((cCoord, idx) => {
+                        if (ssMatchesExcelCriteria(getCellEval(cCoord), critVal)) {
+                            matchedCount++;
+                            if (idx < valCoords.length) {
+                                const fv = toFloat(getCellEval(valCoords[idx]), null);
+                                if (fv !== null) matchedNums.push(fv);
+                            }
+                        }
+                    });
+                    if (fn === 'COUNTIF') return String(matchedCount);
+                    if (fn === 'SUMIF') return ssFormatFormulaNumber(matchedNums.reduce((a, b) => a + b, 0));
+                    return matchedNums.length ? ssFormatFormulaNumber(matchedNums.reduce((a, b) => a + b, 0) / matchedNums.length) : '#DIV/0!';
+                }
+                if (['COUNTIFS', 'SUMIFS', 'AVERAGEIFS', 'MINIFS', 'MAXIFS'].includes(fn)) {
+                    if (fn === 'COUNTIFS') {
+                        if (rawArgs.length < 2 || rawArgs.length % 2 !== 0) return '#VALUE!';
+                        const firstCoords = expandRangeCoords(rawArgs[0]).flat();
+                        const pairs = [];
+                        for (let i = 0; i < rawArgs.length; i += 2) {
+                            pairs.push([expandRangeCoords(rawArgs[i]).flat(), evalExpr(rawArgs[i + 1])]);
+                        }
+                        let cnt = 0;
+                        for (let i = 0; i < firstCoords.length; i++) {
+                            if (pairs.every(([rc, cv]) => i < rc.length && ssMatchesExcelCriteria(getCellEval(rc[i]), cv))) cnt++;
+                        }
+                        return String(cnt);
+                    } else {
+                        if (rawArgs.length < 3 || rawArgs.length % 2 === 0) return '#VALUE!';
+                        const targetCoords = expandRangeCoords(rawArgs[0]).flat();
+                        const pairs = [];
+                        for (let i = 1; i < rawArgs.length; i += 2) {
+                            pairs.push([expandRangeCoords(rawArgs[i]).flat(), evalExpr(rawArgs[i + 1])]);
+                        }
+                        const matched = [];
+                        targetCoords.forEach((tc, i) => {
+                            if (pairs.every(([rc, cv]) => i < rc.length && ssMatchesExcelCriteria(getCellEval(rc[i]), cv))) {
+                                const fv = toFloat(getCellEval(tc), null);
+                                if (fv !== null) matched.push(fv);
+                            }
+                        });
+                        if (fn === 'SUMIFS') return ssFormatFormulaNumber(matched.reduce((a, b) => a + b, 0));
+                        if (fn === 'AVERAGEIFS') return matched.length ? ssFormatFormulaNumber(matched.reduce((a, b) => a + b, 0) / matched.length) : '#DIV/0!';
+                        if (fn === 'MINIFS') return matched.length ? ssFormatFormulaNumber(Math.min(...matched)) : '0';
+                        if (fn === 'MAXIFS') return matched.length ? ssFormatFormulaNumber(Math.max(...matched)) : '0';
+                    }
+                }
+
+                // --- MATH & TRIG ---
+                if (fn === 'ABS') return rawArgs.length ? ssFormatFormulaNumber(Math.abs(toFloat(evalExpr(rawArgs[0]), 0))) : '0';
+                if (fn === 'ROUND') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const d = rawArgs.length > 1 ? Math.trunc(toFloat(evalExpr(rawArgs[1]), 0)) : 0;
+                    const f = Math.pow(10, d);
+                    return ssFormatFormulaNumber(Math.round(n * f) / f);
+                }
+                if (fn === 'ROUNDUP') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const d = rawArgs.length > 1 ? Math.trunc(toFloat(evalExpr(rawArgs[1]), 0)) : 0;
+                    const f = Math.pow(10, d);
+                    return ssFormatFormulaNumber((n >= 0 ? Math.ceil(n * f) : Math.floor(n * f)) / f);
+                }
+                if (fn === 'ROUNDDOWN' || fn === 'TRUNC') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const d = rawArgs.length > 1 ? Math.trunc(toFloat(evalExpr(rawArgs[1]), 0)) : 0;
+                    const f = Math.pow(10, d);
+                    return ssFormatFormulaNumber(Math.trunc(n * f) / f);
+                }
+                if (fn === 'INT') return ssFormatFormulaNumber(Math.floor(toFloat(evalExpr(rawArgs[0]), 0)));
+                if (fn === 'MOD') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const a = toFloat(evalExpr(rawArgs[0]), 0);
+                    const b = toFloat(evalExpr(rawArgs[1]), 0);
+                    if (b === 0) return '#DIV/0!';
+                    return ssFormatFormulaNumber(((a % b) + b) % b);
+                }
+                if (fn === 'POWER' || fn === 'POW') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    return ssFormatFormulaNumber(Math.pow(toFloat(evalExpr(rawArgs[0]), 0), toFloat(evalExpr(rawArgs[1]), 0)));
+                }
+                if (fn === 'SQRT') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    return n >= 0 ? ssFormatFormulaNumber(Math.sqrt(n)) : '#NUM!';
+                }
+                if (fn === 'EXP') return ssFormatFormulaNumber(Math.exp(toFloat(evalExpr(rawArgs[0]), 0)));
+                if (fn === 'LN') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    return n > 0 ? ssFormatFormulaNumber(Math.log(n)) : '#NUM!';
+                }
+                if (fn === 'LOG10') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    return n > 0 ? ssFormatFormulaNumber(Math.log10(n)) : '#NUM!';
+                }
+                if (fn === 'LOG') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const base = rawArgs.length > 1 ? toFloat(evalExpr(rawArgs[1]), 10) : 10;
+                    return (n > 0 && base > 0) ? ssFormatFormulaNumber(Math.log(n) / Math.log(base)) : '#NUM!';
+                }
+                if (fn === 'PI') return ssFormatFormulaNumber(Math.PI);
+                if (fn === 'SIGN') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    return n > 0 ? '1' : (n < 0 ? '-1' : '0');
+                }
+                if (fn === 'SIN') return ssFormatFormulaNumber(Math.sin(toFloat(evalExpr(rawArgs[0]), 0)));
+                if (fn === 'COS') return ssFormatFormulaNumber(Math.cos(toFloat(evalExpr(rawArgs[0]), 0)));
+                if (fn === 'TAN') return ssFormatFormulaNumber(Math.tan(toFloat(evalExpr(rawArgs[0]), 0)));
+                if (fn === 'RADIANS') return ssFormatFormulaNumber(toFloat(evalExpr(rawArgs[0]), 0) * (Math.PI / 180));
+                if (fn === 'DEGREES') return ssFormatFormulaNumber(toFloat(evalExpr(rawArgs[0]), 0) * (180 / Math.PI));
+                if (fn === 'CEILING' || fn === 'CEIL') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const sig = rawArgs.length > 1 ? toFloat(evalExpr(rawArgs[1]), 1) : 1;
+                    return sig ? ssFormatFormulaNumber(Math.ceil(n / sig) * sig) : '0';
+                }
+                if (fn === 'FLOOR') {
+                    const n = toFloat(evalExpr(rawArgs[0]), 0);
+                    const sig = rawArgs.length > 1 ? toFloat(evalExpr(rawArgs[1]), 1) : 1;
+                    return sig ? ssFormatFormulaNumber(Math.floor(n / sig) * sig) : '0';
+                }
+
+                // --- LOOKUP & REFERENCE ---
+                if (fn === 'VLOOKUP') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const lookupVal = String(evalExpr(rawArgs[0])).trim();
+                    const mat = expandRangeCoords(rawArgs[1]);
+                    const colIdx = Math.trunc(toFloat(evalExpr(rawArgs[2]), 1));
+                    if (!mat.length || colIdx < 1 || colIdx > mat[0].length) return '#REF!';
+                    for (const row of mat) {
+                        if (ssMatchesExcelCriteria(getCellEval(row[0]).trim(), lookupVal)) {
+                            return getCellEval(row[colIdx - 1]);
+                        }
+                    }
+                    return '#N/A';
+                }
+                if (fn === 'HLOOKUP') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const lookupVal = String(evalExpr(rawArgs[0])).trim();
+                    const mat = expandRangeCoords(rawArgs[1]);
+                    const rowIdx = Math.trunc(toFloat(evalExpr(rawArgs[2]), 1));
+                    if (!mat.length || rowIdx < 1 || rowIdx > mat.length) return '#REF!';
+                    for (let c = 0; c < mat[0].length; c++) {
+                        if (ssMatchesExcelCriteria(getCellEval(mat[0][c]).trim(), lookupVal)) {
+                            return getCellEval(mat[rowIdx - 1][c]);
+                        }
+                    }
+                    return '#N/A';
+                }
+                if (fn === 'XLOOKUP') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const lookupVal = String(evalExpr(rawArgs[0])).trim();
+                    const lCoords = expandRangeCoords(rawArgs[1]).flat();
+                    const rCoords = expandRangeCoords(rawArgs[2]).flat();
+                    const notFound = rawArgs.length > 3 ? evalExpr(rawArgs[3]) : '#N/A';
+                    for (let i = 0; i < lCoords.length; i++) {
+                        if (ssMatchesExcelCriteria(getCellEval(lCoords[i]).trim(), lookupVal)) {
+                            return i < rCoords.length ? getCellEval(rCoords[i]) : '#REF!';
+                        }
+                    }
+                    return notFound;
+                }
+                if (fn === 'INDEX') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const mat = expandRangeCoords(rawArgs[0]);
+                    if (!mat.length) return '#REF!';
+                    let rNum = Math.trunc(toFloat(evalExpr(rawArgs[1]), 1));
+                    let cNum = rawArgs.length > 2 ? Math.trunc(toFloat(evalExpr(rawArgs[2]), 1)) : 1;
+                    if (mat.length === 1 && rNum > 1 && cNum === 1) {
+                        cNum = rNum;
+                        rNum = 1;
+                    }
+                    if (rNum < 1 || rNum > mat.length || cNum < 1 || cNum > mat[0].length) return '#REF!';
+                    return getCellEval(mat[rNum - 1][cNum - 1]);
+                }
+                if (fn === 'MATCH') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const lookupVal = String(evalExpr(rawArgs[0])).trim();
+                    const lCoords = expandRangeCoords(rawArgs[1]).flat();
+                    for (let i = 0; i < lCoords.length; i++) {
+                        if (ssMatchesExcelCriteria(getCellEval(lCoords[i]).trim(), lookupVal)) return String(i + 1);
+                    }
+                    return '#N/A';
+                }
+                if (fn === 'CHOOSE') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const idx = Math.trunc(toFloat(evalExpr(rawArgs[0]), 0));
+                    if (idx < 1 || idx >= rawArgs.length) return '#VALUE!';
+                    return evalExpr(rawArgs[idx]);
+                }
+                if (fn === 'ROW') {
+                    if (!rawArgs.length) return String((ssParseCoord(activeCellCoord) || { rowNum: 1 }).rowNum);
+                    const p = ssParseCoord(String(rawArgs[0]).replace(/\$/g, '').split(':')[0]);
+                    return p ? String(p.rowNum) : '#REF!';
+                }
+                if (fn === 'COLUMN') {
+                    if (!rawArgs.length) return String(((ssParseCoord(activeCellCoord) || { colIndex: 0 }).colIndex) + 1);
+                    const p = ssParseCoord(String(rawArgs[0]).replace(/\$/g, '').split(':')[0]);
+                    return p ? String(p.colIndex + 1) : '#REF!';
+                }
+                if (fn === 'ROWS') {
+                    const mat = rawArgs.length ? expandRangeCoords(rawArgs[0]) : [];
+                    return String(mat.length || 1);
+                }
+                if (fn === 'COLUMNS') {
+                    const mat = rawArgs.length ? expandRangeCoords(rawArgs[0]) : [];
+                    return String((mat[0] && mat[0].length) || 1);
+                }
+
+                // --- TEXT / STRING ---
+                if (fn === 'CONCAT' || fn === 'CONCATENATE') {
+                    return rawArgs.flatMap(a => expandArgValues(a)).join('');
+                }
+                if (fn === 'TEXTJOIN') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const delim = String(evalExpr(rawArgs[0]));
+                    const ignoreEmpty = toBool(evalExpr(rawArgs[1]));
+                    let vals = rawArgs.slice(2).flatMap(a => expandArgValues(a));
+                    if (ignoreEmpty) vals = vals.filter(v => v !== '');
+                    return vals.join(delim);
+                }
+                if (fn === 'LEN') return rawArgs.length ? String(String(evalExpr(rawArgs[0])).length) : '0';
+                if (fn === 'LOWER') return rawArgs.length ? String(evalExpr(rawArgs[0])).toLowerCase() : '';
+                if (fn === 'UPPER') return rawArgs.length ? String(evalExpr(rawArgs[0])).toUpperCase() : '';
+                if (fn === 'PROPER') {
+                    return rawArgs.length ? String(evalExpr(rawArgs[0])).toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '';
+                }
+                if (fn === 'TRIM') return rawArgs.length ? String(evalExpr(rawArgs[0])).trim().replace(/\s+/g, ' ') : '';
+                if (fn === 'LEFT') {
+                    const txt = rawArgs.length ? String(evalExpr(rawArgs[0])) : '';
+                    const n = rawArgs.length > 1 ? Math.max(0, Math.trunc(toFloat(evalExpr(rawArgs[1]), 1))) : 1;
+                    return txt.slice(0, n);
+                }
+                if (fn === 'RIGHT') {
+                    const txt = rawArgs.length ? String(evalExpr(rawArgs[0])) : '';
+                    const n = rawArgs.length > 1 ? Math.max(0, Math.trunc(toFloat(evalExpr(rawArgs[1]), 1))) : 1;
+                    return n > 0 ? txt.slice(-n) : '';
+                }
+                if (fn === 'MID') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const txt = String(evalExpr(rawArgs[0]));
+                    const start = Math.max(1, Math.trunc(toFloat(evalExpr(rawArgs[1]), 1)));
+                    const len = Math.max(0, Math.trunc(toFloat(evalExpr(rawArgs[2]), 0)));
+                    return txt.slice(start - 1, start - 1 + len);
+                }
+                if (fn === 'SUBSTITUTE') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    return String(evalExpr(rawArgs[0])).split(String(evalExpr(rawArgs[1]))).join(String(evalExpr(rawArgs[2])));
+                }
+                if (fn === 'REPLACE') {
+                    if (rawArgs.length < 4) return '#VALUE!';
+                    const txt = String(evalExpr(rawArgs[0]));
+                    const start = Math.max(1, Math.trunc(toFloat(evalExpr(rawArgs[1]), 1)));
+                    const numChars = Math.max(0, Math.trunc(toFloat(evalExpr(rawArgs[2]), 0)));
+                    const newS = String(evalExpr(rawArgs[3]));
+                    return txt.slice(0, start - 1) + newS + txt.slice(start - 1 + numChars);
+                }
+                if (fn === 'FIND' || fn === 'SEARCH') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const needle = String(evalExpr(rawArgs[0]));
+                    const haystack = String(evalExpr(rawArgs[1]));
+                    const start = rawArgs.length > 2 ? Math.max(1, Math.trunc(toFloat(evalExpr(rawArgs[2]), 1))) : 1;
+                    const idx = fn === 'SEARCH'
+                        ? haystack.toLowerCase().indexOf(needle.toLowerCase(), start - 1)
+                        : haystack.indexOf(needle, start - 1);
+                    return idx >= 0 ? String(idx + 1) : '#VALUE!';
+                }
+                if (fn === 'REPT') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const txt = String(evalExpr(rawArgs[0]));
+                    const cnt = Math.max(0, Math.min(1000, Math.trunc(toFloat(evalExpr(rawArgs[1]), 0))));
+                    return txt.repeat(cnt);
+                }
+                if (fn === 'EXACT') {
+                    return rawArgs.length >= 2 && String(evalExpr(rawArgs[0])) === String(evalExpr(rawArgs[1])) ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'VALUE') {
+                    const fv = toFloat(rawArgs.length ? evalExpr(rawArgs[0]) : '', null);
+                    return fv !== null ? ssFormatFormulaNumber(fv) : '#VALUE!';
+                }
+                if (fn === 'TEXT') return rawArgs.length ? String(evalExpr(rawArgs[0])) : '';
+
+                // --- DATE & TIME ---
+                if (fn === 'TODAY') return new Date().toISOString().slice(0, 10);
+                if (fn === 'NOW') {
+                    const d = new Date();
+                    return `${d.toISOString().slice(0, 10)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                }
+                if (fn === 'DATE') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const y = Math.trunc(toFloat(evalExpr(rawArgs[0]), 2026));
+                    const m = Math.trunc(toFloat(evalExpr(rawArgs[1]), 1));
+                    const d = Math.trunc(toFloat(evalExpr(rawArgs[2]), 1));
+                    const dt = new Date(Date.UTC(y, m - 1, d));
+                    return Number.isNaN(dt.getTime()) ? '#VALUE!' : dt.toISOString().slice(0, 10);
+                }
+                if (fn === 'YEAR' || fn === 'MONTH' || fn === 'DAY') {
+                    const dt = new Date(rawArgs.length ? String(evalExpr(rawArgs[0])) : '');
+                    if (Number.isNaN(dt.getTime())) return '#VALUE!';
+                    if (fn === 'YEAR') return String(dt.getFullYear());
+                    if (fn === 'MONTH') return String(dt.getMonth() + 1);
+                    return String(dt.getDate());
+                }
+                if (fn === 'DAYS') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const d1 = new Date(String(evalExpr(rawArgs[0])));
+                    const d2 = new Date(String(evalExpr(rawArgs[1])));
+                    if (Number.isNaN(d1.getTime()) || Number.isNaN(d2.getTime())) return '#VALUE!';
+                    return String(Math.round((d1.getTime() - d2.getTime()) / 86400000));
+                }
+
+                // --- FINANCIAL ---
+                if (fn === 'PMT') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const rate = toFloat(evalExpr(rawArgs[0]), 0);
+                    const nper = toFloat(evalExpr(rawArgs[1]), 0);
+                    const pv = toFloat(evalExpr(rawArgs[2]), 0);
+                    const fv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    if (nper === 0) return '#DIV/0!';
+                    if (rate === 0) return ssFormatFormulaNumber(-(pv + fv) / nper);
+                    const pmt = -(rate * (pv * Math.pow(1 + rate, nper) + fv)) / (Math.pow(1 + rate, nper) - 1);
+                    return ssFormatFormulaNumber(pmt);
+                }
+                if (fn === 'FV') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const rate = toFloat(evalExpr(rawArgs[0]), 0);
+                    const nper = toFloat(evalExpr(rawArgs[1]), 0);
+                    const pmt = toFloat(evalExpr(rawArgs[2]), 0);
+                    const pv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    if (rate === 0) return ssFormatFormulaNumber(-(pv + pmt * nper));
+                    return ssFormatFormulaNumber(-(pv * Math.pow(1 + rate, nper) + pmt * (Math.pow(1 + rate, nper) - 1) / rate));
+                }
+                if (fn === 'PV') {
+                    if (rawArgs.length < 3) return '#VALUE!';
+                    const rate = toFloat(evalExpr(rawArgs[0]), 0);
+                    const nper = toFloat(evalExpr(rawArgs[1]), 0);
+                    const pmt = toFloat(evalExpr(rawArgs[2]), 0);
+                    const fv = rawArgs.length > 3 ? toFloat(evalExpr(rawArgs[3]), 0) : 0;
+                    if (rate === 0) return ssFormatFormulaNumber(-(fv + pmt * nper));
+                    return ssFormatFormulaNumber(-(fv + pmt * (Math.pow(1 + rate, nper) - 1) / rate) / Math.pow(1 + rate, nper));
+                }
+                if (fn === 'NPV') {
+                    if (rawArgs.length < 2) return '#VALUE!';
+                    const rate = toFloat(evalExpr(rawArgs[0]), 0);
+                    const cfs = rawArgs.slice(1).flatMap(a => expandArgNumbers(a));
+                    const npv = cfs.reduce((acc, cf, idx) => acc + cf / Math.pow(1 + rate, idx + 1), 0);
+                    return ssFormatFormulaNumber(npv);
+                }
+
+                // --- INFORMATION ---
+                if (fn === 'ISBLANK') {
+                    if (!rawArgs.length) return 'TRUE';
+                    const ac = rawArgs[0].trim();
+                    if (/^\$?[A-Za-z]+\$?\d+$/.test(ac)) {
+                        return String(cellsMap[ac.replace(/\$/g, '').toUpperCase()] ?? '').trim() === '' ? 'TRUE' : 'FALSE';
+                    }
+                    return String(evalExpr(ac)).trim() === '' ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISNUMBER') {
+                    return rawArgs.length && toFloat(evalExpr(rawArgs[0]), null) !== null ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISTEXT') {
+                    if (!rawArgs.length) return 'FALSE';
+                    const v = String(evalExpr(rawArgs[0])).trim();
+                    return (v !== '' && toFloat(v, null) === null && !v.startsWith('#')) ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISERROR') {
+                    return rawArgs.length && String(evalExpr(rawArgs[0])).startsWith('#') ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISNA') {
+                    return rawArgs.length && String(evalExpr(rawArgs[0])) === '#N/A' ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISEVEN') {
+                    const n = toFloat(rawArgs.length ? evalExpr(rawArgs[0]) : '', null);
+                    return n !== null && Math.trunc(n) % 2 === 0 ? 'TRUE' : 'FALSE';
+                }
+                if (fn === 'ISODD') {
+                    const n = toFloat(rawArgs.length ? evalExpr(rawArgs[0]) : '', null);
+                    return n !== null && Math.trunc(n) % 2 !== 0 ? 'TRUE' : 'FALSE';
+                }
+
+                return '#NAME?';
+            };
+
+            const evalExpr = (subExpr) => {
+                let t = String(subExpr ?? '').trim();
+                if (!t) return '';
+
+                // Strip redundant outer parentheses if balanced
+                while (t.startsWith('(') && t.endsWith(')')) {
+                    let depthP = 0;
+                    let inQ = false;
+                    let balancedOuter = true;
+                    for (let i = 0; i < t.length; i++) {
+                        const ch = t[i];
+                        if (ch === '"') inQ = !inQ;
+                        else if (!inQ) {
+                            if (ch === '(') depthP++;
+                            else if (ch === ')') {
+                                depthP--;
+                                if (depthP === 0 && i < t.length - 1) {
+                                    balancedOuter = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (balancedOuter && depthP === 0) t = t.slice(1, -1).trim();
+                    else break;
+                }
+
+                // String literal
+                if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+                    const inner = t.slice(1, -1);
+                    if (!inner.replace(/""/g, '').includes('"')) {
+                        return inner.replace(/""/g, '"');
+                    }
+                }
+
+                // Top-level comparison operators: <>, >=, <=, =, >, <
+                let inQ = false;
+                let depthP = 0;
+                for (let i = 0; i < t.length; i++) {
+                    const ch = t[i];
+                    if (ch === '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch === '(') depthP++;
+                        else if (ch === ')') depthP = Math.max(0, depthP - 1);
+                        else if (depthP === 0) {
+                            for (const opStr of ['<>', '>=', '<=', '=', '>', '<']) {
+                                if (t.slice(i).startsWith(opStr)) {
+                                    const lhs = evalExpr(t.slice(0, i));
+                                    const rhs = evalExpr(t.slice(i + opStr.length));
+                                    return ssMatchesExcelCriteria(lhs, `${opStr}${rhs}`) ? 'TRUE' : 'FALSE';
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Top-level string concatenation (&)
+                inQ = false;
+                depthP = 0;
+                for (let i = 0; i < t.length; i++) {
+                    const ch = t[i];
+                    if (ch === '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch === '(') depthP++;
+                        else if (ch === ')') depthP = Math.max(0, depthP - 1);
+                        else if (ch === '&' && depthP === 0) {
+                            return `${evalExpr(t.slice(0, i))}${evalExpr(t.slice(i + 1))}`;
+                        }
+                    }
+                }
+
+                // Top-level addition / subtraction (+ / -) scanning right-to-left
+                inQ = false;
+                depthP = 0;
+                for (let i = t.length - 1; i >= 0; i--) {
+                    const ch = t[i];
+                    if (ch === '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch === ')') depthP++;
+                        else if (ch === '(') depthP = Math.max(0, depthP - 1);
+                        else if (depthP === 0 && (ch === '+' || ch === '-') && i > 0) {
+                            const prev = t.slice(0, i).trimEnd();
+                            if (prev && !['+', '-', '*', '/', '^', '(', ',', ';', '=', '<', '>'].includes(prev[prev.length - 1])) {
+                                const lhsV = evalExpr(t.slice(0, i));
+                                const rhsV = evalExpr(t.slice(i + 1));
+                                if (String(lhsV).startsWith('#')) return lhsV;
+                                if (String(rhsV).startsWith('#')) return rhsV;
+                                const ln = toFloat(lhsV, null);
+                                const rn = toFloat(rhsV, null);
+                                if (ln === null || rn === null) return '#VALUE!';
+                                return ssFormatFormulaNumber(ch === '+' ? ln + rn : ln - rn);
+                            }
+                        }
+                    }
+                }
+
+                // Top-level multiplication / division (* / /) scanning right-to-left
+                inQ = false;
+                depthP = 0;
+                for (let i = t.length - 1; i >= 0; i--) {
+                    const ch = t[i];
+                    if (ch === '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch === ')') depthP++;
+                        else if (ch === '(') depthP = Math.max(0, depthP - 1);
+                        else if (depthP === 0 && (ch === '*' || ch === '/') && i > 0) {
+                            const lhsV = evalExpr(t.slice(0, i));
+                            const rhsV = evalExpr(t.slice(i + 1));
+                            if (String(lhsV).startsWith('#')) return lhsV;
+                            if (String(rhsV).startsWith('#')) return rhsV;
+                            const ln = toFloat(lhsV, null);
+                            const rn = toFloat(rhsV, null);
+                            if (ln === null || rn === null) return '#VALUE!';
+                            if (ch === '/') return rn === 0 ? '#DIV/0!' : ssFormatFormulaNumber(ln / rn);
+                            return ssFormatFormulaNumber(ln * rn);
+                        }
+                    }
+                }
+
+                // Top-level exponentiation (^)
+                inQ = false;
+                depthP = 0;
+                for (let i = t.length - 1; i >= 0; i--) {
+                    const ch = t[i];
+                    if (ch === '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch === ')') depthP++;
+                        else if (ch === '(') depthP = Math.max(0, depthP - 1);
+                        else if (depthP === 0 && ch === '^' && i > 0) {
+                            const ln = toFloat(evalExpr(t.slice(0, i)), null);
+                            const rn = toFloat(evalExpr(t.slice(i + 1)), null);
+                            if (ln === null || rn === null) return '#VALUE!';
+                            return ssFormatFormulaNumber(Math.pow(ln, rn));
+                        }
+                    }
+                }
+
+                // Unary - or +
+                if (t.startsWith('-')) {
+                    const uv = toFloat(evalExpr(t.slice(1)), null);
+                    return uv !== null ? ssFormatFormulaNumber(-uv) : '#VALUE!';
+                }
+                if (t.startsWith('+')) {
+                    const uv = toFloat(evalExpr(t.slice(1)), null);
+                    return uv !== null ? ssFormatFormulaNumber(uv) : '#VALUE!';
+                }
+
+                // Percentage literal
+                if (/^-?\d+(\.\d+)?%$/.test(t)) {
+                    return ssFormatFormulaNumber(Number(t.slice(0, -1)) / 100);
+                }
+
+                // Function call: FUNC(args)
+                const fnCall = /^([A-Za-z_][A-Za-z0-9_.]*)\s*\(([\s\S]*)\)$/.exec(t);
+                if (fnCall) {
+                    const fnName = fnCall[1];
+                    const argsBody = fnCall[2].trim();
+                    const parsedArgs = argsBody ? ssSplitFormulaArgs(argsBody) : [];
+                    return evalFunction(fnName, parsedArgs);
+                }
+
+                // Single Cell Reference
+                if (/^\$?[A-Za-z]+\$?\d+$/.test(t)) {
+                    return getCellEval(t);
+                }
+
+                if (t.toUpperCase() === 'TRUE' || t.toUpperCase() === 'FALSE') {
+                    return t.toUpperCase();
+                }
+                const numVal = Number(t);
+                if (Number.isFinite(numVal) && t !== '') {
+                    return ssFormatFormulaNumber(numVal);
+                }
+                return t;
+            };
+
+            try {
+                const res = evalExpr(expr);
+                return String(res ?? '');
+            } catch (_) {
+                return '#ERROR!';
             }
-            return str;
         }
 
         function updateSpreadsheetBadgesAndSelector() {
@@ -1153,9 +2047,10 @@
                     <th
                         id="ss-col-hdr-${colLetter}"
                         data-col="${colLetter}"
-                        onclick="onSpreadsheetColHeaderClick(event, '${colLetter}')"
+                        onmousedown="onSpreadsheetColHeaderMouseDown(event, '${colLetter}')"
+                        onmouseenter="onSpreadsheetColHeaderMouseEnter(event, '${colLetter}')"
                         style="width:${wPx}px; min-width:${wPx}px; max-width:${wPx}px;"
-                        title="Click to select all cells in Column ${colLetter} (Ctrl+Click for multiple columns) • Drag right border to resize column width"
+                        title="Click or Drag to select Column ${colLetter} (Ctrl+Click for multiple columns) • Drag right border to resize column width"
                         class="sticky top-0 z-20 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 px-2 py-1.5 text-center font-mono font-extrabold text-xs cursor-pointer select-none relative"
                     >
                         <span>${colLetter}</span>
@@ -1179,9 +2074,10 @@
                     <td
                         id="ss-row-hdr-${r}"
                         data-row="${r}"
-                        onclick="onSpreadsheetRowHeaderClick(event, ${r})"
+                        onmousedown="onSpreadsheetRowHeaderMouseDown(event, ${r})"
+                        onmouseenter="onSpreadsheetRowHeaderMouseEnter(event, ${r})"
                         style="${rowHdrStyle}"
-                        title="Click to select all cells in Row ${r} (Ctrl+Click for multiple rows) • Drag bottom border to resize row height"
+                        title="Click or Drag to select Row ${r} (Ctrl+Click for multiple rows) • Drag bottom border to resize row height"
                         class="sticky left-0 z-10 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-700 px-1.5 py-1 text-center font-mono font-bold text-[11px] cursor-pointer select-none align-middle relative"
                     >
                         <span>${r}</span>
@@ -1214,6 +2110,7 @@
                                 data-col="${colLetter}"
                                 data-row="${r}"
                                 onmousedown="onSpreadsheetCellMouseDown(event, '${coord}')"
+                                onmouseenter="onSpreadsheetCellMouseEnter(event, '${coord}')"
                                 ondblclick="onSpreadsheetCellDblClick(event, '${coord}')"
                                 style="width:${wPx}px; min-width:${wPx}px; max-width:${wPx}px; ${tdHeightStyle}"
                                 class="ss-data-cell border border-slate-800 p-0 align-top hover:bg-slate-900/60"
@@ -1241,6 +2138,7 @@
                                 data-col="${colLetter}"
                                 data-row="${r}"
                                 onmousedown="onSpreadsheetCellMouseDown(event, '${coord}')"
+                                onmouseenter="onSpreadsheetCellMouseEnter(event, '${coord}')"
                                 ondblclick="onSpreadsheetCellDblClick(event, '${coord}')"
                                 style="width:${wPx}px; min-width:${wPx}px; max-width:${wPx}px; ${tdHeightStyle}"
                                 class="ss-data-cell border border-slate-800 p-0 align-middle overflow-hidden hover:bg-slate-900/60"
@@ -1429,34 +2327,87 @@
             }, 0);
         }
 
+        function ssEnsureGlobalDragMouseUpListener() {
+            if (ssDragMouseUpAttached) return;
+            ssDragMouseUpAttached = true;
+            window.addEventListener('mouseup', () => {
+                if (ssIsMouseDraggingSelection) {
+                    ssIsMouseDraggingSelection = false;
+                    ssDragSelectMode = null;
+                    ssDragStartCoord = null;
+                    ssDragStartColIdx = null;
+                    ssDragStartRowNum = null;
+                    ssDragBaseSelectedCells = null;
+                    ssDragBaseSelectedCols = null;
+                    ssDragBaseSelectedRows = null;
+                }
+            });
+        }
+
+        function ssAddRectRangeToSet(targetSet, coordA, coordB) {
+            const pA = ssParseCoord(coordA);
+            const pB = ssParseCoord(coordB);
+            if (!pA || !pB) return;
+            const cMin = Math.min(pA.colIndex, pB.colIndex);
+            const cMax = Math.max(pA.colIndex, pB.colIndex);
+            const rMin = Math.min(pA.rowNum, pB.rowNum);
+            const rMax = Math.max(pA.rowNum, pB.rowNum);
+            for (let r = rMin; r <= rMax; r++) {
+                for (let c = cMin; c <= cMax; c++) {
+                    targetSet.add(`${ssColIdxToLetter(c)}${r}`);
+                }
+            }
+        }
+
         function onSpreadsheetCellMouseDown(event, coord) {
             if (!coord) return;
+            if (event && event.button !== undefined && event.button !== 0) return;
             // If user clicked inside the cell that is already in inline edit mode, allow normal text cursor positioning
             if (ssEditingCellCoord === coord) {
                 return;
             }
-            event.preventDefault();
+            if (event) event.preventDefault();
             if (ssEditingCellCoord) {
                 ssExitCellEditMode();
             }
+            ssEnsureGlobalDragMouseUpListener();
 
-            const isMultiModifier = Boolean(event.ctrlKey || event.metaKey);
-            if (isMultiModifier) {
+            const isMultiModifier = Boolean(event && (event.ctrlKey || event.metaKey));
+            const isShiftModifier = Boolean(event && event.shiftKey);
+
+            ssIsMouseDraggingSelection = true;
+            ssDragSelectMode = 'cells';
+            ssDragStartCoord = coord;
+
+            if (isShiftModifier && ssSelectionAnchorCoord) {
                 ssSelectedCols.clear();
                 ssSelectedRows.clear();
+                ssSelectedCells.clear();
+                ssAddRectRangeToSet(ssSelectedCells, ssSelectionAnchorCoord, coord);
+                activeCellCoord = ssSelectionAnchorCoord;
+                ssDragStartCoord = ssSelectionAnchorCoord;
+                ssDragBaseSelectedCells = new Set();
+            } else if (isMultiModifier) {
+                ssSelectedCols.clear();
+                ssSelectedRows.clear();
+                ssDragBaseSelectedCells = new Set(ssSelectedCells);
                 if (ssSelectedCells.has(coord) && ssSelectedCells.size > 1) {
                     ssSelectedCells.delete(coord);
+                    ssDragBaseSelectedCells.delete(coord);
                     const remaining = Array.from(ssSelectedCells);
                     activeCellCoord = remaining[remaining.length - 1] || 'A1';
                 } else {
                     ssSelectedCells.add(coord);
                     activeCellCoord = coord;
+                    ssSelectionAnchorCoord = coord;
                 }
             } else {
                 ssSelectedCols.clear();
                 ssSelectedRows.clear();
                 ssSelectedCells = new Set([coord]);
+                ssDragBaseSelectedCells = new Set();
                 activeCellCoord = coord;
+                ssSelectionAnchorCoord = coord;
             }
 
             syncFormulaBarWithActiveCell();
@@ -1466,32 +2417,66 @@
             }
         }
 
+        function onSpreadsheetCellMouseEnter(event, coord) {
+            if (!ssIsMouseDraggingSelection || ssDragSelectMode !== 'cells' || !ssDragStartCoord || !coord) return;
+            if (event && event.buttons !== undefined && (event.buttons & 1) === 0) {
+                ssIsMouseDraggingSelection = false;
+                ssDragSelectMode = null;
+                return;
+            }
+            ssSelectedCols.clear();
+            ssSelectedRows.clear();
+            const nextSet = new Set(ssDragBaseSelectedCells || []);
+            ssAddRectRangeToSet(nextSet, ssDragStartCoord, coord);
+            ssSelectedCells = nextSet;
+            activeCellCoord = ssDragStartCoord;
+            ssRefreshSelectionHighlights();
+            updateSpreadsheetWrapTextButtonUI();
+        }
+
         function onSpreadsheetCellDblClick(event, coord) {
             if (event) {
                 event.preventDefault();
                 event.stopPropagation();
             }
+            ssIsMouseDraggingSelection = false;
+            ssDragSelectMode = null;
             ssEnterCellEditMode(coord);
         }
 
-        function onSpreadsheetColHeaderClick(event, colLetter) {
+        function onSpreadsheetColHeaderMouseDown(event, colLetter) {
             if (!colLetter) return;
+            if (event && event.target && event.target.classList && event.target.classList.contains('ss-col-resizer')) return;
             if (event) event.preventDefault();
             ssExitCellEditMode();
+            ssEnsureGlobalDragMouseUpListener();
+
             const sheet = ssGetActiveSheet();
             const rowCount = sheet.row_count || 25;
+            const colIdx = ssLetterToColIdx(colLetter);
             const isMulti = Boolean(event && (event.ctrlKey || event.metaKey));
+
+            ssIsMouseDraggingSelection = true;
+            ssDragSelectMode = 'cols';
+            ssDragStartColIdx = colIdx;
 
             if (!isMulti) {
                 ssSelectedCells.clear();
                 ssSelectedCols.clear();
                 ssSelectedRows.clear();
+                ssDragBaseSelectedCells = new Set();
+                ssDragBaseSelectedCols = new Set();
+            } else {
+                ssDragBaseSelectedCells = new Set(ssSelectedCells);
+                ssDragBaseSelectedCols = new Set(ssSelectedCols);
             }
 
             if (isMulti && ssSelectedCols.has(colLetter) && ssSelectedCols.size > 1) {
                 ssSelectedCols.delete(colLetter);
+                ssDragBaseSelectedCols.delete(colLetter);
                 for (let r = 1; r <= rowCount; r++) {
                     ssSelectedCells.delete(`${colLetter}${r}`);
+                    ssDragBaseSelectedCells.delete(`${colLetter}${r}`);
                 }
             } else {
                 ssSelectedCols.add(colLetter);
@@ -1499,6 +2484,7 @@
                     ssSelectedCells.add(`${colLetter}${r}`);
                 }
                 activeCellCoord = `${colLetter}1`;
+                ssSelectionAnchorCoord = activeCellCoord;
             }
 
             if (ssSelectedCells.size === 0) {
@@ -1510,25 +2496,71 @@
             if (wrapper) wrapper.focus({ preventScroll: true });
         }
 
-        function onSpreadsheetRowHeaderClick(event, rowNum) {
+        function onSpreadsheetColHeaderMouseEnter(event, colLetter) {
+            if (!ssIsMouseDraggingSelection || ssDragSelectMode !== 'cols' || ssDragStartColIdx === null || !colLetter) return;
+            if (event && event.buttons !== undefined && (event.buttons & 1) === 0) {
+                ssIsMouseDraggingSelection = false;
+                ssDragSelectMode = null;
+                return;
+            }
+            const sheet = ssGetActiveSheet();
+            const rowCount = sheet.row_count || 25;
+            const curColIdx = ssLetterToColIdx(colLetter);
+            const cMin = Math.min(ssDragStartColIdx, curColIdx);
+            const cMax = Math.max(ssDragStartColIdx, curColIdx);
+
+            ssSelectedRows.clear();
+            ssSelectedCols = new Set(ssDragBaseSelectedCols || []);
+            ssSelectedCells = new Set(ssDragBaseSelectedCells || []);
+            for (let c = cMin; c <= cMax; c++) {
+                const cL = ssColIdxToLetter(c);
+                ssSelectedCols.add(cL);
+                for (let r = 1; r <= rowCount; r++) {
+                    ssSelectedCells.add(`${cL}${r}`);
+                }
+            }
+            activeCellCoord = `${ssColIdxToLetter(ssDragStartColIdx)}1`;
+            ssRefreshSelectionHighlights();
+            updateSpreadsheetWrapTextButtonUI();
+        }
+
+        function onSpreadsheetColHeaderClick(event, colLetter) {
+            onSpreadsheetColHeaderMouseDown(event, colLetter);
+        }
+
+        function onSpreadsheetRowHeaderMouseDown(event, rowNum) {
             const r = Number(rowNum || 0);
             if (r < 1) return;
+            if (event && event.target && event.target.classList && event.target.classList.contains('ss-row-resizer')) return;
             if (event) event.preventDefault();
             ssExitCellEditMode();
+            ssEnsureGlobalDragMouseUpListener();
+
             const sheet = ssGetActiveSheet();
             const colCount = sheet.col_count || 10;
             const isMulti = Boolean(event && (event.ctrlKey || event.metaKey));
+
+            ssIsMouseDraggingSelection = true;
+            ssDragSelectMode = 'rows';
+            ssDragStartRowNum = r;
 
             if (!isMulti) {
                 ssSelectedCells.clear();
                 ssSelectedCols.clear();
                 ssSelectedRows.clear();
+                ssDragBaseSelectedCells = new Set();
+                ssDragBaseSelectedRows = new Set();
+            } else {
+                ssDragBaseSelectedCells = new Set(ssSelectedCells);
+                ssDragBaseSelectedRows = new Set(ssSelectedRows);
             }
 
             if (isMulti && ssSelectedRows.has(r) && ssSelectedRows.size > 1) {
                 ssSelectedRows.delete(r);
+                ssDragBaseSelectedRows.delete(r);
                 for (let c = 0; c < colCount; c++) {
                     ssSelectedCells.delete(`${ssColIdxToLetter(c)}${r}`);
+                    ssDragBaseSelectedCells.delete(`${ssColIdxToLetter(c)}${r}`);
                 }
             } else {
                 ssSelectedRows.add(r);
@@ -1536,6 +2568,7 @@
                     ssSelectedCells.add(`${ssColIdxToLetter(c)}${r}`);
                 }
                 activeCellCoord = `A${r}`;
+                ssSelectionAnchorCoord = activeCellCoord;
             }
 
             if (ssSelectedCells.size === 0) {
@@ -1545,6 +2578,37 @@
             syncFormulaBarWithActiveCell();
             const wrapper = document.getElementById('ss-grid-scroll-wrapper');
             if (wrapper) wrapper.focus({ preventScroll: true });
+        }
+
+        function onSpreadsheetRowHeaderMouseEnter(event, rowNum) {
+            const curRow = Number(rowNum || 0);
+            if (!ssIsMouseDraggingSelection || ssDragSelectMode !== 'rows' || ssDragStartRowNum === null || curRow < 1) return;
+            if (event && event.buttons !== undefined && (event.buttons & 1) === 0) {
+                ssIsMouseDraggingSelection = false;
+                ssDragSelectMode = null;
+                return;
+            }
+            const sheet = ssGetActiveSheet();
+            const colCount = sheet.col_count || 10;
+            const rMin = Math.min(ssDragStartRowNum, curRow);
+            const rMax = Math.max(ssDragStartRowNum, curRow);
+
+            ssSelectedCols.clear();
+            ssSelectedRows = new Set(ssDragBaseSelectedRows || []);
+            ssSelectedCells = new Set(ssDragBaseSelectedCells || []);
+            for (let r = rMin; r <= rMax; r++) {
+                ssSelectedRows.add(r);
+                for (let c = 0; c < colCount; c++) {
+                    ssSelectedCells.add(`${ssColIdxToLetter(c)}${r}`);
+                }
+            }
+            activeCellCoord = `A${ssDragStartRowNum}`;
+            ssRefreshSelectionHighlights();
+            updateSpreadsheetWrapTextButtonUI();
+        }
+
+        function onSpreadsheetRowHeaderClick(event, rowNum) {
+            onSpreadsheetRowHeaderMouseDown(event, rowNum);
         }
 
         function onSpreadsheetSelectAllClick(event) {
@@ -1719,6 +2783,9 @@
             if (tdEl) {
                 tdEl.classList.remove('ss-cell-editing-td');
             }
+            if (ssIsBlockedImageFormula(rawVal)) {
+                showToast('🚫 Image formulas (e.g. =IMAGE, =SPARKLINE) are not allowed in the Spread Sheet modal.');
+            }
             // Refresh any formula cells that depend on this cell
             Object.keys(sheet.cells).forEach(k => {
                 if (String(sheet.cells[k] || '').startsWith('=')) {
@@ -1739,11 +2806,24 @@
             } else {
                 sheet.cells[activeCellCoord] = String(val);
             }
+            if (ssIsBlockedImageFormula(val)) {
+                showToast('🚫 Image formulas (e.g. =IMAGE, =SPARKLINE) are not allowed in the Spread Sheet modal.');
+            }
             const cellInput = document.getElementById(`ss-cell-${activeCellCoord}`);
             if (cellInput) {
                 cellInput.value = ssEvaluateCellDisplay(val, sheet.cells);
                 ssSyncWrapMirror(cellInput);
             }
+            // Refresh dependent formula cells live
+            Object.keys(sheet.cells).forEach(k => {
+                if (k !== activeCellCoord && String(sheet.cells[k] || '').startsWith('=')) {
+                    const depInput = document.getElementById(`ss-cell-${k}`);
+                    if (depInput && document.activeElement !== depInput) {
+                        depInput.value = ssEvaluateCellDisplay(sheet.cells[k], sheet.cells);
+                        ssSyncWrapMirror(depInput);
+                    }
+                }
+            });
             scheduleSpreadsheetAutoSyncToGoogleDrive();
         }
 
@@ -2185,10 +3265,43 @@
         }
 
         async function downloadCurrentSpreadsheetXlsx() {
+            const titleEl = document.getElementById('ss-workbook-title');
+            let titleVal = (titleEl?.value || currentSpreadsheetWorkbook.title || 'GlennBot_Spreadsheet.xlsx').trim();
+            if (!titleVal.toLowerCase().endsWith('.xlsx')) {
+                titleVal = titleVal.replace(/\.xls$/i, '') + '.xlsx';
+            }
+            currentSpreadsheetWorkbook.title = titleVal;
+            const sheet = ssGetActiveSheet();
+            ssSaveSheetLayoutToLocalCache(sheet);
+
+            try {
+                const res = await fetch('/api/spreadsheets/export-xlsx', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: titleVal,
+                        sheets: currentSpreadsheetWorkbook.sheets || []
+                    })
+                });
+                if (res.ok) {
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = titleVal;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 3000);
+                    showToast(`📥 Downloaded "${titleVal}" with saved column widths, row heights, wrap text & formulas!`);
+                    return;
+                }
+            } catch (_) {}
+
             await saveCurrentSpreadsheetToCloudinary(false);
             const wbId = currentSpreadsheetWorkbook.workbook_id;
             if (!wbId) {
-                showToast('⚠️ Please connect Google Drive and save the spreadsheet first.');
+                showToast('⚠️ Could not export spreadsheet file.');
                 return;
             }
             const a = document.createElement('a');

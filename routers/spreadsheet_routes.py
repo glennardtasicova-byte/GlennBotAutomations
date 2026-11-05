@@ -14,6 +14,7 @@ from fastapi.responses import Response as FastAPIResponse
 import os
 import sys
 import re
+import math
 import time
 import json
 import uuid
@@ -185,46 +186,959 @@ def _sanitize_excel_sheet_name(name: str, fallback: str = "Sheet1") -> str:
     return cleaned or fallback
 
 
+_BLOCKED_IMAGE_FORMULA_NAMES = {
+    "IMAGE", "SPARKLINE", "IMPORTIMAGE", "EMBEDIMAGE", "WEBIMAGE", "PICTURE"
+}
+
+
+def _split_top_level_formula_args(args_str: str) -> List[str]:
+    args: List[str] = []
+    cur: List[str] = []
+    depth = 0
+    in_quotes = False
+    i = 0
+    while i < len(args_str):
+        ch = args_str[i]
+        if ch == '"':
+            if in_quotes and i + 1 < len(args_str) and args_str[i + 1] == '"':
+                cur.append('"')
+                i += 2
+                continue
+            in_quotes = not in_quotes
+            cur.append(ch)
+        elif not in_quotes:
+            if ch == '(':
+                depth += 1
+                cur.append(ch)
+            elif ch == ')':
+                depth = max(0, depth - 1)
+                cur.append(ch)
+            elif ch in (',', ';') and depth == 0:
+                args.append("".join(cur).strip())
+                cur = []
+            else:
+                cur.append(ch)
+        else:
+            cur.append(ch)
+        i += 1
+    if cur or args_str.strip().endswith((',', ';')):
+        args.append("".join(cur).strip())
+    return args
+
+
+def _format_formula_number(val: float) -> str:
+    if not math.isfinite(val):
+        return "#NUM!"
+    if abs(val - round(val)) < 1e-9:
+        return str(int(round(val)))
+    rounded = round(val, 6)
+    s = f"{rounded:.6f}".rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def _matches_excel_criteria(cell_val: Any, criteria_raw: Any) -> bool:
+    crit_str = str(criteria_raw if criteria_raw is not None else "").strip()
+    if len(crit_str) >= 2 and crit_str.startswith('"') and crit_str.endswith('"'):
+        crit_str = crit_str[1:-1]
+    c_str = str(cell_val if cell_val is not None else "").strip()
+
+    op = "="
+    rhs = crit_str
+    for prefix in ("<>", ">=", "<=", ">", "<", "="):
+        if crit_str.startswith(prefix):
+            op = prefix
+            rhs = crit_str[len(prefix):].strip()
+            break
+
+    try:
+        lhs_num = float(c_str.replace(",", "")) if c_str != "" else None
+        rhs_num = float(rhs.replace(",", "")) if rhs != "" else None
+    except Exception:
+        lhs_num = None
+        rhs_num = None
+
+    if lhs_num is not None and rhs_num is not None:
+        if op == "=":
+            return abs(lhs_num - rhs_num) < 1e-9
+        if op == "<>":
+            return abs(lhs_num - rhs_num) >= 1e-9
+        if op == ">":
+            return lhs_num > rhs_num
+        if op == "<":
+            return lhs_num < rhs_num
+        if op == ">=":
+            return lhs_num >= rhs_num
+        if op == "<=":
+            return lhs_num <= rhs_num
+
+    lhs_l = c_str.lower()
+    rhs_l = rhs.lower()
+    if op in ("=", "<>") and ("*" in rhs_l or "?" in rhs_l):
+        pat = "^" + re.escape(rhs_l).replace(r"\*", ".*").replace(r"\?", ".") + "$"
+        matched = bool(re.match(pat, lhs_l))
+        return matched if op == "=" else (not matched)
+
+    if op == "=":
+        return lhs_l == rhs_l
+    if op == "<>":
+        return lhs_l != rhs_l
+    if op == ">":
+        return lhs_l > rhs_l
+    if op == "<":
+        return lhs_l < rhs_l
+    if op == ">=":
+        return lhs_l >= rhs_l
+    if op == "<=":
+        return lhs_l <= rhs_l
+    return False
+
+
 def _evaluate_spreadsheet_formula(raw_val: str, cells_map: Dict[str, str], depth: int = 0) -> str:
     s = str(raw_val if raw_val is not None else "")
-    if not s.startswith("=") or depth > 4:
+    if not s.startswith("="):
         return s
+    if depth > 8:
+        return "#REF!"
     expr = s[1:].strip()
+    if not expr:
+        return ""
 
-    def _resolve_num(ref_coord: str) -> float:
-        v_str = _evaluate_spreadsheet_formula(cells_map.get(ref_coord.upper(), ""), cells_map, depth + 1)
-        try:
-            return float(str(v_str).replace(",", "").strip())
-        except Exception:
+    # Strictly block any image-related spreadsheet formulas
+    for fn_match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_.]*)\s*\(", expr):
+        fn_candidate = fn_match.group(1).upper()
+        if fn_candidate in _BLOCKED_IMAGE_FORMULA_NAMES or "IMAGE" in fn_candidate:
+            return "#IMAGE_FORMULA_NOT_ALLOWED!"
+
+    def _get_cell_eval(coord_str: str) -> str:
+        clean_c = str(coord_str or "").replace("$", "").strip().upper()
+        raw_c = cells_map.get(clean_c, "")
+        return _evaluate_spreadsheet_formula(raw_c, cells_map, depth + 1)
+
+    def _to_float(v: Any, default: Optional[float] = 0.0) -> Optional[float]:
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+        s_v = str(v if v is not None else "").strip()
+        if s_v.upper() == "TRUE":
+            return 1.0
+        if s_v.upper() == "FALSE":
             return 0.0
+        if not s_v:
+            return default
+        clean_n = re.sub(r"[$₱€£¥,\s]", "", s_v)
+        if clean_n.endswith("%"):
+            try:
+                return float(clean_n[:-1]) / 100.0
+            except Exception:
+                return default
+        try:
+            return float(clean_n)
+        except Exception:
+            return default
 
-    m = re.match(r"^(SUM|AVERAGE|AVG|MIN|MAX|COUNT)\(([A-Za-z]+\d+):([A-Za-z]+\d+)\)$", expr, re.IGNORECASE)
-    if m:
-        fn = m.group(1).upper()
-        s_coord = _split_cell_coord(m.group(2))
-        e_coord = _split_cell_coord(m.group(3))
-        if not s_coord or not e_coord:
-            return "0"
-        c_min, c_max = min(s_coord[1], e_coord[1]), max(s_coord[1], e_coord[1])
-        r_min, r_max = min(s_coord[2], e_coord[2]), max(s_coord[2], e_coord[2])
-        nums: List[float] = []
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        s_v = str(v if v is not None else "").strip().upper()
+        if s_v in ("TRUE", "1", "YES"):
+            return True
+        if s_v in ("FALSE", "0", "", "NO"):
+            return False
+        n_v = _to_float(s_v, None)
+        return bool(n_v) if n_v is not None else True
+
+    def _expand_range_coords(range_str: str) -> List[List[str]]:
+        clean_r = str(range_str or "").replace("$", "").strip()
+        parts = clean_r.split(":")
+        if len(parts) != 2:
+            return []
+        s_c = _split_cell_coord(parts[0])
+        e_c = _split_cell_coord(parts[1])
+        if not s_c or not e_c:
+            return []
+        c_min, c_max = min(s_c[1], e_c[1]), max(s_c[1], e_c[1])
+        r_min, r_max = min(s_c[2], e_c[2]), max(s_c[2], e_c[2])
+        matrix: List[List[str]] = []
         for r_i in range(r_min, r_max + 1):
+            row_list: List[str] = []
             for c_i in range(c_min, c_max + 1):
-                nums.append(_resolve_num(f"{_col_idx_to_letter(c_i)}{r_i}"))
-        if not nums:
-            return "0"
-        if fn == "SUM":
-            res = sum(nums)
-        elif fn in ("AVERAGE", "AVG"):
-            res = round(sum(nums) / len(nums), 4)
-        elif fn == "MIN":
-            res = min(nums)
-        elif fn == "MAX":
-            res = max(nums)
-        else:
-            res = float(len(nums))
-        return str(int(res)) if res == int(res) else str(res)
-    return s
+                row_list.append(f"{_col_idx_to_letter(c_i)}{r_i}")
+            matrix.append(row_list)
+        return matrix
+
+    def _expand_arg_values(arg_expr: str) -> List[str]:
+        a_clean = arg_expr.strip()
+        if re.match(r"^\$?[A-Za-z]+\$?\d+:\$?[A-Za-z]+\$?\d+$", a_clean):
+            mat = _expand_range_coords(a_clean)
+            return [_get_cell_eval(c) for row in mat for c in row]
+        return [str(_eval_expr(a_clean))]
+
+    def _expand_arg_numbers(arg_expr: str) -> List[float]:
+        a_clean = arg_expr.strip()
+        if re.match(r"^\$?[A-Za-z]+\$?\d+:\$?[A-Za-z]+\$?\d+$", a_clean):
+            mat = _expand_range_coords(a_clean)
+            nums: List[float] = []
+            for row in mat:
+                for c in row:
+                    raw_cell = str(cells_map.get(c, "")).strip()
+                    if not raw_cell:
+                        continue
+                    v = _get_cell_eval(c)
+                    fv = _to_float(v, None)
+                    if fv is not None:
+                        nums.append(fv)
+            return nums
+        if re.match(r"^\$?[A-Za-z]+\$?\d+$", a_clean):
+            v = _get_cell_eval(a_clean)
+            fv = _to_float(v, None)
+            return [fv] if fv is not None else []
+        v = _eval_expr(a_clean)
+        fv = _to_float(v, None)
+        return [fv] if fv is not None else []
+
+    def _eval_function(fn_name: str, raw_args: List[str]) -> Any:
+        fn = re.sub(r"^_XLFN\.", "", fn_name.upper())
+        if fn in _BLOCKED_IMAGE_FORMULA_NAMES or "IMAGE" in fn:
+            return "#IMAGE_FORMULA_NOT_ALLOWED!"
+
+        # --- LOGICAL FUNCTIONS ---
+        if fn == "TRUE":
+            return "TRUE"
+        if fn == "FALSE":
+            return "FALSE"
+        if fn == "IF":
+            if not raw_args:
+                return "#VALUE!"
+            cond = _to_bool(_eval_expr(raw_args[0]))
+            if cond:
+                return _eval_expr(raw_args[1]) if len(raw_args) > 1 else "TRUE"
+            return _eval_expr(raw_args[2]) if len(raw_args) > 2 else "FALSE"
+        if fn == "IFS":
+            for idx in range(0, len(raw_args) - 1, 2):
+                if _to_bool(_eval_expr(raw_args[idx])):
+                    return _eval_expr(raw_args[idx + 1])
+            return "#N/A"
+        if fn == "IFERROR":
+            if not raw_args:
+                return ""
+            val = str(_eval_expr(raw_args[0]))
+            if val.startswith("#"):
+                return _eval_expr(raw_args[1]) if len(raw_args) > 1 else ""
+            return val
+        if fn == "IFNA":
+            if not raw_args:
+                return ""
+            val = str(_eval_expr(raw_args[0]))
+            if val == "#N/A":
+                return _eval_expr(raw_args[1]) if len(raw_args) > 1 else ""
+            return val
+        if fn == "AND":
+            vals = [v for a in raw_args for v in _expand_arg_values(a) if str(v).strip() != ""]
+            return "TRUE" if (vals and all(_to_bool(v) for v in vals)) else "FALSE"
+        if fn == "OR":
+            vals = [v for a in raw_args for v in _expand_arg_values(a) if str(v).strip() != ""]
+            return "TRUE" if any(_to_bool(v) for v in vals) else "FALSE"
+        if fn == "XOR":
+            vals = [v for a in raw_args for v in _expand_arg_values(a) if str(v).strip() != ""]
+            trues = sum(1 for v in vals if _to_bool(v))
+            return "TRUE" if (trues % 2 == 1) else "FALSE"
+        if fn == "NOT":
+            return "FALSE" if (raw_args and _to_bool(_eval_expr(raw_args[0]))) else "TRUE"
+        if fn == "SWITCH":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            target = str(_eval_expr(raw_args[0])).strip().lower()
+            idx = 1
+            while idx + 1 < len(raw_args):
+                if str(_eval_expr(raw_args[idx])).strip().lower() == target:
+                    return _eval_expr(raw_args[idx + 1])
+                idx += 2
+            return _eval_expr(raw_args[-1]) if (len(raw_args) % 2 == 0) else "#N/A"
+
+        # --- AGGREGATE & STATISTICAL FUNCTIONS ---
+        if fn in ("SUM", "AVERAGE", "AVG", "MIN", "MAX", "COUNT", "COUNTA", "COUNTBLANK", "MEDIAN", "MODE", "STDEV", "STDEV.S", "STDEVP", "STDEV.P", "VAR", "VAR.S", "VARP", "VAR.P", "PRODUCT"):
+            if fn == "COUNTA":
+                cnt = 0
+                for a in raw_args:
+                    for v in _expand_arg_values(a):
+                        if str(v).strip() != "":
+                            cnt += 1
+                return str(cnt)
+            if fn == "COUNTBLANK":
+                cnt = 0
+                for a in raw_args:
+                    for v in _expand_arg_values(a):
+                        if str(v).strip() == "":
+                            cnt += 1
+                return str(cnt)
+            nums = [n for a in raw_args for n in _expand_arg_numbers(a)]
+            if fn == "COUNT":
+                return str(len(nums))
+            if fn == "SUM":
+                return _format_formula_number(sum(nums))
+            if fn == "PRODUCT":
+                if not nums:
+                    return "0"
+                prod = 1.0
+                for n in nums:
+                    prod *= n
+                return _format_formula_number(prod)
+            if not nums:
+                return "#DIV/0!" if fn in ("AVERAGE", "AVG") else "0"
+            if fn in ("AVERAGE", "AVG"):
+                return _format_formula_number(sum(nums) / len(nums))
+            if fn == "MIN":
+                return _format_formula_number(min(nums))
+            if fn == "MAX":
+                return _format_formula_number(max(nums))
+            if fn == "MEDIAN":
+                s_nums = sorted(nums)
+                mid = len(s_nums) // 2
+                med = s_nums[mid] if len(s_nums) % 2 == 1 else (s_nums[mid - 1] + s_nums[mid]) / 2.0
+                return _format_formula_number(med)
+            if fn == "MODE":
+                counts: Dict[float, int] = {}
+                for n in nums:
+                    counts[n] = counts.get(n, 0) + 1
+                best = max(counts.items(), key=lambda x: x[1])[0]
+                return _format_formula_number(best)
+            if fn in ("VAR", "VAR.S", "STDEV", "STDEV.S"):
+                if len(nums) < 2:
+                    return "#DIV/0!"
+                mean = sum(nums) / len(nums)
+                var_s = sum((x - mean) ** 2 for x in nums) / (len(nums) - 1)
+                return _format_formula_number(math.sqrt(var_s) if "STDEV" in fn else var_s)
+            if fn in ("VARP", "VAR.P", "STDEVP", "STDEV.P"):
+                mean = sum(nums) / len(nums)
+                var_p = sum((x - mean) ** 2 for x in nums) / len(nums)
+                return _format_formula_number(math.sqrt(var_p) if "STDEV" in fn else var_p)
+
+        if fn in ("LARGE", "SMALL"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            nums = sorted(_expand_arg_numbers(raw_args[0]), reverse=(fn == "LARGE"))
+            k = int(_to_float(_eval_expr(raw_args[1]), 1) or 1)
+            if k < 1 or k > len(nums):
+                return "#NUM!"
+            return _format_formula_number(nums[k - 1])
+
+        if fn == "SUMPRODUCT":
+            if not raw_args:
+                return "0"
+            arrays = [[_to_float(v, 0.0) or 0.0 for v in _expand_arg_values(a)] for a in raw_args]
+            min_len = min((len(arr) for arr in arrays), default=0)
+            total = 0.0
+            for idx in range(min_len):
+                p = 1.0
+                for arr in arrays:
+                    p *= arr[idx]
+                total += p
+            return _format_formula_number(total)
+
+        # --- CONDITIONAL AGGREGATES (COUNTIF, SUMIF, AVERAGEIF, *IFS) ---
+        if fn in ("COUNTIF", "SUMIF", "AVERAGEIF"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            crit_coords = [c for row in _expand_range_coords(raw_args[0]) for c in row]
+            crit_val = _eval_expr(raw_args[1])
+            val_coords = [c for row in _expand_range_coords(raw_args[2]) for c in row] if len(raw_args) > 2 else crit_coords
+            matched_nums: List[float] = []
+            matched_count = 0
+            for idx, c_coord in enumerate(crit_coords):
+                c_eval = _get_cell_eval(c_coord)
+                if _matches_excel_criteria(c_eval, crit_val):
+                    matched_count += 1
+                    if idx < len(val_coords):
+                        fv = _to_float(_get_cell_eval(val_coords[idx]), None)
+                        if fv is not None:
+                            matched_nums.append(fv)
+            if fn == "COUNTIF":
+                return str(matched_count)
+            if fn == "SUMIF":
+                return _format_formula_number(sum(matched_nums))
+            if not matched_nums:
+                return "#DIV/0!"
+            return _format_formula_number(sum(matched_nums) / len(matched_nums))
+
+        if fn in ("COUNTIFS", "SUMIFS", "AVERAGEIFS", "MINIFS", "MAXIFS"):
+            if fn == "COUNTIFS":
+                if len(raw_args) < 2 or len(raw_args) % 2 != 0:
+                    return "#VALUE!"
+                first_coords = [c for row in _expand_range_coords(raw_args[0]) for c in row]
+                pairs = []
+                for idx in range(0, len(raw_args), 2):
+                    r_coords = [c for row in _expand_range_coords(raw_args[idx]) for c in row]
+                    c_val = _eval_expr(raw_args[idx + 1])
+                    pairs.append((r_coords, c_val))
+                cnt = 0
+                for i in range(len(first_coords)):
+                    if all(i < len(rc) and _matches_excel_criteria(_get_cell_eval(rc[i]), cv) for rc, cv in pairs):
+                        cnt += 1
+                return str(cnt)
+            else:
+                if len(raw_args) < 3 or len(raw_args) % 2 == 0:
+                    return "#VALUE!"
+                target_coords = [c for row in _expand_range_coords(raw_args[0]) for c in row]
+                pairs = []
+                for idx in range(1, len(raw_args), 2):
+                    r_coords = [c for row in _expand_range_coords(raw_args[idx]) for c in row]
+                    c_val = _eval_expr(raw_args[idx + 1])
+                    pairs.append((r_coords, c_val))
+                matched_nums = []
+                for i, t_coord in enumerate(target_coords):
+                    if all(i < len(rc) and _matches_excel_criteria(_get_cell_eval(rc[i]), cv) for rc, cv in pairs):
+                        fv = _to_float(_get_cell_eval(t_coord), None)
+                        if fv is not None:
+                            matched_nums.append(fv)
+                if fn == "SUMIFS":
+                    return _format_formula_number(sum(matched_nums))
+                if fn == "AVERAGEIFS":
+                    return _format_formula_number(sum(matched_nums) / len(matched_nums)) if matched_nums else "#DIV/0!"
+                if fn == "MINIFS":
+                    return _format_formula_number(min(matched_nums)) if matched_nums else "0"
+                if fn == "MAXIFS":
+                    return _format_formula_number(max(matched_nums)) if matched_nums else "0"
+
+        # --- MATH & TRIG FUNCTIONS ---
+        if fn == "ABS":
+            return _format_formula_number(abs(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0)) if raw_args else "0"
+        if fn == "ROUND":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            d = int(_to_float(_eval_expr(raw_args[1]), 0.0) or 0) if len(raw_args) > 1 else 0
+            return _format_formula_number(round(n, d))
+        if fn == "ROUNDUP":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            d = int(_to_float(_eval_expr(raw_args[1]), 0.0) or 0) if len(raw_args) > 1 else 0
+            factor = 10 ** d
+            res = (math.ceil(n * factor) if n >= 0 else math.floor(n * factor)) / factor
+            return _format_formula_number(res)
+        if fn in ("ROUNDDOWN", "TRUNC"):
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            d = int(_to_float(_eval_expr(raw_args[1]), 0.0) or 0) if len(raw_args) > 1 else 0
+            factor = 10 ** d
+            res = math.trunc(n * factor) / factor
+            return _format_formula_number(res)
+        if fn == "INT":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return _format_formula_number(math.floor(n))
+        if fn == "MOD":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            a = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            b = _to_float(_eval_expr(raw_args[1]), 0.0) or 0.0
+            if b == 0:
+                return "#DIV/0!"
+            return _format_formula_number(a % b)
+        if fn in ("POWER", "POW"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            a = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            b = _to_float(_eval_expr(raw_args[1]), 0.0) or 0.0
+            return _format_formula_number(math.pow(a, b))
+        if fn == "SQRT":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return _format_formula_number(math.sqrt(n)) if n >= 0 else "#NUM!"
+        if fn == "EXP":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return _format_formula_number(math.exp(n))
+        if fn == "LN":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return _format_formula_number(math.log(n)) if n > 0 else "#NUM!"
+        if fn == "LOG10":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return _format_formula_number(math.log10(n)) if n > 0 else "#NUM!"
+        if fn == "LOG":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            base = _to_float(_eval_expr(raw_args[1]), 10.0) if len(raw_args) > 1 else 10.0
+            return _format_formula_number(math.log(n, base or 10.0)) if (n > 0 and (base or 10.0) > 0) else "#NUM!"
+        if fn == "PI":
+            return _format_formula_number(math.pi)
+        if fn == "SIGN":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            return "1" if n > 0 else ("-1" if n < 0 else "0")
+        if fn == "SIN":
+            return _format_formula_number(math.sin(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0))
+        if fn == "COS":
+            return _format_formula_number(math.cos(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0))
+        if fn == "TAN":
+            return _format_formula_number(math.tan(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0))
+        if fn == "RADIANS":
+            return _format_formula_number(math.radians(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0))
+        if fn == "DEGREES":
+            return _format_formula_number(math.degrees(_to_float(_eval_expr(raw_args[0]), 0.0) or 0.0))
+        if fn == "FACT":
+            n = int(_to_float(_eval_expr(raw_args[0]), 0.0) or 0)
+            return str(math.factorial(n)) if 0 <= n <= 170 else "#NUM!"
+        if fn in ("CEILING", "CEIL"):
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            sig = _to_float(_eval_expr(raw_args[1]), 1.0) if len(raw_args) > 1 else 1.0
+            if not sig:
+                return "0"
+            return _format_formula_number(math.ceil(n / sig) * sig)
+        if fn == "FLOOR":
+            n = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            sig = _to_float(_eval_expr(raw_args[1]), 1.0) if len(raw_args) > 1 else 1.0
+            if not sig:
+                return "0"
+            return _format_formula_number(math.floor(n / sig) * sig)
+
+        # --- LOOKUP & REFERENCE FUNCTIONS ---
+        if fn == "VLOOKUP":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            lookup_val = str(_eval_expr(raw_args[0])).strip()
+            mat = _expand_range_coords(raw_args[1])
+            col_idx = int(_to_float(_eval_expr(raw_args[2]), 1) or 1)
+            if not mat or col_idx < 1 or col_idx > len(mat[0]):
+                return "#REF!"
+            for row in mat:
+                cell_v = _get_cell_eval(row[0]).strip()
+                if _matches_excel_criteria(cell_v, lookup_val):
+                    return _get_cell_eval(row[col_idx - 1])
+            return "#N/A"
+
+        if fn == "HLOOKUP":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            lookup_val = str(_eval_expr(raw_args[0])).strip()
+            mat = _expand_range_coords(raw_args[1])
+            row_idx = int(_to_float(_eval_expr(raw_args[2]), 1) or 1)
+            if not mat or row_idx < 1 or row_idx > len(mat):
+                return "#REF!"
+            first_row = mat[0]
+            for c_i, coord in enumerate(first_row):
+                if _matches_excel_criteria(_get_cell_eval(coord).strip(), lookup_val):
+                    return _get_cell_eval(mat[row_idx - 1][c_i])
+            return "#N/A"
+
+        if fn == "XLOOKUP":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            lookup_val = str(_eval_expr(raw_args[0])).strip()
+            lookup_coords = [c for row in _expand_range_coords(raw_args[1]) for c in row]
+            return_coords = [c for row in _expand_range_coords(raw_args[2]) for c in row]
+            not_found = _eval_expr(raw_args[3]) if len(raw_args) > 3 else "#N/A"
+            for i, lc in enumerate(lookup_coords):
+                if _matches_excel_criteria(_get_cell_eval(lc).strip(), lookup_val):
+                    return _get_cell_eval(return_coords[i]) if i < len(return_coords) else "#REF!"
+            return not_found
+
+        if fn == "INDEX":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            mat = _expand_range_coords(raw_args[0])
+            if not mat:
+                return "#REF!"
+            r_num = int(_to_float(_eval_expr(raw_args[1]), 1) or 1)
+            c_num = int(_to_float(_eval_expr(raw_args[2]), 1) or 1) if len(raw_args) > 2 else 1
+            if len(mat) == 1 and r_num > 1 and c_num == 1:
+                c_num = r_num
+                r_num = 1
+            if r_num < 1 or r_num > len(mat) or c_num < 1 or c_num > len(mat[0]):
+                return "#REF!"
+            return _get_cell_eval(mat[r_num - 1][c_num - 1])
+
+        if fn == "MATCH":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            lookup_val = str(_eval_expr(raw_args[0])).strip()
+            lookup_coords = [c for row in _expand_range_coords(raw_args[1]) for c in row]
+            for idx, lc in enumerate(lookup_coords, start=1):
+                if _matches_excel_criteria(_get_cell_eval(lc).strip(), lookup_val):
+                    return str(idx)
+            return "#N/A"
+
+        if fn == "CHOOSE":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            idx = int(_to_float(_eval_expr(raw_args[0]), 0) or 0)
+            if idx < 1 or idx >= len(raw_args):
+                return "#VALUE!"
+            return _eval_expr(raw_args[idx])
+
+        if fn == "ROW":
+            if not raw_args:
+                return "1"
+            parsed = _split_cell_coord(raw_args[0].replace("$", "").split(":")[0])
+            return str(parsed[2]) if parsed else "#REF!"
+        if fn == "COLUMN":
+            if not raw_args:
+                return "1"
+            parsed = _split_cell_coord(raw_args[0].replace("$", "").split(":")[0])
+            return str(parsed[1] + 1) if parsed else "#REF!"
+        if fn == "ROWS":
+            mat = _expand_range_coords(raw_args[0]) if raw_args else []
+            return str(len(mat)) if mat else "1"
+        if fn == "COLUMNS":
+            mat = _expand_range_coords(raw_args[0]) if raw_args else []
+            return str(len(mat[0])) if (mat and mat[0]) else "1"
+
+        # --- TEXT / STRING FUNCTIONS ---
+        if fn in ("CONCAT", "CONCATENATE"):
+            parts = [str(v) for a in raw_args for v in _expand_arg_values(a)]
+            return "".join(parts)
+        if fn == "TEXTJOIN":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            delim = str(_eval_expr(raw_args[0]))
+            ignore_empty = _to_bool(_eval_expr(raw_args[1]))
+            vals = [str(v) for a in raw_args[2:] for v in _expand_arg_values(a)]
+            if ignore_empty:
+                vals = [v for v in vals if v != ""]
+            return delim.join(vals)
+        if fn == "LEN":
+            return str(len(str(_eval_expr(raw_args[0])))) if raw_args else "0"
+        if fn == "LOWER":
+            return str(_eval_expr(raw_args[0])).lower() if raw_args else ""
+        if fn == "UPPER":
+            return str(_eval_expr(raw_args[0])).upper() if raw_args else ""
+        if fn == "PROPER":
+            return str(_eval_expr(raw_args[0])).title() if raw_args else ""
+        if fn == "TRIM":
+            return re.sub(r"\s+", " ", str(_eval_expr(raw_args[0])).strip()) if raw_args else ""
+        if fn == "LEFT":
+            txt = str(_eval_expr(raw_args[0])) if raw_args else ""
+            n = int(_to_float(_eval_expr(raw_args[1]), 1) or 1) if len(raw_args) > 1 else 1
+            return txt[:max(0, n)]
+        if fn == "RIGHT":
+            txt = str(_eval_expr(raw_args[0])) if raw_args else ""
+            n = int(_to_float(_eval_expr(raw_args[1]), 1) or 1) if len(raw_args) > 1 else 1
+            return txt[len(txt) - max(0, n):] if n > 0 else ""
+        if fn == "MID":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            txt = str(_eval_expr(raw_args[0]))
+            start = max(1, int(_to_float(_eval_expr(raw_args[1]), 1) or 1))
+            length = max(0, int(_to_float(_eval_expr(raw_args[2]), 0) or 0))
+            return txt[start - 1: start - 1 + length]
+        if fn == "SUBSTITUTE":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            txt = str(_eval_expr(raw_args[0]))
+            old_s = str(_eval_expr(raw_args[1]))
+            new_s = str(_eval_expr(raw_args[2]))
+            return txt.replace(old_s, new_s)
+        if fn == "REPLACE":
+            if len(raw_args) < 4:
+                return "#VALUE!"
+            txt = str(_eval_expr(raw_args[0]))
+            start = max(1, int(_to_float(_eval_expr(raw_args[1]), 1) or 1))
+            num_chars = max(0, int(_to_float(_eval_expr(raw_args[2]), 0) or 0))
+            new_s = str(_eval_expr(raw_args[3]))
+            return txt[:start - 1] + new_s + txt[start - 1 + num_chars:]
+        if fn in ("FIND", "SEARCH"):
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            needle = str(_eval_expr(raw_args[0]))
+            haystack = str(_eval_expr(raw_args[1]))
+            start = max(1, int(_to_float(_eval_expr(raw_args[2]), 1) or 1)) if len(raw_args) > 2 else 1
+            pos = (haystack.lower().find(needle.lower(), start - 1) if fn == "SEARCH" else haystack.find(needle, start - 1))
+            return str(pos + 1) if pos >= 0 else "#VALUE!"
+        if fn == "REPT":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            txt = str(_eval_expr(raw_args[0]))
+            cnt = max(0, min(1000, int(_to_float(_eval_expr(raw_args[1]), 0) or 0)))
+            return txt * cnt
+        if fn == "EXACT":
+            if len(raw_args) < 2:
+                return "FALSE"
+            return "TRUE" if str(_eval_expr(raw_args[0])) == str(_eval_expr(raw_args[1])) else "FALSE"
+        if fn == "VALUE":
+            fv = _to_float(_eval_expr(raw_args[0]) if raw_args else "", None)
+            return _format_formula_number(fv) if fv is not None else "#VALUE!"
+        if fn == "TEXT":
+            if not raw_args:
+                return ""
+            return str(_eval_expr(raw_args[0]))
+
+        # --- DATE & TIME FUNCTIONS ---
+        if fn == "TODAY":
+            return datetime.now(manila_tz).strftime("%Y-%m-%d")
+        if fn == "NOW":
+            return datetime.now(manila_tz).strftime("%Y-%m-%d %H:%M")
+        if fn == "DATE":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            y = int(_to_float(_eval_expr(raw_args[0]), 2026) or 2026)
+            m = int(_to_float(_eval_expr(raw_args[1]), 1) or 1)
+            d = int(_to_float(_eval_expr(raw_args[2]), 1) or 1)
+            try:
+                return datetime(y, m, d).strftime("%Y-%m-%d")
+            except Exception:
+                return "#VALUE!"
+        if fn in ("YEAR", "MONTH", "DAY"):
+            d_str = str(_eval_expr(raw_args[0])).strip() if raw_args else ""
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%Y-%m-%d %H:%M", "%b %d, %Y"):
+                try:
+                    dt = datetime.strptime(d_str, fmt)
+                    return str(dt.year if fn == "YEAR" else (dt.month if fn == "MONTH" else dt.day))
+                except Exception:
+                    continue
+            return "#VALUE!"
+
+        # --- FINANCIAL FUNCTIONS ---
+        if fn == "PMT":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            rate = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            nper = _to_float(_eval_expr(raw_args[1]), 0.0) or 0.0
+            pv = _to_float(_eval_expr(raw_args[2]), 0.0) or 0.0
+            fv = (_to_float(_eval_expr(raw_args[3]), 0.0) or 0.0) if len(raw_args) > 3 else 0.0
+            if nper == 0:
+                return "#DIV/0!"
+            if rate == 0:
+                return _format_formula_number(-(pv + fv) / nper)
+            pmt = -(rate * (pv * ((1 + rate) ** nper) + fv)) / (((1 + rate) ** nper) - 1)
+            return _format_formula_number(pmt)
+        if fn == "FV":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            rate = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            nper = _to_float(_eval_expr(raw_args[1]), 0.0) or 0.0
+            pmt = _to_float(_eval_expr(raw_args[2]), 0.0) or 0.0
+            pv = (_to_float(_eval_expr(raw_args[3]), 0.0) or 0.0) if len(raw_args) > 3 else 0.0
+            if rate == 0:
+                return _format_formula_number(-(pv + pmt * nper))
+            fv = -(pv * ((1 + rate) ** nper) + pmt * (((1 + rate) ** nper) - 1) / rate)
+            return _format_formula_number(fv)
+        if fn == "PV":
+            if len(raw_args) < 3:
+                return "#VALUE!"
+            rate = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            nper = _to_float(_eval_expr(raw_args[1]), 0.0) or 0.0
+            pmt = _to_float(_eval_expr(raw_args[2]), 0.0) or 0.0
+            fv = (_to_float(_eval_expr(raw_args[3]), 0.0) or 0.0) if len(raw_args) > 3 else 0.0
+            if rate == 0:
+                return _format_formula_number(-(fv + pmt * nper))
+            pv = -(fv + pmt * (((1 + rate) ** nper) - 1) / rate) / ((1 + rate) ** nper)
+            return _format_formula_number(pv)
+        if fn == "NPV":
+            if len(raw_args) < 2:
+                return "#VALUE!"
+            rate = _to_float(_eval_expr(raw_args[0]), 0.0) or 0.0
+            cashflows = [n for a in raw_args[1:] for n in _expand_arg_numbers(a)]
+            npv = sum(cf / ((1 + rate) ** (idx + 1)) for idx, cf in enumerate(cashflows))
+            return _format_formula_number(npv)
+
+        # --- INFORMATION FUNCTIONS ---
+        if fn == "ISBLANK":
+            if not raw_args:
+                return "TRUE"
+            a_c = raw_args[0].strip()
+            if re.match(r"^\$?[A-Za-z]+\$?\d+$", a_c):
+                return "TRUE" if str(cells_map.get(a_c.replace("$", "").upper(), "")).strip() == "" else "FALSE"
+            return "TRUE" if str(_eval_expr(a_c)).strip() == "" else "FALSE"
+        if fn == "ISNUMBER":
+            if not raw_args:
+                return "FALSE"
+            v = _eval_expr(raw_args[0])
+            return "TRUE" if _to_float(v, None) is not None else "FALSE"
+        if fn == "ISTEXT":
+            if not raw_args:
+                return "FALSE"
+            v = str(_eval_expr(raw_args[0])).strip()
+            return "TRUE" if (v != "" and _to_float(v, None) is None and not v.startswith("#")) else "FALSE"
+        if fn == "ISERROR":
+            if not raw_args:
+                return "FALSE"
+            return "TRUE" if str(_eval_expr(raw_args[0])).startswith("#") else "FALSE"
+        if fn == "ISNA":
+            if not raw_args:
+                return "FALSE"
+            return "TRUE" if str(_eval_expr(raw_args[0])) == "#N/A" else "FALSE"
+        if fn == "ISEVEN":
+            n = _to_float(_eval_expr(raw_args[0]) if raw_args else "", None)
+            return "TRUE" if (n is not None and int(math.trunc(n)) % 2 == 0) else "FALSE"
+        if fn == "ISODD":
+            n = _to_float(_eval_expr(raw_args[0]) if raw_args else "", None)
+            return "TRUE" if (n is not None and int(math.trunc(n)) % 2 != 0) else "FALSE"
+
+        return "#NAME?"
+
+    def _eval_expr(sub_expr: str) -> Any:
+        t = sub_expr.strip()
+        if not t:
+            return ""
+        # Strip redundant outer parentheses if balanced
+        while t.startswith("(") and t.endswith(")"):
+            depth_p = 0
+            in_q = False
+            balanced_outer = True
+            for i_c, ch in enumerate(t):
+                if ch == '"':
+                    in_q = not in_q
+                elif not in_q:
+                    if ch == '(':
+                        depth_p += 1
+                    elif ch == ')':
+                        depth_p -= 1
+                        if depth_p == 0 and i_c < len(t) - 1:
+                            balanced_outer = False
+                            break
+            if balanced_outer and depth_p == 0:
+                t = t[1:-1].strip()
+            else:
+                break
+
+        # String literal
+        if len(t) >= 2 and t.startswith('"') and t.endswith('"'):
+            # Verify no unescaped quotes inside
+            inner = t[1:-1]
+            if '"' not in inner.replace('""', ''):
+                return inner.replace('""', '"')
+
+        # Top-level comparison operators: <>, >=, <=, =, >, <
+        in_q = False
+        depth_p = 0
+        i_c = 0
+        while i_c < len(t):
+            ch = t[i_c]
+            if ch == '"':
+                in_q = not in_q
+            elif not in_q:
+                if ch == '(':
+                    depth_p += 1
+                elif ch == ')':
+                    depth_p = max(0, depth_p - 1)
+                elif depth_p == 0:
+                    for op_str in ("<>", ">=", "<=", "=", ">", "<"):
+                        if t[i_c:].startswith(op_str):
+                            lhs = _eval_expr(t[:i_c])
+                            rhs = _eval_expr(t[i_c + len(op_str):])
+                            res_b = _matches_excel_criteria(lhs, f"{op_str}{rhs}")
+                            return "TRUE" if res_b else "FALSE"
+            i_c += 1
+
+        # Top-level string concatenation operator: &
+        in_q = False
+        depth_p = 0
+        for i_c, ch in enumerate(t):
+            if ch == '"':
+                in_q = not in_q
+            elif not in_q:
+                if ch == '(':
+                    depth_p += 1
+                elif ch == ')':
+                    depth_p = max(0, depth_p - 1)
+                elif ch == '&' and depth_p == 0:
+                    return f"{_eval_expr(t[:i_c])}{_eval_expr(t[i_c + 1:])}"
+
+        # Top-level addition / subtraction (+ / -) scanning right-to-left
+        in_q = False
+        depth_p = 0
+        for i_c in range(len(t) - 1, -1, -1):
+            ch = t[i_c]
+            if ch == '"':
+                in_q = not in_q
+            elif not in_q:
+                if ch == ')':
+                    depth_p += 1
+                elif ch == '(':
+                    depth_p = max(0, depth_p - 1)
+                elif depth_p == 0 and ch in ('+', '-') and i_c > 0:
+                    prev_non_space = t[:i_c].rstrip()
+                    if prev_non_space and prev_non_space[-1] not in ('+', '-', '*', '/', '^', '(', ',', ';', '=', '<', '>'):
+                        lhs_v = _eval_expr(t[:i_c])
+                        rhs_v = _eval_expr(t[i_c + 1:])
+                        if str(lhs_v).startswith("#"):
+                            return lhs_v
+                        if str(rhs_v).startswith("#"):
+                            return rhs_v
+                        ln = _to_float(lhs_v, None)
+                        rn = _to_float(rhs_v, None)
+                        if ln is None or rn is None:
+                            return "#VALUE!"
+                        return _format_formula_number(ln + rn if ch == '+' else ln - rn)
+
+        # Top-level multiplication / division (* / /) scanning right-to-left
+        in_q = False
+        depth_p = 0
+        for i_c in range(len(t) - 1, -1, -1):
+            ch = t[i_c]
+            if ch == '"':
+                in_q = not in_q
+            elif not in_q:
+                if ch == ')':
+                    depth_p += 1
+                elif ch == '(':
+                    depth_p = max(0, depth_p - 1)
+                elif depth_p == 0 and ch in ('*', '/') and i_c > 0:
+                    lhs_v = _eval_expr(t[:i_c])
+                    rhs_v = _eval_expr(t[i_c + 1:])
+                    if str(lhs_v).startswith("#"):
+                        return lhs_v
+                    if str(rhs_v).startswith("#"):
+                        return rhs_v
+                    ln = _to_float(lhs_v, None)
+                    rn = _to_float(rhs_v, None)
+                    if ln is None or rn is None:
+                        return "#VALUE!"
+                    if ch == '/':
+                        if rn == 0:
+                            return "#DIV/0!"
+                        return _format_formula_number(ln / rn)
+                    return _format_formula_number(ln * rn)
+
+        # Top-level exponentiation (^)
+        in_q = False
+        depth_p = 0
+        for i_c in range(len(t) - 1, -1, -1):
+            ch = t[i_c]
+            if ch == '"':
+                in_q = not in_q
+            elif not in_q:
+                if ch == ')':
+                    depth_p += 1
+                elif ch == '(':
+                    depth_p = max(0, depth_p - 1)
+                elif depth_p == 0 and ch == '^' and i_c > 0:
+                    ln = _to_float(_eval_expr(t[:i_c]), None)
+                    rn = _to_float(_eval_expr(t[i_c + 1:]), None)
+                    if ln is None or rn is None:
+                        return "#VALUE!"
+                    return _format_formula_number(math.pow(ln, rn))
+
+        # Unary + or -
+        if t.startswith("-"):
+            uv = _to_float(_eval_expr(t[1:]), None)
+            return _format_formula_number(-uv) if uv is not None else "#VALUE!"
+        if t.startswith("+"):
+            uv = _to_float(_eval_expr(t[1:]), None)
+            return _format_formula_number(uv) if uv is not None else "#VALUE!"
+
+        # Percentage suffix (e.g. 15%)
+        if t.endswith("%") and re.match(r"^-?\d+(\.\d+)?%$", t):
+            return _format_formula_number(float(t[:-1]) / 100.0)
+
+        # Function call: FUNC_NAME(arg1, arg2, ...)
+        fn_call = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*)\s*\((.*)\)$", t, re.DOTALL)
+        if fn_call:
+            fn_name = fn_call.group(1)
+            args_body = fn_call.group(2).strip()
+            parsed_args = _split_top_level_formula_args(args_body) if args_body else []
+            return _eval_function(fn_name, parsed_args)
+
+        # Single Cell Reference (e.g. A1, $B$12)
+        if re.match(r"^\$?[A-Za-z]+\$?\d+$", t):
+            return _get_cell_eval(t)
+
+        # Plain number or boolean literal
+        if t.upper() in ("TRUE", "FALSE"):
+            return t.upper()
+        try:
+            num_val = float(t)
+            return _format_formula_number(num_val)
+        except Exception:
+            pass
+
+        return t
+
+    try:
+        res = _eval_expr(expr)
+        return str(res if res is not None else "")
+    except Exception:
+        return "#ERROR!"
+
 
 
 def _parse_legacy_xls_bytes(file_bytes: bytes, filename: str = "uploaded.xls") -> Dict[str, Any]:
@@ -527,8 +1441,8 @@ def _sanitize_workbook_sheets_cells(wb: Dict[str, Any]) -> bool:
 
 def _compute_sheets_signature(sheets: Any) -> str:
     """
-    Computes a deterministic canonical JSON signature of sheet names and cells
-    so we can accurately detect when any cell or sheet in Google Sheets / Drive changed.
+    Computes a deterministic canonical JSON signature of sheet names, cells, and layout
+    (wrap_cells, col_widths, row_heights) so we can accurately detect changes.
     """
     if not isinstance(sheets, list):
         return ""
@@ -542,9 +1456,30 @@ def _compute_sheets_signature(sheets: Any) -> str:
             for k, v in sorted(raw_cells.items())
             if v is not None and str(v).strip() != ""
         }
+        raw_wrap = sh.get("wrap_cells") or {}
+        clean_wrap = {
+            str(k).upper(): True
+            for k, v in sorted(raw_wrap.items())
+            if v
+        } if isinstance(raw_wrap, dict) else {}
+        raw_cw = sh.get("col_widths") or {}
+        clean_cw = {
+            str(k).upper(): int(float(v))
+            for k, v in sorted(raw_cw.items())
+            if v is not None and str(v).strip() != ""
+        } if isinstance(raw_cw, dict) else {}
+        raw_rh = sh.get("row_heights") or {}
+        clean_rh = {
+            str(k): int(float(v))
+            for k, v in sorted(raw_rh.items())
+            if v is not None and str(v).strip() != ""
+        } if isinstance(raw_rh, dict) else {}
         norm.append({
             "name": str(sh.get("name") or "Sheet1"),
-            "cells": clean_cells
+            "cells": clean_cells,
+            "wrap_cells": clean_wrap,
+            "col_widths": clean_cw,
+            "row_heights": clean_rh
         })
     try:
         return json.dumps(norm, sort_keys=True, ensure_ascii=False)
@@ -657,6 +1592,25 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                 except Exception as ss_err:
                     print(f"[⚠️ XLSX SHARED STRINGS PARSE WARNING]: {ss_err}")
 
+            # 1b. Parse Wrap Text styles from xl/styles.xml (if present)
+            wrapped_xf_indices = set()
+            if "xl/styles.xml" in names:
+                try:
+                    st_root = ET.fromstring(zf.read("xl/styles.xml"))
+                    for node in st_root.iter():
+                        if node.tag.endswith("}cellXfs") or node.tag == "cellXfs":
+                            xf_idx = 0
+                            for xf in node:
+                                if xf.tag.endswith("}xf") or xf.tag == "xf":
+                                    for child in xf:
+                                        if child.tag.endswith("}alignment") or child.tag == "alignment":
+                                            wt = str(child.attrib.get("wrapText") or "").lower()
+                                            if wt in ("1", "true"):
+                                                wrapped_xf_indices.add(xf_idx)
+                                    xf_idx += 1
+                except Exception:
+                    pass
+
             # 2. Workbook Relationships (xl/_rels/workbook.xml.rels)
             rid_to_target: Dict[str, str] = {}
             rels_path = "xl/_rels/workbook.xml.rels"
@@ -706,11 +1660,29 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                     alt_path = f"xl/worksheets/sheet{idx_s}.xml"
                     w_path = alt_path if alt_path in names else ""
                 cells_map: Dict[str, str] = {}
+                wrap_cells_map: Dict[str, bool] = {}
+                col_widths_map: Dict[str, int] = {}
+                row_heights_map: Dict[str, int] = {}
                 max_row = 25
                 max_col = 10
 
                 if w_path and w_path in names:
                     ws_root = ET.fromstring(zf.read(w_path))
+                    # Parse custom column widths from <cols><col min="..." max="..." width="..."/></cols>
+                    for col_el in ws_root.iter():
+                        if col_el.tag.endswith("}col") or col_el.tag == "col":
+                            try:
+                                c_min = int(col_el.attrib.get("min") or 0)
+                                c_max = int(col_el.attrib.get("max") or c_min)
+                                w_char = float(col_el.attrib.get("width") or 0)
+                                if c_min >= 1 and w_char > 0:
+                                    px_w = max(55, min(1400, int(round(w_char * 7.0))))
+                                    for c_1idx in range(c_min, min(c_max, 52) + 1):
+                                        col_widths_map[_col_idx_to_letter(c_1idx - 1)] = px_w
+                                        max_col = max(max_col, c_1idx)
+                            except Exception:
+                                pass
+
                     row_seq = 0
                     for row_el in ws_root.iter():
                         if not (row_el.tag.endswith("}row") or row_el.tag == "row"):
@@ -718,6 +1690,18 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                         row_seq += 1
                         r_num = int(row_el.attrib.get("r") or row_seq)
                         max_row = max(max_row, r_num)
+
+                        # Parse custom row height if present
+                        ht_attr = row_el.attrib.get("ht")
+                        if ht_attr is not None:
+                            try:
+                                ht_pt = float(ht_attr)
+                                if ht_pt > 0:
+                                    px_h = max(24, min(900, int(round(ht_pt / 0.75))))
+                                    row_heights_map[str(r_num)] = px_h
+                            except Exception:
+                                pass
+
                         col_seq = 0
                         for c_el in row_el:
                             if not (c_el.tag.endswith("}c") or c_el.tag == "c"):
@@ -732,6 +1716,14 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                                 ref_key = f"{c_let}{r_n}"
                             else:
                                 ref_key = ref.upper()
+
+                            s_attr = c_el.attrib.get("s")
+                            if s_attr is not None and wrapped_xf_indices:
+                                try:
+                                    if int(s_attr) in wrapped_xf_indices:
+                                        wrap_cells_map[ref_key] = True
+                                except Exception:
+                                    pass
 
                             c_type = c_el.attrib.get("t") or ""
                             val_text = ""
@@ -751,7 +1743,7 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                                                 inline_parts.append(t_sub.text)
 
                             final_val = ""
-                            if formula_text and re.match(r"^=(SUM|AVERAGE|AVG|MIN|MAX|COUNT)\b", formula_text, re.IGNORECASE):
+                            if formula_text and not re.match(r"^=(IMAGE|SPARKLINE|IMPORTIMAGE|EMBEDIMAGE|WEBIMAGE|PICTURE)\b", formula_text, re.IGNORECASE):
                                 final_val = formula_text
                             elif c_type == "s":
                                 try:
@@ -776,6 +1768,9 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                     "id": f"sheet_{idx_s}_{uuid.uuid4().hex[:6]}",
                     "name": s_info["name"],
                     "cells": cells_map,
+                    "wrap_cells": wrap_cells_map,
+                    "col_widths": col_widths_map,
+                    "row_heights": row_heights_map,
                     "row_count": max(25, min(max_row + 5, 500)),
                     "col_count": max(10, min(max_col + 2, 52))
                 })
@@ -785,6 +1780,9 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
                     "id": f"sheet_1_{uuid.uuid4().hex[:6]}",
                     "name": "Sheet1",
                     "cells": {},
+                    "wrap_cells": {},
+                    "col_widths": {},
+                    "row_heights": {},
                     "row_count": 25,
                     "col_count": 10
                 })
@@ -808,7 +1806,8 @@ def validate_and_parse_xlsx_bytes(file_bytes: bytes, filename: str = "uploaded.x
 def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
     """
     Generates a genuine, standards-compliant OpenXML .xlsx workbook binary in memory
-    from GlennBot's custom spreadsheet sheets (Columns A, B, C, D... and Rows 1, 2, 3, 4... + custom sheet names).
+    from GlennBot's custom spreadsheet sheets (Columns A, B, C, D... and Rows 1, 2, 3, 4... +
+    custom sheet names, formulas, column widths, row heights, and per-cell wrap text).
     Works in pure Python without requiring external C libraries.
     """
     valid_sheets = list(sheets or [])
@@ -827,7 +1826,10 @@ def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
         used_names.add(candidate_name.lower())
         normalized_sheets.append({
             "name": candidate_name,
-            "cells": dict(sh.get("cells") or {})
+            "cells": dict(sh.get("cells") or {}),
+            "wrap_cells": dict(sh.get("wrap_cells") or {}) if isinstance(sh.get("wrap_cells"), dict) else {},
+            "col_widths": dict(sh.get("col_widths") or {}) if isinstance(sh.get("col_widths"), dict) else {},
+            "row_heights": dict(sh.get("row_heights") or {}) if isinstance(sh.get("row_heights"), dict) else {}
         })
 
     out_bio = io.BytesIO()
@@ -888,7 +1890,7 @@ def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
         )
         zf.writestr("xl/_rels/workbook.xml.rels", wb_rels_xml)
 
-        # 5. xl/styles.xml
+        # 5. xl/styles.xml (s="0" default, s="1" Wrap Text enabled)
         styles_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
@@ -896,7 +1898,10 @@ def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
             '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
             '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
             '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-            '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+            '<cellXfs count="2">'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>'
+            '</cellXfs>'
             '</styleSheet>'
         )
         zf.writestr("xl/styles.xml", styles_xml)
@@ -904,7 +1909,24 @@ def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
         # 6. xl/worksheets/sheet{i}.xml
         for i, sh in enumerate(normalized_sheets, start=1):
             cells_dict: Dict[str, str] = sh["cells"]
-            rows_bucket: Dict[int, List[tuple]] = {}
+            wrap_dict: Dict[str, Any] = {str(k).upper(): bool(v) for k, v in (sh.get("wrap_cells") or {}).items() if v}
+            col_widths_dict: Dict[str, Any] = sh.get("col_widths") or {}
+            row_heights_dict: Dict[str, Any] = sh.get("row_heights") or {}
+
+            # Build <cols> XML if custom column widths exist
+            col_xml_items: List[str] = []
+            for col_key, raw_w in sorted(col_widths_dict.items(), key=lambda x: _letter_to_col_idx(str(x[0]))):
+                try:
+                    px_w = float(raw_w)
+                    if px_w >= 45:
+                        c_1idx = _letter_to_col_idx(str(col_key)) + 1
+                        excel_w = round(px_w / 7.0, 2)
+                        col_xml_items.append(f'<col min="{c_1idx}" max="{c_1idx}" width="{excel_w}" customWidth="1"/>')
+                except Exception:
+                    pass
+            cols_xml_block = f'<cols>{"".join(col_xml_items)}</cols>' if col_xml_items else ""
+
+            rows_bucket: Dict[int, Dict[int, Tuple[str, str]]] = {}
             for coord_key, raw_val in cells_dict.items():
                 val_str = _format_spreadsheet_cell_value(raw_val, "")
                 if val_str == "":
@@ -913,32 +1935,74 @@ def build_xlsx_bytes_from_sheets(sheets: List[Dict[str, Any]]) -> bytes:
                 if not parsed:
                     continue
                 col_l, col_idx, row_n = parsed
-                rows_bucket.setdefault(row_n, []).append((col_idx, f"{col_l}{row_n}", val_str))
+                rows_bucket.setdefault(row_n, {})[col_idx] = (f"{col_l}{row_n}", val_str)
+
+            # Also include wrapped cells even if currently empty so their wrap formatting persists
+            for coord_key in wrap_dict.keys():
+                parsed = _split_cell_coord(coord_key)
+                if not parsed:
+                    continue
+                col_l, col_idx, row_n = parsed
+                row_map = rows_bucket.setdefault(row_n, {})
+                if col_idx not in row_map:
+                    row_map[col_idx] = (f"{col_l}{row_n}", "")
+
+            # Also include rows that have custom row heights
+            for r_key in row_heights_dict.keys():
+                try:
+                    r_n = int(r_key)
+                    if r_n >= 1:
+                        rows_bucket.setdefault(r_n, {})
+                except Exception:
+                    pass
 
             row_xml_chunks: List[str] = []
             for r_num in sorted(rows_bucket.keys()):
-                row_cells = sorted(rows_bucket[r_num], key=lambda x: x[0])
+                row_map = rows_bucket[r_num]
                 cell_xml_chunks: List[str] = []
-                for _, ref_str, v_str in row_cells:
+                for col_idx in sorted(row_map.keys()):
+                    ref_str, v_str = row_map[col_idx]
+                    style_attr = ' s="1"' if wrap_dict.get(ref_str.upper()) else ''
                     clean_v = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", v_str)
                     stripped_v = clean_v.strip()
-                    if stripped_v.startswith("=") and len(stripped_v) > 1:
+                    if stripped_v == "":
+                        if style_attr:
+                            cell_xml_chunks.append(f'<c r="{ref_str}"{style_attr}/>')
+                    elif stripped_v.startswith("=") and len(stripped_v) > 1:
                         f_body = xml_escape(stripped_v[1:].strip())
-                        cell_xml_chunks.append(f'<c r="{ref_str}"><f>{f_body}</f></c>')
+                        eval_v = _evaluate_spreadsheet_formula(stripped_v, cells_dict)
+                        if re.match(r"^-?\d+(\.\d+)?$", str(eval_v)):
+                            cell_xml_chunks.append(f'<c r="{ref_str}"{style_attr}><f>{f_body}</f><v>{eval_v}</v></c>')
+                        else:
+                            esc_eval = xml_escape(str(eval_v))
+                            cell_xml_chunks.append(f'<c r="{ref_str}" t="str"{style_attr}><f>{f_body}</f><v>{esc_eval}</v></c>')
                     elif (
                         re.match(r"^-?\d+(\.\d+)?$", stripped_v)
                         and not (len(stripped_v) > 1 and stripped_v.startswith("0") and not stripped_v.startswith("0."))
                         and len(stripped_v.lstrip("-").split(".")[0]) <= 11
                     ):
-                        cell_xml_chunks.append(f'<c r="{ref_str}" t="n"><v>{stripped_v}</v></c>')
+                        cell_xml_chunks.append(f'<c r="{ref_str}" t="n"{style_attr}><v>{stripped_v}</v></c>')
                     else:
                         escaped_text = xml_escape(clean_v)
-                        cell_xml_chunks.append(f'<c r="{ref_str}" t="inlineStr"><is><t xml:space="preserve">{escaped_text}</t></is></c>')
-                row_xml_chunks.append(f'<row r="{r_num}">{"".join(cell_xml_chunks)}</row>')
+                        cell_xml_chunks.append(f'<c r="{ref_str}" t="inlineStr"{style_attr}><is><t xml:space="preserve">{escaped_text}</t></is></c>')
+
+                row_ht_attr = ""
+                raw_rh = row_heights_dict.get(str(r_num)) if str(r_num) in row_heights_dict else row_heights_dict.get(r_num)
+                if raw_rh is not None:
+                    try:
+                        px_h = float(raw_rh)
+                        if px_h >= 20:
+                            pt_h = round(px_h * 0.75, 2)
+                            row_ht_attr = f' ht="{pt_h}" customHeight="1"'
+                    except Exception:
+                        pass
+
+                row_xml_chunks.append(f'<row r="{r_num}"{row_ht_attr}>{"".join(cell_xml_chunks)}</row>')
 
             ws_xml = (
                 '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                f'{cols_xml_block}'
                 f'<sheetData>{"".join(row_xml_chunks)}</sheetData>'
                 '</worksheet>'
             )
@@ -1874,6 +2938,85 @@ def _download_spreadsheet_xlsx_sync(workbook_id: str):
         media_type=XLSX_MIME_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{safe_dl}"'}
     )
+
+
+@router.post("/api/spreadsheets/export-xlsx")
+async def api_export_current_spreadsheet_xlsx(request: Request):
+    """
+    Exports any in-memory or saved workbook directly as a standards-compliant .xlsx binary,
+    preserving all cells, formulas, column widths, row heights, and wrap_cells.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = str(body.get("title") or "GlennBot_Spreadsheet.xlsx").strip()
+    if not title.lower().endswith(".xlsx"):
+        title = f"{os.path.splitext(title)[0] or 'GlennBot_Spreadsheet'}.xlsx"
+    safe_dl = re.sub(r'[^a-zA-Z0-9._-]', '_', title)
+    raw_sheets = body.get("sheets") or []
+    xlsx_bytes = await run_in_threadpool(lambda: build_xlsx_bytes_from_sheets(raw_sheets))
+    return Response(
+        content=xlsx_bytes,
+        media_type=XLSX_MIME_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{safe_dl}"'}
+    )
+
+
+@router.post("/api/spreadsheets/save-layout")
+async def api_save_spreadsheet_layout_state(request: Request):
+    """
+    Persists custom column widths, row heights, and per-cell wrap text into SPREADSHEETS_STORE
+    (and local/cloud cache) immediately when the user resizes a row/column or toggles Wrap Text.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+
+    wb_id = str(body.get("workbook_id") or "").strip()
+    file_id = str(body.get("file_id") or "").strip()
+    title = str(body.get("title") or "").strip()
+    incoming_sheets = body.get("sheets") or []
+    if not isinstance(incoming_sheets, list):
+        return JSONResponse({"status": "error", "message": "sheets must be a list."}, status_code=400)
+
+    def _sync_update_layout():
+        store = _load_spreadsheets_store(force_cloud=False)
+        workbooks: List[Dict[str, Any]] = list(store.get("workbooks") or [])
+        target_wb = None
+        for w in workbooks:
+            if (wb_id and str(w.get("workbook_id") or "") == wb_id) or (file_id and str(w.get("file_id") or "") == file_id):
+                target_wb = w
+                break
+            if not wb_id and not file_id and title and str(w.get("title") or "").lower() == title.lower():
+                target_wb = w
+                break
+        if not target_wb:
+            return False
+
+        by_name = {str(s.get("name") or ""): s for s in incoming_sheets if isinstance(s, dict)}
+        for idx, sh in enumerate(target_wb.get("sheets") or []):
+            inc = by_name.get(str(sh.get("name") or "")) or (incoming_sheets[idx] if idx < len(incoming_sheets) else None)
+            if isinstance(inc, dict):
+                if isinstance(inc.get("wrap_cells"), dict):
+                    sh["wrap_cells"] = dict(inc.get("wrap_cells") or {})
+                if isinstance(inc.get("col_widths"), dict):
+                    sh["col_widths"] = dict(inc.get("col_widths") or {})
+                if isinstance(inc.get("row_heights"), dict):
+                    sh["row_heights"] = dict(inc.get("row_heights") or {})
+                if isinstance(inc.get("row_count"), int):
+                    sh["row_count"] = max(10, min(int(inc["row_count"]), 500))
+                if isinstance(inc.get("col_count"), int):
+                    sh["col_count"] = max(5, min(int(inc["col_count"]), 52))
+        target_wb["last_local_save_ts"] = time.time()
+        with SPREADSHEETS_LOCK:
+            SPREADSHEETS_STORE["workbooks"] = workbooks
+        _save_spreadsheets_store()
+        return True
+
+    updated = await run_in_threadpool(_sync_update_layout)
+    return {"status": "success", "updated_in_store": updated}
 
 
 @router.delete("/api/spreadsheets/{workbook_id}")
