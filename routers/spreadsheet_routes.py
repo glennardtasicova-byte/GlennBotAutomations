@@ -2255,11 +2255,126 @@ def _save_spreadsheets_store() -> bool:
     return True
 
 
+def _push_live_cells_to_google_sheets_api(
+    gdrive_file_id: str,
+    sheets: Optional[List[Dict[str, Any]]] = None,
+    wb_ref: Optional[Dict[str, Any]] = None
+) -> bool:
+    """
+    Pushes sheet cell values directly via Google Sheets API v4 (`values:batchUpdate`)
+    and warms the Google Docs live `.xlsx` export endpoint so open Google Sheets browser
+    tabs reflect Dashboard edits immediately without waiting for Drive blob polling.
+    """
+    clean_gd_id = (gdrive_file_id or "").strip()
+    if not clean_gd_id or "/" in clean_gd_id or not sheets or not is_gdrive_authorized():
+        return False
+
+    try:
+        acc_tok = gdrive_get_access_token(force_refresh=False)
+        headers = {
+            "Authorization": f"Bearer {acc_tok}",
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache, no-store, max-age=0"
+        }
+
+        data_entries: List[Dict[str, Any]] = []
+        for idx, sh in enumerate(sheets, start=1):
+            if not isinstance(sh, dict):
+                continue
+            s_name = _sanitize_excel_sheet_name(sh.get("name") or f"Sheet{idx}", f"Sheet{idx}")
+            cells_map = sh.get("cells") or {}
+            max_data_r = 1
+            max_data_c = 1
+            parsed_coords: Dict[Tuple[int, int], str] = {}
+            for coord_str, raw_v in cells_map.items():
+                sp = _split_cell_coord(coord_str)
+                if not sp:
+                    continue
+                _, c_idx, r_num = sp
+                val_s = "" if raw_v is None else str(raw_v)
+                parsed_coords[(r_num, c_idx)] = val_s
+                if val_s != "":
+                    if r_num > max_data_r:
+                        max_data_r = r_num
+                    if (c_idx + 1) > max_data_c:
+                        max_data_c = c_idx + 1
+
+            grid_rows = min(300, max(int(sh.get("row_count") or 25), max_data_r, 25))
+            grid_cols = min(52, max(int(sh.get("col_count") or 10), max_data_c, 10))
+
+            values_matrix: List[List[Any]] = []
+            for r_num in range(1, grid_rows + 1):
+                row_vals: List[Any] = []
+                for c_idx in range(grid_cols):
+                    v_str = parsed_coords.get((r_num, c_idx), "")
+                    if (
+                        v_str != ""
+                        and not v_str.startswith("=")
+                        and re.match(r"^-?\d+(\.\d+)?$", v_str)
+                        and not (len(v_str) > 1 and v_str.startswith("0") and not v_str.startswith("0."))
+                        and len(v_str.lstrip("-").split(".")[0]) <= 11
+                    ):
+                        try:
+                            row_vals.append(float(v_str) if "." in v_str else int(v_str))
+                        except Exception:
+                            row_vals.append(v_str)
+                    else:
+                        row_vals.append(v_str)
+                values_matrix.append(row_vals)
+
+            safe_sh_name = s_name.replace("'", "''")
+            end_col_letter = _col_idx_to_letter(grid_cols - 1)
+            range_a1 = f"'{safe_sh_name}'!A1:{end_col_letter}{grid_rows}"
+            data_entries.append({
+                "range": range_a1,
+                "majorDimension": "ROWS",
+                "values": values_matrix
+            })
+
+        pushed_ok = False
+        if data_entries:
+            batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{urllib.parse.quote(clean_gd_id, safe='')}/values:batchUpdate"
+            r_batch = HTTP_SESSION.post(
+                batch_url,
+                headers=headers,
+                json={
+                    "valueInputOption": "USER_ENTERED",
+                    "data": data_entries
+                },
+                timeout=8
+            )
+            if r_batch.status_code == 200:
+                pushed_ok = True
+                if isinstance(wb_ref, dict):
+                    wb_ref["last_local_save_ts"] = time.time()
+                    wb_ref["last_edit_source"] = "glennbot"
+
+        # Warm the Google Docs live export cache so subsequent export fetches return the latest state
+        try:
+            live_sheets_url = f"https://docs.google.com/spreadsheets/d/{urllib.parse.quote(clean_gd_id, safe='')}/export"
+            HTTP_SESSION.get(
+                live_sheets_url,
+                headers={"Authorization": f"Bearer {acc_tok}", "Cache-Control": "no-cache, no-store, max-age=0"},
+                params={"format": "xlsx", "_cb": str(int(time.time() * 1000))},
+                timeout=8
+            )
+        except Exception:
+            pass
+
+        if isinstance(wb_ref, dict):
+            wb_ref["last_local_save_ts"] = time.time()
+        return pushed_ok
+    except Exception:
+        return False
+
+
 def _upload_or_update_spreadsheet_on_gdrive(
     xlsx_bytes: bytes,
     filename: str,
     existing_gdrive_file_id: str = "",
-    py_file_id: str = ""
+    py_file_id: str = "",
+    sheets: Optional[List[Dict[str, Any]]] = None,
+    wb_ref: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Uploads a new .xlsx file OR updates an existing file in-place on Google Drive ('GlennBot_Media_Vault')
@@ -2277,26 +2392,43 @@ def _upload_or_update_spreadsheet_on_gdrive(
     safe_orig = clean_orig
     gdrive_fname = clean_orig
 
-    # 1. If we already have a Google Drive File ID, update its binary content in-place via PATCH
+    # 1. If we already have a Google Drive File ID, update its binary content in-place via HTTP_SESSION.patch (keep-alive pool)
     if clean_gd_id and "/" not in clean_gd_id:
         try:
             patch_url = (
                 f"https://www.googleapis.com/upload/drive/v3/files/{urllib.parse.quote(clean_gd_id, safe='')}"
-                f"?uploadType=media&fields=id,name,mimeType,modifiedTime,md5Checksum,size,webViewLink"
+                f"?uploadType=media&supportsAllDrives=true&fields=id,name,mimeType,modifiedTime,md5Checksum,size,webViewLink"
             )
-            patch_resp = requests.patch(
+            patch_headers = {
+                "Authorization": f"Bearer {acc_tok}",
+                "Content-Type": XLSX_MIME_TYPE,
+                "Content-Length": str(len(xlsx_bytes)),
+                "Cache-Control": "no-cache"
+            }
+            patch_resp = HTTP_SESSION.patch(
                 patch_url,
-                headers={
-                    "Authorization": f"Bearer {acc_tok}",
-                    "Content-Type": XLSX_MIME_TYPE,
-                    "Content-Length": str(len(xlsx_bytes))
-                },
+                headers=patch_headers,
                 data=xlsx_bytes,
-                timeout=120
+                timeout=45
             )
+            if patch_resp.status_code == 401:
+                acc_tok = gdrive_get_access_token(force_refresh=True)
+                patch_headers["Authorization"] = f"Bearer {acc_tok}"
+                patch_resp = HTTP_SESSION.patch(
+                    patch_url,
+                    headers=patch_headers,
+                    data=xlsx_bytes,
+                    timeout=45
+                )
             if patch_resp.status_code in (200, 201):
                 meta = patch_resp.json() or {}
                 gd_id = str(meta.get("id") or clean_gd_id).strip()
+                if sheets:
+                    threading.Thread(
+                        target=_push_live_cells_to_google_sheets_api,
+                        args=(gd_id, sheets, wb_ref),
+                        daemon=True
+                    ).start()
                 return {
                     "gdrive_file_id": gd_id,
                     "gdrive_file_name": str(meta.get("name") or gdrive_fname),
@@ -2336,6 +2468,12 @@ def _upload_or_update_spreadsheet_on_gdrive(
                 web_link = str(m_json.get("webViewLink") or web_link)
         except Exception:
             pass
+        if sheets:
+            threading.Thread(
+                target=_push_live_cells_to_google_sheets_api,
+                args=(new_gd_id, sheets, wb_ref),
+                daemon=True
+            ).start()
 
     return {
         "gdrive_file_id": new_gd_id,
@@ -2611,9 +2749,9 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                     gd_id = str(wb.get("gdrive_file_id") or "").strip()
                     if not gd_id or "/" in gd_id:
                         continue
-                    # Skip pulling for 4 seconds immediately after a local save from GlennBot so we don't overwrite in-flight edits
+                    # Skip pulling for 2.5 seconds immediately after a local save from GlennBot so we don't interrupt active typing
                     last_local_save = float(wb.get("last_local_save_ts") or 0.0)
-                    if (now_ts - last_local_save) < 4.0:
+                    if (now_ts - last_local_save) < 2.5:
                         continue
                     try:
                         meta_r = HTTP_SESSION.get(
@@ -2659,20 +2797,52 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                         if is_meta_modified:
                             wb["last_edit_source"] = "gdrive"
 
+                        # Clean up expired obsolete signatures (> 120s old)
+                        raw_obsolete = wb.get("obsolete_replaced_sigs")
+                        obsolete_sigs: Dict[str, float] = {}
+                        if isinstance(raw_obsolete, dict):
+                            for k_sig, ts_val in raw_obsolete.items():
+                                try:
+                                    if (now_ts - float(ts_val)) < 120.0:
+                                        obsolete_sigs[str(k_sig)] = float(ts_val)
+                                except Exception:
+                                    pass
+                        wb["obsolete_replaced_sigs"] = obsolete_sigs
+
                         # When syncing the active target workbook (target_clean), ALWAYS pull live bytes
-                        # because Google Sheets web editor buffers edits before Drive metadatamodifiedTime updates!
+                        # because Google Sheets web editor buffers edits before Drive metadata modifiedTime updates!
                         should_download_live = bool(target_clean) or is_meta_modified
                         if should_download_live:
-                            # If the last edit was from GlennBot and Drive metadata hasn't changed yet, read alt=media;
-                            # otherwise prefer Google Sheets live export so browser edits in Google Sheets appear immediately!
-                            prefer_sheets_live = (wb.get("last_edit_source") != "glennbot") or is_meta_modified
+                            wb_title_str = str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx")
                             fresh_sheets = _download_and_parse_gdrive_spreadsheet(
                                 gd_id,
-                                str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx"),
+                                wb_title_str,
                                 remote_mime,
-                                prefer_live_sheets_export=prefer_sheets_live
+                                prefer_live_sheets_export=True
                             )
-                            if fresh_sheets:
+                            old_sig = _compute_sheets_signature(wb.get("sheets"))
+                            new_sig = _compute_sheets_signature(fresh_sheets) if fresh_sheets else ""
+
+                            # Guard against stale Google Docs live export cache returning an old pre-GlennBot-save snapshot:
+                            if fresh_sheets and new_sig and new_sig in obsolete_sigs and new_sig != old_sig:
+                                direct_sheets = _download_and_parse_gdrive_spreadsheet(
+                                    gd_id,
+                                    wb_title_str,
+                                    remote_mime,
+                                    prefer_live_sheets_export=False
+                                )
+                                direct_sig = _compute_sheets_signature(direct_sheets) if direct_sheets else ""
+                                if direct_sheets and direct_sig and direct_sig not in obsolete_sigs:
+                                    fresh_sheets = direct_sheets
+                                    new_sig = direct_sig
+                                else:
+                                    fresh_sheets = None
+                                    new_sig = ""
+
+                            if fresh_sheets and new_sig:
+                                if new_sig == old_sig:
+                                    # Live export has caught up with our latest state; clear obsolete history
+                                    wb["obsolete_replaced_sigs"] = {}
                                 old_sheets_list = list(wb.get("sheets") or [])
                                 for idx_fs, fs_item in enumerate(fresh_sheets):
                                     if not isinstance(fs_item, dict):
@@ -2691,11 +2861,10 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                                             fs_item["col_widths"] = dict(matched_old["col_widths"])
                                         if isinstance(matched_old.get("row_heights"), dict):
                                             fs_item["row_heights"] = dict(matched_old["row_heights"])
-                                old_sig = _compute_sheets_signature(wb.get("sheets"))
-                                new_sig = _compute_sheets_signature(fresh_sheets)
                                 if new_sig != old_sig or is_meta_modified:
                                     wb["sheets"] = fresh_sheets
                                     wb["sheet_count"] = len(fresh_sheets)
+                                    wb["obsolete_replaced_sigs"] = {}
                                     if remote_mod:
                                         wb["gdrive_modified_time"] = remote_mod
                                     if remote_md5:
@@ -2940,15 +3109,40 @@ async def api_save_spreadsheet_to_gdrive(request: Request):
         final_wb_id = wb_id or (str(existing_wb.get("workbook_id") or "") if existing_wb else "") or f"wb_{py_file_id}"
         existing_gd_id = req_gdrive_id or (str(existing_wb.get("gdrive_file_id") or "") if existing_wb else "")
 
+        # Track previous signature so stale Google Docs export cache never reverts this save
+        now_save_ts = time.time()
+        obsolete_sigs: Dict[str, float] = {}
+        if existing_wb and isinstance(existing_wb.get("obsolete_replaced_sigs"), dict):
+            for k_sig, ts_val in existing_wb["obsolete_replaced_sigs"].items():
+                try:
+                    if (now_save_ts - float(ts_val)) < 120.0:
+                        obsolete_sigs[str(k_sig)] = float(ts_val)
+                except Exception:
+                    pass
+        prev_sig = _compute_sheets_signature(existing_wb.get("sheets")) if existing_wb else ""
+        new_save_sig = _compute_sheets_signature(normalized_sheets)
+        if prev_sig and prev_sig != new_save_sig:
+            obsolete_sigs[prev_sig] = now_save_ts
+        obsolete_sigs.pop(new_save_sig, None)
+
         # 1. Build genuine .xlsx binary in Python
         xlsx_bytes = build_xlsx_bytes_from_sheets(normalized_sheets)
 
-        # 2. Upload or update in-place in Google Drive ('GlennBot_Media_Vault')
+        wb_record: Dict[str, Any] = {
+            "workbook_id": final_wb_id,
+            "last_local_save_ts": now_save_ts,
+            "last_edit_source": "glennbot",
+            "obsolete_replaced_sigs": obsolete_sigs
+        }
+
+        # 2. Upload or update in-place in Google Drive ('GlennBot_Media_Vault') + push live cells via Google Sheets API v4
         gd_info = _upload_or_update_spreadsheet_on_gdrive(
             xlsx_bytes=xlsx_bytes,
             filename=save_filename,
             existing_gdrive_file_id=existing_gd_id,
-            py_file_id=py_file_id
+            py_file_id=py_file_id,
+            sheets=normalized_sheets,
+            wb_ref=wb_record
         )
 
         # 3. Register or update in 'Files' modal (FILES_VAULT_STORE) with its own file_id
@@ -2961,7 +3155,7 @@ async def api_save_spreadsheet_to_gdrive(request: Request):
         )
 
         now_str = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
-        wb_record = {
+        wb_record.update({
             "workbook_id": final_wb_id,
             "file_id": vault_rec["file_id"],
             "gdrive_file_id": gd_info["gdrive_file_id"],
@@ -2970,6 +3164,7 @@ async def api_save_spreadsheet_to_gdrive(request: Request):
             "gdrive_md5": gd_info.get("gdrive_md5") or "",
             "last_local_save_ts": time.time(),
             "last_edit_source": "glennbot",
+            "obsolete_replaced_sigs": obsolete_sigs,
             "web_view_link": gd_info.get("web_view_link") or "",
             "title": save_filename,
             "storage_provider": "google_drive",
@@ -2979,7 +3174,7 @@ async def api_save_spreadsheet_to_gdrive(request: Request):
             "sheet_count": len(normalized_sheets),
             "updated_at": now_str,
             "sheets": normalized_sheets
-        }
+        })
 
         if existing_idx >= 0:
             workbooks[existing_idx] = wb_record
@@ -3317,11 +3512,15 @@ def _sync_updated_workbook_to_cloudinary(target_wb: Dict[str, Any]) -> Dict[str,
             if not wb_id:
                 wb_id = f"wb_{fid}"
 
+            target_wb["last_local_save_ts"] = time.time()
+            target_wb["last_edit_source"] = "glennbot"
             gd_info = _upload_or_update_spreadsheet_on_gdrive(
                 xlsx_bytes=xlsx_bytes,
                 filename=raw_title,
                 existing_gdrive_file_id=gd_id,
-                py_file_id=fid
+                py_file_id=fid,
+                sheets=sheets_list,
+                wb_ref=target_wb
             )
             vault_rec = _register_or_update_spreadsheet_in_files_vault(
                 py_file_id=fid,
@@ -3336,6 +3535,8 @@ def _sync_updated_workbook_to_cloudinary(target_wb: Dict[str, Any]) -> Dict[str,
             target_wb["gdrive_file_name"] = gd_info["gdrive_file_name"]
             target_wb["gdrive_modified_time"] = gd_info.get("gdrive_modified_time") or ""
             target_wb["gdrive_md5"] = gd_info.get("gdrive_md5") or ""
+            target_wb["last_local_save_ts"] = time.time()
+            target_wb["last_edit_source"] = "glennbot"
             target_wb["web_view_link"] = gd_info.get("web_view_link") or ""
             target_wb["storage_provider"] = "google_drive"
         except Exception as e:

@@ -391,7 +391,7 @@ def upload_media_to_gdrive(
         vault_file_id=vault_fid
     )
 
-    up_resp = requests.put(
+    up_resp = HTTP_SESSION.put(
         session_uri,
         headers={
             "Content-Type": content_type,

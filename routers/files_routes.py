@@ -215,7 +215,8 @@ def _save_files_vault_store() -> bool:
         except Exception:
             pass
 
-        if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+    if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+        def _bg_upload_vault_cloud():
             try:
                 cloudinary.uploader.upload(
                     io.BytesIO(raw_bytes),
@@ -224,10 +225,12 @@ def _save_files_vault_store() -> bool:
                     overwrite=True,
                     invalidate=True
                 )
-                return True
             except Exception as e:
                 print(f"[⚠️ FILES VAULT CLOUDINARY SAVE WARNING]: {e}")
-        return False
+        threading.Thread(target=_bg_upload_vault_cloud, daemon=True).start()
+        return True
+    return True
+
 
 
 def _refresh_vault_file_entry_urls(entry: Dict[str, Any]) -> Dict[str, Any]:

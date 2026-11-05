@@ -560,6 +560,8 @@
         let ssAutoSyncPushTimer = null;
         let ssAutoSyncPullInterval = null;
         let ssIsSavingInFlight = false;
+        let ssHasPendingSaveWhileInFlight = false;
+        let ssLocalEditVersion = 0;
         let ssIsPullSyncInFlight = false;
         let ssFocusListenersAttached = false;
         let lastSyncedSpreadsheetSignature = '';
@@ -697,7 +699,7 @@
             ssSaveSheetLayoutToLocalCache(sheet);
             renderSpreadsheetGrid();
             updateSpreadsheetWrapTextButtonUI();
-            scheduleSpreadsheetAutoSyncToGoogleDrive();
+            scheduleSpreadsheetAutoSyncToGoogleDrive(true);
 
             const targetDesc = coords.length === 1 ? `Cell ${coords[0]}` : `${coords.length} selected cells`;
             showToast(nextWrapState
@@ -1958,8 +1960,9 @@
                 }
                 return;
             }
-            if (ssIsSavingInFlight || ssAutoSyncPushTimer || ssIsPullSyncInFlight) return;
+            if (ssIsSavingInFlight || ssAutoSyncPushTimer || ssHasPendingSaveWhileInFlight || ssIsPullSyncInFlight) return;
 
+            const editVerBeforePull = ssLocalEditVersion;
             ssIsPullSyncInFlight = true;
             const syncIcon = document.getElementById('icon-ss-sync-now');
             if (syncIcon) syncIcon.classList.add('fa-spin');
@@ -1973,6 +1976,10 @@
                 });
                 if (res.ok) {
                     const data = await res.json();
+                    // Never overwrite if the user edited locally while this pull request was in flight!
+                    if (ssLocalEditVersion !== editVerBeforePull || ssIsSavingInFlight || ssAutoSyncPushTimer || ssHasPendingSaveWhileInFlight) {
+                        return;
+                    }
                     if (data.status === 'success' && data.workbook) {
                         if (Array.isArray(data.workbooks)) {
                             savedSpreadsheetsList = data.workbooks.map(w => ssSanitizeWorkbookCells(w));
@@ -2010,21 +2017,23 @@
             ssAutoSyncPullInterval = setInterval(() => {
                 if (!currentSpreadsheetWorkbook || !currentSpreadsheetWorkbook.workbook_id) return;
                 syncActiveSpreadsheetFromGoogleDriveNow(false);
-            }, 2500);
+            }, 2000);
         }
 
-        function scheduleSpreadsheetAutoSyncToGoogleDrive() {
+        function scheduleSpreadsheetAutoSyncToGoogleDrive(immediate = false) {
+            ssLocalEditVersion++;
             const sheet = ssGetActiveSheet();
             ssSaveSheetLayoutToLocalCache(sheet);
             if (!currentSpreadsheetWorkbook || !currentSpreadsheetWorkbook.workbook_id || !currentSpreadsheetWorkbook.gdrive_file_id) {
                 return;
             }
-            ssUpdateSyncBadgeStatus('Syncing changes to Google Drive...', 'syncing');
+            ssUpdateSyncBadgeStatus('Syncing changes to Google Sheets / Drive...', 'syncing');
             if (ssAutoSyncPushTimer) clearTimeout(ssAutoSyncPushTimer);
+            const delayMs = immediate ? 25 : 300;
             ssAutoSyncPushTimer = setTimeout(async () => {
                 ssAutoSyncPushTimer = null;
                 await saveCurrentSpreadsheetToCloudinary(true);
-            }, 1500);
+            }, delayMs);
         }
 
         function initSpreadsheetView() {
@@ -2912,6 +2921,9 @@
                 }
             });
             ssRefreshSelectionHighlights();
+            if (ssAutoSyncPushTimer || ssHasPendingSaveWhileInFlight) {
+                scheduleSpreadsheetAutoSyncToGoogleDrive(true);
+            }
         }
 
         function onFormulaBarInput(val) {
@@ -2991,6 +3003,7 @@
                 ssSelectedCells = new Set([activeCellCoord]);
                 renderSpreadsheetGrid();
                 syncFormulaBarWithActiveCell();
+                scheduleSpreadsheetAutoSyncToGoogleDrive(true);
                 const wrapper = document.getElementById('ss-grid-scroll-wrapper');
                 if (wrapper) wrapper.focus({ preventScroll: true });
             }
@@ -3087,7 +3100,7 @@
                     }
                 });
                 syncFormulaBarWithActiveCell();
-                scheduleSpreadsheetAutoSyncToGoogleDrive();
+                scheduleSpreadsheetAutoSyncToGoogleDrive(true);
                 return;
             } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
                 event.preventDefault();
@@ -3299,13 +3312,18 @@
         }
 
         async function saveCurrentSpreadsheetToCloudinary(isBackgroundAutoSync = false) {
-            if (ssIsSavingInFlight) return;
+            if (ssIsSavingInFlight) {
+                ssHasPendingSaveWhileInFlight = true;
+                return;
+            }
             ssIsSavingInFlight = true;
+            ssHasPendingSaveWhileInFlight = false;
             if (ssAutoSyncPushTimer) {
                 clearTimeout(ssAutoSyncPushTimer);
                 ssAutoSyncPushTimer = null;
             }
 
+            const saveVersionAtStart = ssLocalEditVersion;
             const btn = document.getElementById('btn-save-xlsx-cloudinary');
             const titleEl = document.getElementById('ss-workbook-title');
             let titleVal = (titleEl?.value || 'GlennBot_Spreadsheet.xlsx').trim();
@@ -3314,13 +3332,15 @@
                 if (titleEl) titleEl.value = titleVal;
             }
             currentSpreadsheetWorkbook.title = titleVal;
+            const sentSheetsSnapshot = JSON.parse(JSON.stringify(currentSpreadsheetWorkbook.sheets || []));
+            const sentSignature = ssComputeWorkbookSignature({ sheets: sentSheetsSnapshot });
 
             const origHTML = btn ? btn.innerHTML : '';
             if (btn && !isBackgroundAutoSync) {
                 btn.disabled = true;
                 btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Saving to Google Drive...</span>`;
             }
-            ssUpdateSyncBadgeStatus('Saving .xlsx to Google Drive...', 'syncing');
+            ssUpdateSyncBadgeStatus('Saving .xlsx to Google Sheets / Drive...', 'syncing');
 
             try {
                 const res = await fetch('/api/spreadsheets/save', {
@@ -3331,15 +3351,28 @@
                         file_id: currentSpreadsheetWorkbook.file_id || '',
                         gdrive_file_id: currentSpreadsheetWorkbook.gdrive_file_id || '',
                         title: currentSpreadsheetWorkbook.title,
-                        sheets: currentSpreadsheetWorkbook.sheets
+                        sheets: sentSheetsSnapshot
                     })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
                     if (data.workbook) {
-                        currentSpreadsheetWorkbook = data.workbook;
-                        lastSyncedSpreadsheetSignature = ssComputeWorkbookSignature(currentSpreadsheetWorkbook);
-                        if (titleEl) titleEl.value = currentSpreadsheetWorkbook.title || titleVal;
+                        // Update workbook IDs and metadata without clobbering any newer local cell edits typed while save was in-flight!
+                        currentSpreadsheetWorkbook.workbook_id = data.workbook.workbook_id || currentSpreadsheetWorkbook.workbook_id || '';
+                        currentSpreadsheetWorkbook.file_id = data.workbook.file_id || currentSpreadsheetWorkbook.file_id || '';
+                        currentSpreadsheetWorkbook.gdrive_file_id = data.workbook.gdrive_file_id || currentSpreadsheetWorkbook.gdrive_file_id || '';
+                        currentSpreadsheetWorkbook.gdrive_file_name = data.workbook.gdrive_file_name || currentSpreadsheetWorkbook.gdrive_file_name || '';
+                        currentSpreadsheetWorkbook.gdrive_modified_time = data.workbook.gdrive_modified_time || '';
+                        currentSpreadsheetWorkbook.gdrive_md5 = data.workbook.gdrive_md5 || '';
+                        currentSpreadsheetWorkbook.web_view_link = data.workbook.web_view_link || currentSpreadsheetWorkbook.web_view_link || '';
+                        currentSpreadsheetWorkbook.updated_at = data.workbook.updated_at || '';
+                        currentSpreadsheetWorkbook.size_bytes = data.workbook.size_bytes || 0;
+                        currentSpreadsheetWorkbook.size_formatted = data.workbook.size_formatted || '';
+                        currentSpreadsheetWorkbook.title = data.workbook.title || titleVal;
+                        lastSyncedSpreadsheetSignature = sentSignature;
+                        if (titleEl && document.activeElement !== titleEl) {
+                            titleEl.value = currentSpreadsheetWorkbook.title || titleVal;
+                        }
                     }
                     if (Array.isArray(data.workbooks)) {
                         savedSpreadsheetsList = data.workbooks;
@@ -3372,6 +3405,12 @@
                 if (btn && !isBackgroundAutoSync) {
                     btn.disabled = false;
                     btn.innerHTML = origHTML || `<i class="fab fa-google-drive"></i> <span>Save .xlsx to Google Drive</span>`;
+                }
+                if (ssHasPendingSaveWhileInFlight || ssLocalEditVersion !== saveVersionAtStart) {
+                    ssHasPendingSaveWhileInFlight = false;
+                    setTimeout(() => {
+                        saveCurrentSpreadsheetToCloudinary(true);
+                    }, 30);
                 }
             }
         }
