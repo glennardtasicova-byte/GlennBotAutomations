@@ -1298,9 +1298,15 @@ def _poll_realtime_new_emails_background():
                     existing_snap["ts"] = time.time()
 
                 if is_first_seed:
-                    for lm in latest_msgs:
-                        if lm.get("id"):
-                            seen_set.add(str(lm["id"]))
+                    for lm in reversed(latest_msgs):
+                        mid = str(lm.get("id") or "").strip()
+                        if not mid:
+                            continue
+                        msg_ts = float(lm.get("timestamp") or 0.0)
+                        if bool(lm.get("is_unread", True)) and msg_ts > 0 and 0 <= (time.time() - msg_ts) <= 120:
+                            _dispatch_signed_composio_webhook_for_email(acc, lm)
+                        else:
+                            seen_set.add(mid)
                 else:
                     for lm in reversed(latest_msgs):
                         mid = str(lm.get("id") or "").strip()

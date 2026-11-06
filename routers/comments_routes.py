@@ -1958,10 +1958,15 @@ def update_cloudinary_store_for_post(
     unhide_if_new: bool = True,
     force_unhide: bool = False
 ) -> bool:
+    if not CLOUDINARY_COMMENTS_STORE.get("loaded") and "load_comments_store_from_cloudinary" in globals():
+        try:
+            load_comments_store_from_cloudinary()
+        except Exception:
+            pass
     # CRITICAL FIX: Ensure existing comment IDs are seeded BEFORE we insert new comments into CLOUDINARY_COMMENTS_STORE!
     # Otherwise, the first comment (or a simultaneous burst) inserted into existing_comments_map gets marked as "already seeded"
     # and skipped by _notify_n8n_new_comment!
-    if "_seed_existing_comment_ids_for_n8n" in globals() and not globals().get("N8N_COMMENT_SEED_DONE", False):
+    if "_seed_existing_comment_ids_for_n8n" in globals():
         try:
             _seed_existing_comment_ids_for_n8n()
         except Exception:

@@ -432,6 +432,17 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         if resolved_wh_p.get("author_avatar") and not p_info.get("participant_avatar"):
                             p_info["participant_avatar"] = resolved_wh_p["author_avatar"]
 
+                if not CLOUDINARY_MESSAGES_STORE.get("loaded") and "load_messages_store_from_cloudinary" in globals():
+                    try:
+                        load_messages_store_from_cloudinary()
+                    except Exception:
+                        pass
+                if "_seed_existing_message_ids_for_n8n" in globals():
+                    try:
+                        _seed_existing_message_ids_for_n8n(exclude_mid=str(parsed_msg.get("id") or ""))
+                    except Exception:
+                        pass
+
                 convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
                 existing_conv = _find_existing_conversation_in_store(
                     convs_store,
@@ -920,6 +931,17 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         account_name=str(matched_row.get("account_name") or ""),
                         platform=str(matched_row.get("platform") or incoming_plat)
                     )
+
+                    if not CLOUDINARY_COMMENTS_STORE.get("loaded") and "load_comments_store_from_cloudinary" in globals():
+                        try:
+                            load_comments_store_from_cloudinary()
+                        except Exception:
+                            pass
+                    if "_seed_existing_comment_ids_for_n8n" in globals():
+                        try:
+                            _seed_existing_comment_ids_for_n8n(exclude_cid=cid)
+                        except Exception:
+                            pass
 
                     with COMMENTS_STORE_LOCK:
                         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})

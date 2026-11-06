@@ -394,8 +394,15 @@ def _load_email_hub_state(force_cloud: bool = False):
                 if isinstance(c_data.get("inbox_snapshots"), dict):
                     with EMAIL_HUB_LOCK:
                         for sk, sv in c_data["inbox_snapshots"].items():
-                            if isinstance(sv, dict) and sv.get("messages") and sk not in EMAIL_HUB_STATE["inbox_snapshots"]:
-                                EMAIL_HUB_STATE["inbox_snapshots"][sk] = sv
+                            if isinstance(sv, dict) and sv.get("messages"):
+                                if sk not in EMAIL_HUB_STATE["inbox_snapshots"]:
+                                    EMAIL_HUB_STATE["inbox_snapshots"][sk] = sv
+                                snap_acc_id = str(sk).split(":")[0].strip()
+                                if snap_acc_id and ":inbox" in str(sk):
+                                    seen_set_init = EMAIL_HUB_STATE["seen_message_ids_by_account"].setdefault(snap_acc_id, set())
+                                    for sm in (sv.get("messages") or []):
+                                        if isinstance(sm, dict) and sm.get("id"):
+                                            seen_set_init.add(str(sm["id"]).strip())
     except Exception:
         pass
 

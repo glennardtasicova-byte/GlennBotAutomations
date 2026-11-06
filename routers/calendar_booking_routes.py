@@ -2104,20 +2104,49 @@ def _startup_recover_recent_activity():
     time.sleep(2)
     try:
         _load_internal_api_state(force_cloud=False)
+        if not CLOUDINARY_COMMENTS_STORE.get("loaded") and "load_comments_store_from_cloudinary" in globals():
+            try:
+                load_comments_store_from_cloudinary()
+            except Exception:
+                pass
+        if "_seed_existing_comment_ids_for_n8n" in globals():
+            try:
+                _seed_existing_comment_ids_for_n8n()
+            except Exception:
+                pass
+        if not CLOUDINARY_MESSAGES_STORE.get("loaded") and "load_messages_store_from_cloudinary" in globals():
+            try:
+                load_messages_store_from_cloudinary()
+            except Exception:
+                pass
+        if "_seed_existing_message_ids_for_n8n" in globals():
+            try:
+                _seed_existing_message_ids_for_n8n()
+            except Exception:
+                pass
         connected_items = refresh_connected_accounts_cache(force=False)
         for cp in get_zernio_commented_posts_list(force=True):
             cp_plat = (cp.get("platform") or "").strip().lower()
-            cp_plat_id = str(cp.get("platformPostId") or cp.get("id") or "").strip()
-            if cp_plat in ("tiktok", "youtube") and cp_plat_id:
+            cp_plat_id = str(cp.get("platformPostId") or cp.get("id") or cp.get("_id") or "").strip()
+            if cp_plat in ("tiktok", "youtube", "facebook", "instagram") and cp_plat_id:
+                cp_acc_raw = cp.get("accountId") or cp.get("account")
+                cp_acc_id = ""
+                cp_acc_name = str(cp.get("accountName") or cp.get("pageName") or "").strip()
+                if isinstance(cp_acc_raw, dict):
+                    cp_acc_id = str(cp_acc_raw.get("_id") or cp_acc_raw.get("id") or cp_acc_raw.get("accountId") or "").strip()
+                    if not cp_acc_name:
+                        cp_acc_name = str(cp_acc_raw.get("displayName") or cp_acc_raw.get("name") or cp_acc_raw.get("username") or "").strip()
+                elif cp_acc_raw:
+                    cp_acc_id = str(cp_acc_raw).strip()
                 ensure_external_post_record_in_db(
                     platform=cp_plat,
                     plat_post_id=cp_plat_id,
-                    z_post_id=str(cp.get("id") or ""),
-                    account_id=str(cp.get("accountId") or ""),
-                    account_name="",
+                    z_post_id=str(cp.get("id") or cp.get("_id") or ""),
+                    account_id=cp_acc_id,
+                    account_name=cp_acc_name,
                     caption=str(cp.get("content") or cp.get("caption") or ""),
                     permalink=str(cp.get("permalink") or cp.get("platformPostUrl") or ""),
-                    preview_url="",
+                    preview_url=str(cp.get("imageUrl") or cp.get("thumbnailUrl") or ""),
                     connected_items=connected_items
                 )
         sync_all_connected_posts_to_cloudinary(force_refresh=True)

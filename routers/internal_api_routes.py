@@ -1693,25 +1693,43 @@ def _build_dynamic_test_payload_for_workflow(event_type: str, wf_obj: Optional[D
 
 N8N_DISPATCHED_COMMENT_IDS: set = set()
 N8N_COMMENT_SEED_DONE: bool = False
+N8N_SEED_STATE: Dict[str, bool] = {
+    "comments_seeded": False,
+    "messages_seeded": False,
+}
 
 
-def _seed_existing_comment_ids_for_n8n():
+def _seed_existing_comment_ids_for_n8n(exclude_cid: str = ""):
     global N8N_COMMENT_SEED_DONE
     with N8N_DISPATCH_LOCK:
-        if N8N_COMMENT_SEED_DONE:
+        if N8N_COMMENT_SEED_DONE or N8N_SEED_STATE.get("comments_seeded"):
+            N8N_COMMENT_SEED_DONE = True
+            N8N_SEED_STATE["comments_seeded"] = True
             return
         try:
+            if not CLOUDINARY_COMMENTS_STORE.get("loaded") and "load_comments_store_from_cloudinary" in globals():
+                try:
+                    load_comments_store_from_cloudinary()
+                except Exception:
+                    pass
+            excl = str(exclude_cid or "").strip()
             posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
             for _, p_entry in posts_store.items():
                 for cid_k, c_val in (p_entry.get("comments") or {}).items():
-                    N8N_DISPATCHED_COMMENT_IDS.add(str(cid_k))
+                    s_cid_k = str(cid_k).strip()
+                    if s_cid_k and s_cid_k != excl:
+                        N8N_DISPATCHED_COMMENT_IDS.add(s_cid_k)
                     if isinstance(c_val, dict):
                         for rep_item in (c_val.get("replies") or []):
                             if isinstance(rep_item, dict) and rep_item.get("id"):
-                                N8N_DISPATCHED_COMMENT_IDS.add(str(rep_item["id"]))
+                                s_rid = str(rep_item["id"]).strip()
+                                if s_rid and s_rid != excl:
+                                    N8N_DISPATCHED_COMMENT_IDS.add(s_rid)
             N8N_COMMENT_SEED_DONE = True
+            N8N_SEED_STATE["comments_seeded"] = True
         except Exception:
             N8N_COMMENT_SEED_DONE = True
+            N8N_SEED_STATE["comments_seeded"] = True
 
 
 def _notify_n8n_new_comment(r_dict: Dict[str, Any], comment_obj: Dict[str, Any], is_background_sync: bool = False):
@@ -1731,9 +1749,10 @@ def _notify_n8n_new_comment(r_dict: Dict[str, Any], comment_obj: Dict[str, Any],
     norm_parent_key = _normalize_comment_key(parent_cid) if parent_cid else ""
     own_reply_sig = f"own_rep::{rec_id}::{norm_parent_key}::{msg_text.lower()}" if is_own_comm else ""
 
+    if not N8N_COMMENT_SEED_DONE and not N8N_SEED_STATE.get("comments_seeded"):
+        _seed_existing_comment_ids_for_n8n(exclude_cid=cid)
+
     with N8N_DISPATCH_LOCK:
-        if not N8N_COMMENT_SEED_DONE:
-            _seed_existing_comment_ids_for_n8n()
         if cid in N8N_DISPATCHED_COMMENT_IDS:
             return
         if own_reply_sig and own_reply_sig in N8N_DISPATCHED_COMMENT_IDS:
@@ -1893,21 +1912,31 @@ N8N_DISPATCHED_MESSAGE_IDS: set = set()
 N8N_MESSAGE_SEED_DONE: bool = False
 
 
-def _seed_existing_message_ids_for_n8n():
+def _seed_existing_message_ids_for_n8n(exclude_mid: str = ""):
     global N8N_MESSAGE_SEED_DONE
     with N8N_DISPATCH_LOCK:
-        if N8N_MESSAGE_SEED_DONE:
+        if N8N_MESSAGE_SEED_DONE or N8N_SEED_STATE.get("messages_seeded"):
+            N8N_MESSAGE_SEED_DONE = True
+            N8N_SEED_STATE["messages_seeded"] = True
             return
         try:
+            if not CLOUDINARY_MESSAGES_STORE.get("loaded") and "load_messages_store_from_cloudinary" in globals():
+                try:
+                    load_messages_store_from_cloudinary()
+                except Exception:
+                    pass
+            excl = str(exclude_mid or "").strip()
             convs_store = CLOUDINARY_MESSAGES_STORE.get("conversations") or {}
             for _, c_entry in convs_store.items():
                 for m_obj in (c_entry.get("messages") or []):
                     mid = str(m_obj.get("id") or "").strip()
-                    if mid:
+                    if mid and mid != excl:
                         N8N_DISPATCHED_MESSAGE_IDS.add(mid)
             N8N_MESSAGE_SEED_DONE = True
+            N8N_SEED_STATE["messages_seeded"] = True
         except Exception:
             N8N_MESSAGE_SEED_DONE = True
+            N8N_SEED_STATE["messages_seeded"] = True
 
 
 def _notify_n8n_new_message(conv_obj: Dict[str, Any], msg_obj: Dict[str, Any], is_background_sync: bool = False):
@@ -1916,9 +1945,10 @@ def _notify_n8n_new_message(conv_obj: Dict[str, Any], msg_obj: Dict[str, Any], i
     if not mid or msg_obj.get("is_own"):
         return
 
+    if not N8N_MESSAGE_SEED_DONE and not N8N_SEED_STATE.get("messages_seeded"):
+        _seed_existing_message_ids_for_n8n(exclude_mid=mid)
+
     with N8N_DISPATCH_LOCK:
-        if not N8N_MESSAGE_SEED_DONE:
-            _seed_existing_message_ids_for_n8n()
         if mid in N8N_DISPATCHED_MESSAGE_IDS:
             return
 

@@ -1199,6 +1199,17 @@ def sync_all_messages_to_cloudinary(force_refresh: bool = False) -> bool:
         return False
 
     try:
+        if not CLOUDINARY_MESSAGES_STORE.get("loaded") and "load_messages_store_from_cloudinary" in globals():
+            try:
+                load_messages_store_from_cloudinary()
+            except Exception:
+                pass
+        if "_seed_existing_message_ids_for_n8n" in globals():
+            try:
+                _seed_existing_message_ids_for_n8n()
+            except Exception:
+                pass
+
         connected_items = refresh_connected_accounts_cache(force=force_refresh)
         if not connected_items:
             return True
