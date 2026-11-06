@@ -2129,6 +2129,413 @@
                     populateComposeEmailSenderSelect(p.account_id || '');
                     showToast('🔄 Refreshed Connected Email Accounts!');
                 }
+            } else if (mode === 'modal_popout') {
+                const modalId = String(p.modal_id || '').trim();
+                await initOrRefreshGenericModalData(modalId, true);
+                showToast('🔄 Refreshed Expanded Modal View!');
+            } else if (mode === 'workspace_view') {
+                const tab = String(p.tab || '').trim();
+                if (tab === 'queue' && typeof fetchQueue === 'function') await fetchQueue();
+                else if (tab === 'calendar' && typeof fetchCalendarEvents === 'function') await fetchCalendarEvents(true);
+                else if (tab === 'analytics' && typeof fetchAnalytics === 'function') await fetchAnalytics(true);
+                else if (tab === 'contacts' && typeof fetchCrmContacts === 'function') await fetchCrmContacts(true);
+                else if (tab === 'automations' && typeof fetchAutomationsHubData === 'function') await fetchAutomationsHubData(true);
+                else if (tab === 'comments' && typeof fetchComments === 'function') await fetchComments(true);
+                else if (tab === 'messages' && typeof fetchConversations === 'function') await fetchConversations(true);
+                else if (tab === 'email' && typeof refreshActiveEmailInbox === 'function') await refreshActiveEmailInbox(true, false);
+                showToast('🔄 Refreshed Expanded Workspace Window!');
+            }
+        }
+
+        // Metadata registry for all overlay modals and workspace views
+        const GB_MODAL_POPOUT_META = {
+            'settings-modal': {
+                title: 'Automation & Notification Settings — Expanded View',
+                subtitle: 'Bandwidth Saver Mode, Sound Alerts & Background Polling Controls',
+                icon: 'fa-cog',
+                width: 760,
+                height: 760,
+                closeFn: () => { if (typeof closeSettingsModal === 'function') closeSettingsModal(); }
+            },
+            'connect-accounts-modal': {
+                title: 'Connect & Manage Accounts — Expanded View',
+                subtitle: 'Social Profiles, Email Accounts (Gmail/IMAP) & TextBee.dev SMS Gateway',
+                icon: 'fa-plug',
+                width: 1080,
+                height: 840,
+                closeFn: () => { if (typeof closeConnectAccountsModal === 'function') closeConnectAccountsModal(); }
+            },
+            'external-api-manager-modal': {
+                title: 'Manage External API Keys — Expanded View',
+                subtitle: 'Multi-Workspace Zernio & Cloudinary API Failover Configuration',
+                icon: 'fa-key',
+                width: 960,
+                height: 820,
+                closeFn: () => { if (typeof closeManageApiModal === 'function') closeManageApiModal(); }
+            },
+            'external-api-error-modal': {
+                title: 'External API Account Limit Notice — Expanded View',
+                subtitle: 'Workspace Plan & Failover API Key Diagnostic',
+                icon: 'fa-exclamation-triangle',
+                width: 680,
+                height: 620,
+                closeFn: () => { if (typeof closeExternalApiErrorModal === 'function') closeExternalApiErrorModal(); }
+            },
+            'internal-api-n8n-modal': {
+                title: 'GlennBot Internal API & n8n Automation Hub — Expanded View',
+                subtitle: 'Webhook Event Emitter, Custom Header Auth & Full REST API Reference',
+                icon: 'fa-network-wired',
+                width: 1180,
+                height: 860,
+                closeFn: () => { if (typeof closeInternalApiModal === 'function') closeInternalApiModal(); }
+            },
+            'ask-ai-n8n-modal': {
+                title: 'AI Workflow Architect (n8n JSON Generator) — Expanded View',
+                subtitle: 'Generate Ready-to-Import n8n Workflow JSON Powered by GlennBot AI',
+                icon: 'fa-robot',
+                width: 960,
+                height: 820,
+                closeFn: () => { if (typeof closeAskAiN8nModal === 'function') closeAskAiN8nModal(); }
+            },
+            'comment-dm-modal': {
+                title: 'Send Direct Message to Commenter — Expanded View',
+                subtitle: 'Private Follow-Up DM Dispatch Linked to Comment Thread',
+                icon: 'fa-paper-plane',
+                width: 720,
+                height: 680,
+                closeFn: () => { if (typeof closeCommentDmModal === 'function') closeCommentDmModal(); }
+            },
+            'create-post-media-source-modal': {
+                title: 'Select Media Upload Source — Expanded View',
+                subtitle: 'Upload from Local Device or Import from Google Drive Files Vault',
+                icon: 'fa-photo-video',
+                width: 920,
+                height: 760,
+                closeFn: () => { if (typeof closeCreatePostMediaSourceModal === 'function') closeCreatePostMediaSourceModal(); }
+            },
+            'ask-ai-modal': {
+                title: 'Ask AI • Content & Caption Generator — Expanded View',
+                subtitle: 'AI Copywriting, Hashtags & Multi-Platform Caption Studio',
+                icon: 'fa-magic',
+                width: 860,
+                height: 800,
+                closeFn: () => { if (typeof closeAskAiModal === 'function') closeAskAiModal(); }
+            },
+            'preset-modal': {
+                title: 'Saved Account Presets — Expanded View',
+                subtitle: 'Load or Manage Custom Multi-Account Publishing Presets',
+                icon: 'fa-bookmark',
+                width: 680,
+                height: 680,
+                closeFn: () => { if (typeof closePresetModal === 'function') closePresetModal(); }
+            },
+            'day-modal': {
+                title: 'Calendar Day Breakdown — Expanded View',
+                subtitle: 'Scheduled Social Posts, Video Meetings & Daily Agenda',
+                icon: 'fa-calendar-day',
+                width: 820,
+                height: 780,
+                closeFn: () => { if (typeof closeDayModal === 'function') closeDayModal(); }
+            },
+            'schedule-meeting-modal': {
+                title: 'Schedule Calendar Appointment / Video Meeting — Expanded View',
+                subtitle: 'Google Meet, Zoom & Microsoft Teams Auto-Link + Multi-Channel Invites',
+                icon: 'fa-video',
+                width: 900,
+                height: 840,
+                closeFn: () => { if (typeof closeScheduleMeetingModal === 'function') closeScheduleMeetingModal(); }
+            },
+            'reschedule-meeting-modal': {
+                title: 'Reschedule Appointment — Expanded View',
+                subtitle: 'Update Date/Time & Dispatch Automated Reschedule Notice',
+                icon: 'fa-calendar-alt',
+                width: 820,
+                height: 800,
+                closeFn: () => { if (typeof closeRescheduleMeetingModal === 'function') closeRescheduleMeetingModal(); }
+            },
+            'cancel-meeting-modal': {
+                title: 'Cancel Appointment & Send Notice — Expanded View',
+                subtitle: 'Remove Calendar Booking & Notify Attendees via Email/SMS',
+                icon: 'fa-calendar-times',
+                width: 720,
+                height: 680,
+                closeFn: () => { if (typeof closeCancelMeetingModal === 'function') closeCancelMeetingModal(); }
+            },
+            'email-webhook-modal': {
+                title: 'Real-Time Email Webhook & Forwarding Setup — Expanded View',
+                subtitle: 'Instant Inbound Email Push Endpoint for Gmail, Outlook & Custom Domains',
+                icon: 'fa-satellite-dish',
+                width: 880,
+                height: 780,
+                closeFn: () => { if (typeof closeEmailWebhookModal === 'function') closeEmailWebhookModal(); }
+            },
+            'crm-contact-modal': {
+                title: 'CRM Contact Record — Expanded View',
+                subtitle: 'Add or Edit Unified Client Profile (Phone, Email, Social & Notes)',
+                icon: 'fa-address-card',
+                width: 860,
+                height: 800,
+                closeFn: () => { if (typeof closeCrmContactModal === 'function') closeCrmContactModal(); }
+            },
+            'crm-open-chat-platform-modal': {
+                title: 'Open Direct Chat Channel — Expanded View',
+                subtitle: 'Select Social Platform or SMS Gateway for Contact Conversation',
+                icon: 'fa-comments',
+                width: 680,
+                height: 640,
+                closeFn: () => { if (typeof closeCrmOpenChatPlatformModal === 'function') closeCrmOpenChatPlatformModal(); }
+            }
+        };
+
+        const GB_WORKSPACE_VIEW_META = {
+            'scheduler': {
+                title: 'Create & Schedule Post — Expanded View',
+                subtitle: 'Multi-Platform Publisher, Media Studio & AI Caption Workspace',
+                icon: 'fa-paper-plane',
+                width: 1240,
+                height: 860
+            },
+            'queue': {
+                title: 'Publishing Queue & History — Expanded View',
+                subtitle: 'Live Scheduled, Published & Draft Social Posts Monitor',
+                icon: 'fa-stream',
+                width: 1220,
+                height: 840
+            },
+            'calendar': {
+                title: 'Content & Meetings Calendar — Expanded View',
+                subtitle: 'Unified Monthly Schedule for Social Media Posts & Video Appointments',
+                icon: 'fa-calendar-alt',
+                width: 1260,
+                height: 860
+            },
+            'analytics': {
+                title: 'Social & Automation Analytics — Expanded View',
+                subtitle: 'Cross-Platform Engagement, Reach & Publishing Performance',
+                icon: 'fa-chart-line',
+                width: 1240,
+                height: 860
+            },
+            'contacts': {
+                title: 'CRM Contacts Database — Expanded View',
+                subtitle: 'Unified Directory of Social Leads, Email Senders & SMS Contacts',
+                icon: 'fa-address-book',
+                width: 1260,
+                height: 860
+            },
+            'automations': {
+                title: 'GlennBot Native Automations Hub — Expanded View',
+                subtitle: '24/7 Server-Side Auto-Reply Rules for Comments, DMs, SMS & Emails',
+                icon: 'fa-bolt',
+                width: 1260,
+                height: 860
+            },
+            'comments': {
+                title: 'Social Comments Inbox — Expanded View',
+                subtitle: 'Multi-Platform Post Comments & Automated Reply Monitor',
+                icon: 'fa-comment-dots',
+                width: 1260,
+                height: 860
+            },
+            'messages': {
+                title: 'Unified Direct Messages & SMS Inbox — Expanded View',
+                subtitle: 'Facebook, Instagram, Telegram & TextBee SIM 2 Conversations',
+                icon: 'fa-comments',
+                width: 1260,
+                height: 860
+            },
+            'email': {
+                title: 'Multi-Account Email Hub — Expanded View',
+                subtitle: 'Live IMAP/Gmail Inbox, Sent Folder & Instant Reply Workspace',
+                icon: 'fa-envelope',
+                width: 1260,
+                height: 860
+            }
+        };
+
+        function captureElementFormControlsSnapshot(rootEl) {
+            const controls = [];
+            if (!rootEl) return controls;
+            const fields = rootEl.querySelectorAll('input, textarea, select');
+            fields.forEach((el, idx) => {
+                const type = String(el.type || '').toLowerCase();
+                if (type === 'file' || type === 'password') return;
+                controls.push({
+                    id: el.id || '',
+                    name: el.name || '',
+                    idx: idx,
+                    type: type,
+                    value: el.value,
+                    checked: Boolean(el.checked)
+                });
+            });
+            return controls;
+        }
+
+        function restoreElementFormControlsSnapshot(rootEl, controls) {
+            if (!rootEl || !Array.isArray(controls) || controls.length === 0) return;
+            const fields = rootEl.querySelectorAll('input, textarea, select');
+            controls.forEach(item => {
+                let target = null;
+                if (item.id) {
+                    target = rootEl.querySelector(`#${CSS.escape(item.id)}`) || document.getElementById(item.id);
+                }
+                if (!target && typeof item.idx === 'number' && fields[item.idx]) {
+                    target = fields[item.idx];
+                }
+                if (!target) return;
+                const type = String(target.type || '').toLowerCase();
+                if (type === 'checkbox' || type === 'radio') {
+                    target.checked = Boolean(item.checked);
+                } else if (type !== 'file') {
+                    target.value = item.value ?? '';
+                }
+            });
+        }
+
+        // 8. Generic Overlay Modal -> Expanded View (Triggered on Double-Click)
+        function openExpandedGenericModalWindow(modalId, event) {
+            if (event) event.stopPropagation();
+            const cleanId = String(modalId || '').trim();
+            if (!cleanId) return;
+
+            // Route modals that already have specialized Expanded View handlers
+            if (cleanId === 'compose-email-modal') return openExpandedComposeEmailWindow(event);
+            if (cleanId === 'create-new-sms-modal') return openExpandedCreateNewSmsWindow(event);
+            if (cleanId === 'expanded-email-modal') return openExpandedEmailWindow(null, event);
+
+            const modalEl = document.getElementById(cleanId);
+            if (!modalEl) return;
+
+            const meta = GB_MODAL_POPOUT_META[cleanId] || {};
+            const headerTitleEl = modalEl.querySelector('h2, h3');
+            const headerSubEl = modalEl.querySelector('p');
+            const fallbackTitle = headerTitleEl ? `${headerTitleEl.textContent.trim()} — Expanded View` : 'Modal — Expanded View';
+            const fallbackSub = headerSubEl ? headerSubEl.textContent.trim() : 'Focused Standalone Modal Window';
+
+            const extraContext = {
+                connect_tab: (typeof activeConnectModalTab !== 'undefined') ? activeConnectModalTab : 'social',
+                day_modal_date: (typeof selectedDayModalDate !== 'undefined') ? selectedDayModalDate : '',
+                comment_dm_target: (typeof activeCommentDmTarget !== 'undefined') ? activeCommentDmTarget : null,
+                crm_contact_id: document.getElementById('crm-contact-id')?.value || '',
+                crm_chat_contact_id: (typeof activeCrmChatSelectorContactId !== 'undefined') ? activeCrmChatSelectorContactId : '',
+                resched_event_id: document.getElementById('resched-cal-event-id')?.value || '',
+                cancel_event_id: document.getElementById('cancel-cal-event-id')?.value || '',
+                sched_platform: document.querySelector('input[name="sched_meeting_platform"]:checked')?.value || 'google_meet',
+                internal_api_tab: !document.getElementById('internal-api-pane-endpoints')?.classList.contains('hidden') ? 'endpoints' : 'webhook'
+            };
+
+            try {
+                localStorage.setItem('gb_popout_generic_modal_cache', JSON.stringify({
+                    modal_id: cleanId,
+                    title: meta.title || fallbackTitle,
+                    subtitle: meta.subtitle || fallbackSub,
+                    icon: meta.icon || 'fa-window-restore',
+                    controls: captureElementFormControlsSnapshot(modalEl),
+                    context: extraContext,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            const popup = openGlennBotExpandedWindow(
+                'modal_popout',
+                { modal_id: cleanId },
+                meta.width || 880,
+                meta.height || 780
+            );
+
+            // If opened in a separate popup window, close the overlay modal in the parent window
+            if (popup && typeof meta.closeFn === 'function') {
+                meta.closeFn();
+            }
+        }
+
+        // 9. Workspace Tab View -> Expanded View (Triggered on Double-Click)
+        function openExpandedWorkspaceViewWindow(tabName, event) {
+            if (event) event.stopPropagation();
+            const cleanTab = String(tabName || '').trim();
+            if (!cleanTab) return;
+
+            if (cleanTab === 'spreadsheet') return openExpandedSpreadsheetWindow(event);
+            if (cleanTab === 'files') return openExpandedFilesVaultWindow(event);
+
+            const viewEl = document.getElementById(`view-${cleanTab}`);
+            const meta = GB_WORKSPACE_VIEW_META[cleanTab] || {
+                title: `${cleanTab.toUpperCase()} — Expanded View`,
+                subtitle: 'Standalone Workspace Window',
+                icon: 'fa-window-restore',
+                width: 1240,
+                height: 860
+            };
+
+            try {
+                localStorage.setItem('gb_popout_workspace_view_cache', JSON.stringify({
+                    tab: cleanTab,
+                    controls: captureElementFormControlsSnapshot(viewEl),
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            openGlennBotExpandedWindow(
+                'workspace_view',
+                { tab: cleanTab },
+                meta.width || 1240,
+                meta.height || 860
+            );
+        }
+
+        async function initOrRefreshGenericModalData(modalId, isRefresh = false, cachedContext = {}) {
+            const ctx = cachedContext || {};
+            try {
+                if (modalId === 'settings-modal' && typeof openSettingsModal === 'function') {
+                    openSettingsModal();
+                } else if (modalId === 'connect-accounts-modal' && typeof openConnectAccountsModal === 'function') {
+                    await openConnectAccountsModal(ctx.connect_tab || 'social');
+                } else if (modalId === 'external-api-manager-modal' && typeof openManageApiModal === 'function') {
+                    await openManageApiModal();
+                } else if (modalId === 'internal-api-n8n-modal' && typeof openInternalApiModal === 'function') {
+                    await openInternalApiModal();
+                    if (ctx.internal_api_tab && typeof switchInternalApiTab === 'function') {
+                        switchInternalApiTab(ctx.internal_api_tab);
+                    }
+                } else if (modalId === 'ask-ai-n8n-modal' && typeof openAskAiN8nModal === 'function') {
+                    openAskAiN8nModal();
+                } else if (modalId === 'comment-dm-modal') {
+                    if (ctx.comment_dm_target && typeof openCommentDmModal === 'function') {
+                        const t = ctx.comment_dm_target;
+                        openCommentDmModal(t.commentId || '', t.recordId || '', t.authorName || '', t.authorHandle || '', t.platform || '', t.accountId || '', t.authorId || '');
+                    }
+                } else if (modalId === 'create-post-media-source-modal' && typeof openCreatePostMediaSourceModal === 'function') {
+                    openCreatePostMediaSourceModal('scheduler');
+                } else if (modalId === 'ask-ai-modal' && typeof openAskAiModal === 'function') {
+                    openAskAiModal();
+                } else if (modalId === 'preset-modal' && typeof openLoadPresetModal === 'function') {
+                    openLoadPresetModal();
+                } else if (modalId === 'day-modal' && typeof openDayModal === 'function') {
+                    if (!isRefresh && typeof fetchCalendarEvents === 'function') await fetchCalendarEvents(false);
+                    const targetDate = ctx.day_modal_date || new Date().toISOString().slice(0, 10);
+                    openDayModal(targetDate);
+                } else if (modalId === 'schedule-meeting-modal' && typeof openScheduleMeetingModal === 'function') {
+                    openScheduleMeetingModal();
+                } else if (modalId === 'reschedule-meeting-modal' && typeof openRescheduleMeetingModal === 'function') {
+                    if (typeof fetchCalendarEvents === 'function') await fetchCalendarEvents(false);
+                    if (ctx.resched_event_id) openRescheduleMeetingModal(ctx.resched_event_id);
+                } else if (modalId === 'cancel-meeting-modal' && typeof openCancelMeetingModal === 'function') {
+                    if (typeof fetchCalendarEvents === 'function') await fetchCalendarEvents(false);
+                    if (ctx.cancel_event_id) openCancelMeetingModal(ctx.cancel_event_id);
+                } else if (modalId === 'email-webhook-modal' && typeof openEmailWebhookModal === 'function') {
+                    openEmailWebhookModal();
+                } else if (modalId === 'crm-contact-modal' && typeof openCrmContactModal === 'function') {
+                    if (ctx.crm_contact_id && typeof fetchCrmContacts === 'function') {
+                        await fetchCrmContacts(false);
+                    }
+                    openCrmContactModal(ctx.crm_contact_id || null);
+                } else if (modalId === 'crm-open-chat-platform-modal' && typeof openCrmChatPlatformSelector === 'function') {
+                    if (typeof fetchCrmContacts === 'function') await fetchCrmContacts(false);
+                    if (ctx.crm_chat_contact_id) openCrmChatPlatformSelector(ctx.crm_chat_contact_id);
+                }
+            } catch (err) {
+                console.warn('initOrRefreshGenericModalData error:', err);
             }
         }
 
@@ -2157,6 +2564,7 @@
             }
             document.getElementById('main-dashboard-header')?.classList.remove('hidden');
             document.getElementById('left-nav-sidebar')?.classList.remove('hidden');
+            document.getElementById('main-workspace-wrapper')?.classList.remove('hidden');
             document.querySelector('main')?.classList.remove('hidden');
 
             // Restore Comments split columns
@@ -2186,6 +2594,18 @@
             // Restore Spread Sheet & Files Expanded View buttons
             document.getElementById('btn-ss-expanded-view')?.classList.remove('hidden');
             document.getElementById('btn-files-expanded-view')?.classList.remove('hidden');
+
+            // Restore any generic modal that was converted to full-window mode
+            document.querySelectorAll('[data-gb-orig-modal-class]').forEach(modalEl => {
+                modalEl.className = modalEl.getAttribute('data-gb-orig-modal-class') || '';
+                modalEl.classList.add('hidden');
+                modalEl.removeAttribute('data-gb-orig-modal-class');
+                const inner = modalEl.firstElementChild;
+                if (inner && inner.hasAttribute('data-gb-orig-inner-class')) {
+                    inner.className = inner.getAttribute('data-gb-orig-inner-class') || '';
+                    inner.removeAttribute('data-gb-orig-inner-class');
+                }
+            });
 
             // Restore modals if they were converted to full-window mode
             const expEmailModal = document.getElementById('expanded-email-modal');
@@ -2569,6 +2989,79 @@
                 }
                 return;
             }
+
+            // 8. ANY OVERLAY MODAL EXPANDED WINDOW (DOUBLE-CLICK POPOUT)
+            if (cleanMode === 'modal_popout') {
+                let targetModalId = String(params.modal_id || '').trim();
+                let cached = {};
+                try {
+                    cached = JSON.parse(localStorage.getItem('gb_popout_generic_modal_cache') || '{}') || {};
+                    if (!targetModalId && cached.modal_id) targetModalId = String(cached.modal_id);
+                } catch (_) {}
+
+                const modalEl = targetModalId ? document.getElementById(targetModalId) : null;
+                if (!modalEl) return;
+
+                const meta = GB_MODAL_POPOUT_META[targetModalId] || {};
+                const headerTitleEl = modalEl.querySelector('h2, h3');
+                const headerSubEl = modalEl.querySelector('p');
+                const titleText = meta.title || cached.title || (headerTitleEl ? `${headerTitleEl.textContent.trim()} — Expanded View` : 'Expanded Modal Window');
+                const subText = meta.subtitle || cached.subtitle || (headerSubEl ? headerSubEl.textContent.trim() : 'Dedicated Standalone Modal Window');
+                const iconClass = meta.icon || cached.icon || 'fa-window-restore';
+
+                setGlennBotPopoutBarHeader(titleText, subText, iconClass);
+
+                // Hide background workspace so the modal fills the OAuth-style window cleanly
+                document.getElementById('main-workspace-wrapper')?.classList.add('hidden');
+                document.querySelector('main')?.classList.add('hidden');
+
+                // Initialize the modal data/handlers first
+                await initOrRefreshGenericModalData(targetModalId, false, cached.context || {});
+
+                // Convert modal overlay & inner glass-panel into full-window standalone layout
+                if (!modalEl.hasAttribute('data-gb-orig-modal-class')) {
+                    modalEl.setAttribute('data-gb-orig-modal-class', modalEl.className);
+                }
+                modalEl.className = 'flex-1 w-full min-h-0 flex flex-col overflow-hidden';
+
+                const inner = modalEl.firstElementChild;
+                if (inner) {
+                    if (!inner.hasAttribute('data-gb-orig-inner-class')) {
+                        inner.setAttribute('data-gb-orig-inner-class', inner.className);
+                    }
+                    inner.className = 'glass-panel rounded-2xl w-full flex-1 min-h-0 overflow-y-auto border border-gb-cyan/50 shadow-[0_0_35px_rgba(0,240,255,0.18)] flex flex-col bg-slate-950 p-5 sm:p-6';
+                }
+
+                // Restore any form inputs the user was typing before double-clicking
+                if (Array.isArray(cached.controls) && cached.controls.length > 0 && cached.modal_id === targetModalId) {
+                    restoreElementFormControlsSnapshot(modalEl, cached.controls);
+                    if (targetModalId === 'schedule-meeting-modal' && cached.context?.sched_platform && typeof onChangeScheduleMeetingPlatform === 'function') {
+                        onChangeScheduleMeetingPlatform(cached.context.sched_platform);
+                    }
+                }
+                return;
+            }
+
+            // 9. ANY MAIN WORKSPACE VIEW EXPANDED WINDOW (DOUBLE-CLICK POPOUT)
+            if (cleanMode === 'workspace_view') {
+                const targetTab = String(params.tab || 'scheduler').trim();
+                const meta = GB_WORKSPACE_VIEW_META[targetTab] || {
+                    title: `${targetTab.toUpperCase()} — Expanded View`,
+                    subtitle: 'Dedicated Standalone Workspace Window',
+                    icon: 'fa-window-restore'
+                };
+                setGlennBotPopoutBarHeader(meta.title, meta.subtitle, meta.icon);
+                switchTab(targetTab);
+
+                try {
+                    const cached = JSON.parse(localStorage.getItem('gb_popout_workspace_view_cache') || '{}') || {};
+                    if (cached.tab === targetTab && Array.isArray(cached.controls)) {
+                        const viewEl = document.getElementById(`view-${targetTab}`);
+                        restoreElementFormControlsSnapshot(viewEl, cached.controls);
+                    }
+                } catch (_) {}
+                return;
+            }
         }
 
         async function applyGlennBotPopoutModeIfPresent() {
@@ -2576,6 +3069,115 @@
             if (!parsed || !parsed.mode) return false;
             await applyGlennBotPopoutLayout(parsed.mode, parsed.params);
             return true;
+        }
+
+        // Universal Double-Click Expanded View Listener for ALL Overlay Modals & Workspace Modals/Views
+        function initGlennBotDoubleClickExpandedView() {
+            if (window.gbDblClickExpandedInitialized) return;
+            window.gbDblClickExpandedInitialized = true;
+
+            document.addEventListener('dblclick', (e) => {
+                // Do not re-trigger if this window is already in Expanded View mode
+                if (window.gbActivePopoutMode) return;
+
+                const target = e.target;
+                if (!target || typeof target.closest !== 'function') return;
+
+                // Ignore double-clicks on interactive inputs, buttons, links, media players, spreadsheet cells, or elements with explicit ondblclick
+                const interactiveSelector = [
+                    'input',
+                    'textarea',
+                    'select',
+                    'button',
+                    'a',
+                    'label',
+                    'video',
+                    'audio',
+                    'iframe',
+                    '[contenteditable="true"]',
+                    '.ss-cell-input',
+                    '[ondblclick]'
+                ].join(', ');
+                if (target.closest(interactiveSelector)) return;
+
+                //Ignore double-clicking an email list row (which opens the email reader)
+                if (target.closest('#email-messages-list-container [onclick*="selectEmailMessage"]')) return;
+
+                // 1. Check if the user double-clicked inside an open Overlay Modal (#...-modal)
+                const modalEl = target.closest('[id$="-modal"]');
+                if (modalEl && !modalEl.classList.contains('hidden')) {
+                    // Ensure the double-click happened inside the modal card/panel (not the dark backdrop)
+                    const modalCard = modalEl.firstElementChild;
+                    if (modalCard && modalCard.contains(target)) {
+                        openExpandedGenericModalWindow(modalEl.id, e);
+                        return;
+                    }
+                }
+
+                // 2. Check if the user double-clicked inside an active Main Workspace View (#view-...)
+                const viewEl = target.closest('[id^="view-"]');
+                if (viewEl && !viewEl.classList.contains('hidden')) {
+                    const viewId = viewEl.id; // e.g. 'view-comments', 'view-automations'
+                    const tabName = viewId.replace(/^view-/, '');
+
+                    if (tabName === 'comments') {
+                        const hasSelectedThread = typeof selectedCommentRecordId !== 'undefined' && Boolean(selectedCommentRecordId);
+                        if (hasSelectedThread && target.closest('#comment-detail-panel')) {
+                            openExpandedCommentThreadWindow(selectedCommentRecordId, e);
+                        } else {
+                            openExpandedWorkspaceViewWindow('comments', e);
+                        }
+                        return;
+                    }
+
+                    if (tabName === 'messages') {
+                        const hasSelectedConv = typeof activeConversationObj !== 'undefined' && Boolean(activeConversationObj);
+                        if (hasSelectedConv && target.closest('#message-detail-panel')) {
+                            openExpandedMessageThreadWindow(
+                                activeConversationObj.conv_key || '',
+                                activeConversationObj.conversation_id || '',
+                                activeConversationObj.account_id || '',
+                                e
+                            );
+                        } else {
+                            openExpandedWorkspaceViewWindow('messages', e);
+                        }
+                        return;
+                    }
+
+                    if (tabName === 'email') {
+                        const hasSelectedEmail = typeof selectedEmailMessageId !== 'undefined' && Boolean(selectedEmailMessageId);
+                        if (hasSelectedEmail && target.closest('#email-reader-panel')) {
+                            openExpandedEmailWindow(selectedEmailMessageId, e);
+                        } else {
+                            openExpandedWorkspaceViewWindow('email', e);
+                        }
+                        return;
+                    }
+
+                    if (tabName === 'spreadsheet') {
+                        openExpandedSpreadsheetWindow(e);
+                        return;
+                    }
+
+                    if (tabName === 'files') {
+                        openExpandedFilesVaultWindow(e);
+                        return;
+                    }
+
+                    openExpandedWorkspaceViewWindow(tabName, e);
+                }
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                initGlennBotDoubleClickExpandedView();
+                applyGlennBotPopoutModeIfPresent();
+            });
+        } else {
+            initGlennBotDoubleClickExpandedView();
+            applyGlennBotPopoutModeIfPresent();
         }
 
 
