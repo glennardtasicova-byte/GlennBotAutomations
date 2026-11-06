@@ -225,6 +225,25 @@
                     </div>
                 </div>
 
+                <!-- Feature 0.5: Bandwidth Saver Mode (Render 5 GB Quota Protection — Default ON) -->
+                <div class="p-3.5 rounded-xl bg-slate-900/85 border border-emerald-500/50 hover:border-gb-cyan/60 transition-all shadow-[0_0_15px_rgba(16,185,129,0.08)]">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="space-y-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <i class="fas fa-shield-alt text-emerald-400 text-xs"></i>
+                                <span class="text-xs sm:text-sm font-bold text-white">Bandwidth Saver Mode (Render 5 GB Quota Protection)</span>
+                                <span class="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold uppercase tracking-wider">Default ON</span>
+                            </div>
+                            <p class="text-[11px] text-slate-400 leading-relaxed">
+                                Prevents automatic <code class="text-emerald-300">&lt;video&gt;</code> streaming of large multi-GB files in <strong>Files Vault</strong>, <strong>Create Post</strong>, and <strong>Queue</strong>. Shows lightweight static thumbnail badges (<code class="text-gb-cyan">~0 MB</code> bandwidth) and blocks video-downloader extensions from pre-fetching unless you explicitly click <strong>Preview / Play</strong>.
+                            </p>
+                        </div>
+                        <button type="button" id="setting-btn-bandwidthSaverMode" aria-label="Toggle Bandwidth Saver Mode" onclick="toggleUserSetting('bandwidthSaverMode')" class="w-12 h-6 rounded-full transition-colors relative shrink-0 bg-gb-cyan shadow-[0_0_10px_rgba(0,240,255,0.35)]">
+                            <span id="setting-knob-bandwidthSaverMode" class="w-5 h-5 rounded-full bg-slate-950 shadow-md transform transition-transform absolute top-0.5 translate-x-6"></span>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Feature 1: Instant Background Queueing (Non-Blocking Launch Automation) -->
                 <div class="p-3.5 rounded-xl bg-slate-900/85 border border-slate-700/90 hover:border-gb-cyan/50 transition-all">
                     <div class="flex items-start justify-between gap-3">

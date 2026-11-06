@@ -2,6 +2,8 @@ import os
 import sys
 import threading
 
+sys.dont_write_bytecode = True
+
 # Ensure UTF-8 console output on Windows PowerShell / CMD so emoji logs never raise UnicodeEncodeError
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

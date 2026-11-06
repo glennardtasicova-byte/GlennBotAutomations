@@ -491,14 +491,24 @@
                         </div>
                     `;
                 } else if (isVid && pUrl) {
-                    thumbPreviewHTML = `
-                        <div class="w-16 h-16 rounded-xl bg-black border border-gb-cyan/50 overflow-hidden shrink-0 flex items-center justify-center relative">
-                            <video src="${escapeHTML(pUrl)}#t=0.5" preload="metadata" muted playsinline class="w-full h-full object-cover"></video>
-                            <div class="absolute inset-0 bg-black/25 flex items-center justify-center pointer-events-none">
-                                <i class="fas fa-play-circle text-white/90 text-sm drop-shadow"></i>
+                    const isBwSaver = (typeof userSettings === 'undefined' || userSettings.bandwidthSaverMode !== false);
+                    if (isBwSaver) {
+                        thumbPreviewHTML = `
+                            <div class="w-16 h-16 rounded-xl bg-slate-950 border border-emerald-500/50 overflow-hidden shrink-0 flex flex-col items-center justify-center relative gap-1" title="Bandwidth Saver Mode Active (~0 MB auto-stream)">
+                                <i class="fas fa-film text-emerald-400 text-base"></i>
+                                <span class="text-[8px] font-extrabold text-gb-cyan uppercase tracking-wider">VIDEO</span>
                             </div>
-                        </div>
-                    `;
+                        `;
+                    } else {
+                        thumbPreviewHTML = `
+                            <div class="w-16 h-16 rounded-xl bg-black border border-gb-cyan/50 overflow-hidden shrink-0 flex items-center justify-center relative">
+                                <video src="${escapeHTML(pUrl)}#t=0.5" preload="metadata" muted playsinline class="w-full h-full object-cover"></video>
+                                <div class="absolute inset-0 bg-black/25 flex items-center justify-center pointer-events-none">
+                                    <i class="fas fa-play-circle text-white/90 text-sm drop-shadow"></i>
+                                </div>
+                            </div>
+                        `;
+                    }
                 }
 
                 return `
@@ -768,12 +778,37 @@
                 const firstItem = activeVaultItems[0];
                 const fid = String(firstItem.file_id || '');
                 const vaultUrl = firstItem.preview_url || firstItem.download_url || (`/api/files/${encodeURIComponent(fid)}/stream`);
+                const isBwSaver = (typeof userSettings === 'undefined' || userSettings.bandwidthSaverMode !== false);
                 if (type === 'video') {
-                    container.innerHTML = `
-                        <video src="${escapeHTML(vaultUrl)}" preload="metadata" controls playsinline class="w-full h-full object-contain rounded-lg relative z-20" onclick="event.stopPropagation()"></video>
-                        ${buildMediaActionButtonsHTML(input.id, containerId, 'video')}
-                        ${buildVaultSourceBadgeHTML(firstItem)}
-                    `;
+                    if (isBwSaver) {
+                        const vFname = String(firstItem.filename || fid || 'Vault Video');
+                        const vSize = String(firstItem.size_formatted || '');
+                        container.innerHTML = `
+                            <div class="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950/90 rounded-lg relative z-20 gap-2" onclick="event.stopPropagation()">
+                                <div class="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+                                    <i class="fas fa-film text-xl"></i>
+                                </div>
+                                <div class="text-xs font-bold text-white max-w-[240px] truncate" title="${escapeHTML(vFname)}">${escapeHTML(vFname)}</div>
+                                <div class="text-[10px] text-emerald-300 font-mono">${escapeHTML(fid)}${vSize ? ' • ' + escapeHTML(vSize) : ''}</div>
+                                <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-[9px] font-bold text-emerald-300">
+                                    <i class="fas fa-shield-alt mr-1"></i>Bandwidth Saver Ready (~0 MB Preview)
+                                </span>
+                                <button type="button" onclick="loadVaultVideoInlinePlayer(this, '${escapeHTML(vaultUrl)}', event)"
+                                    class="mt-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-gb-cyan hover:text-slate-950 border border-gb-cyan/60 text-gb-cyan text-[11px] font-bold flex items-center gap-1.5 transition-all">
+                                    <i class="fas fa-play text-[9px]"></i>
+                                    <span>Load Video Preview</span>
+                                </button>
+                            </div>
+                            ${buildMediaActionButtonsHTML(input.id, containerId, 'video')}
+                            ${buildVaultSourceBadgeHTML(firstItem)}
+                        `;
+                    } else {
+                        container.innerHTML = `
+                            <video src="${escapeHTML(vaultUrl)}" preload="metadata" controls playsinline class="w-full h-full object-contain rounded-lg relative z-20" onclick="event.stopPropagation()"></video>
+                            ${buildMediaActionButtonsHTML(input.id, containerId, 'video')}
+                            ${buildVaultSourceBadgeHTML(firstItem)}
+                        `;
+                    }
                 } else if (type === 'image') {
                     container.innerHTML = `
                         <img src="${escapeHTML(vaultUrl)}" class="w-full h-full object-cover rounded-lg relative z-20" onclick="event.stopPropagation()" onerror="this.style.display='none'">
@@ -840,6 +875,13 @@
             } else {
                 if (wrapper) wrapper.classList.remove('has-media');
             }
+        }
+
+        function loadVaultVideoInlinePlayer(btnEl, videoUrl, event) {
+            if (event) event.stopPropagation();
+            const cardEl = btnEl ? btnEl.closest('div') : null;
+            if (!cardEl || !videoUrl) return;
+            cardEl.outerHTML = `<video src="${escapeHTML(videoUrl)}" preload="metadata" controls autoplay playsinline class="w-full h-full object-contain rounded-lg relative z-20" onclick="event.stopPropagation()"></video>`;
         }
 
         let activeConnectModalTab = 'manage';

@@ -431,11 +431,24 @@
                 const isImg = ftype.toLowerCase().startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(fname);
                 const isVid = ftype.toLowerCase().startsWith('video/') || /\.(mp4|mov|webm|mkv|avi)$/i.test(fname);
 
-                let miniPreviewHTML = `<i class="fas ${iconCls} text-base shrink-0"></i>`;
+                const isBandwidthSaverOn = (typeof userSettings === 'undefined' || userSettings.bandwidthSaverMode !== false);
+                let miniPreviewHTML = `<div class="w-10 h-10 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center shrink-0"><i class="fas ${iconCls} text-base"></i></div>`;
                 if (isImg) {
                     miniPreviewHTML = `<img src="${escapeHTML(streamUrl)}" class="w-10 h-10 rounded-lg object-cover border border-emerald-500/40 shrink-0 bg-black" loading="lazy" onerror="this.style.display='none'">`;
                 } else if (isVid) {
-                    miniPreviewHTML = `<video src="${escapeHTML(streamUrl)}#t=0.5" preload="metadata" muted playsinline class="w-10 h-10 rounded-lg object-cover border border-gb-cyan/50 shrink-0 bg-black"></video>`;
+                    if (isBandwidthSaverOn) {
+                        const targetHref = driveViewLink || streamUrl;
+                        miniPreviewHTML = `
+                            <a href="${escapeHTML(targetHref)}" target="_blank" rel="noopener noreferrer"
+                                class="w-10 h-10 rounded-lg bg-slate-950 hover:bg-slate-900 border border-emerald-500/50 hover:border-gb-cyan shrink-0 flex flex-col items-center justify-center relative group transition-all shadow-[0_0_8px_rgba(16,185,129,0.15)]"
+                                title="Bandwidth Saver Mode Active (~0 MB auto-stream) • Click to preview video">
+                                <i class="fas fa-film text-emerald-400 group-hover:text-gb-cyan text-xs"></i>
+                                <span class="text-[7px] font-extrabold text-slate-300 group-hover:text-white uppercase tracking-tighter mt-0.5 leading-none">PLAY</span>
+                            </a>
+                        `;
+                    } else {
+                        miniPreviewHTML = `<video src="${escapeHTML(streamUrl)}#t=0.5" preload="metadata" muted playsinline class="w-10 h-10 rounded-lg object-cover border border-gb-cyan/50 shrink-0 bg-black"></video>`;
+                    }
                 }
 
                 return `

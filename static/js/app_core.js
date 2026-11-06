@@ -86,6 +86,7 @@
         // =========================================================================
         const DEFAULT_USER_SETTINGS = {
             theme: 'default', // 'default' | 'light' | 'dark'
+            bandwidthSaverMode: true,
             instantBackgroundQueue: true,
             autoClearAfterLaunch: true,
             fadeEffects: true,
@@ -268,7 +269,9 @@
             });
 
             document.body.classList.toggle('gb-no-fade', !userSettings.fadeEffects);
+            document.body.dataset.gbBandwidthSaver = userSettings.bandwidthSaverMode !== false ? 'on' : 'off';
             const toggleKeys = [
+                'bandwidthSaverMode',
                 'instantBackgroundQueue',
                 'autoClearAfterLaunch',
                 'fadeEffects',
@@ -278,7 +281,7 @@
             toggleKeys.forEach(k => {
                 const btn = document.getElementById(`setting-btn-${k}`);
                 const knob = document.getElementById(`setting-knob-${k}`);
-                const isOn = Boolean(userSettings[k]);
+                const isOn = k === 'bandwidthSaverMode' ? (userSettings[k] !== false) : Boolean(userSettings[k]);
                 if (btn) {
                     btn.className = `w-12 h-6 rounded-full transition-colors relative shrink-0 ${isOn ? 'bg-gb-cyan shadow-[0_0_10px_rgba(0,240,255,0.35)]' : 'bg-slate-700'}`;
                 }
@@ -300,11 +303,24 @@
         }
 
         function toggleUserSetting(key) {
-            if (!(key in userSettings)) return;
-            userSettings[key] = !userSettings[key];
+            if (!(key in userSettings) && key !== 'bandwidthSaverMode') return;
+            userSettings[key] = !(userSettings[key] !== false && Boolean(userSettings[key]));
             saveUserSettings(true);
             if (key === 'soundEffects' && userSettings.soundEffects) {
                 playNotificationSound(true);
+            }
+            if (key === 'bandwidthSaverMode') {
+                if (typeof renderVaultFilesList === 'function') {
+                    try { renderVaultFilesList(); } catch (_) {}
+                }
+                if (typeof renderCreatePostVaultModalList === 'function') {
+                    try { renderCreatePostVaultModalList(); } catch (_) {}
+                }
+                showToast(
+                    userSettings.bandwidthSaverMode
+                        ? "🛡️ Bandwidth Saver Mode ON: Large video auto-streaming disabled (~0 MB preview mode)."
+                        : "🎬 Bandwidth Saver Mode OFF: Live inline video previews enabled."
+                );
             }
         }
 
@@ -1679,10 +1695,15 @@
                 if (p.permalink_url) {
                     mediaThumb = `<a href="${p.permalink_url}" target="_blank" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan text-xs font-semibold whitespace-nowrap"><i class="fas fa-external-link-alt"></i> View Live Post</a>`;
                 } else if (p.media_preview_url) {
-                    if (p.media_preview_url.match(/\.(mp4|mov|webm|mkv|avi)(?:$|\?)/i) && p.post_type !== 'image') {
-                        mediaThumb = `<a href="${p.media_preview_url}" target="_blank" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs whitespace-nowrap"><i class="fas fa-play-circle"></i> View Video</a>`;
+                    const isVideoPostType = ['reels', 'video169', 'video'].includes(String(p.post_type || '').toLowerCase());
+                    const isVideoExt = /\.(mp4|mov|webm|mkv|avi)(?:$|\?)/i.test(p.media_preview_url);
+                    const isVaultStream = p.media_preview_url.includes('/api/files/') || p.media_preview_url.includes('/api/gdrive-media/');
+                    if ((isVideoPostType || isVideoExt || (isVaultStream && p.post_type !== 'image')) && p.post_type !== 'image') {
+                        mediaThumb = `<a href="${p.media_preview_url}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-emerald-500/50 text-emerald-300 hover:text-gb-cyan text-xs whitespace-nowrap" title="Bandwidth Saver: Click to open video stream in new tab"><i class="fas fa-play-circle text-gb-cyan"></i> View Video</a>`;
+                    } else if (userSettings && userSettings.bandwidthSaverMode !== false && isVaultStream) {
+                        mediaThumb = `<a href="${p.media_preview_url}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 text-emerald-300 text-xs whitespace-nowrap" title="Bandwidth Saver: Click to view media"><i class="fas fa-image text-emerald-400"></i> View Media</a>`;
                     } else {
-                        mediaThumb = `<a href="${p.media_preview_url}" target="_blank" class="block w-11 h-11 rounded-lg overflow-hidden border border-slate-600 hover:border-gb-cyan transition-all"><img src="${p.media_preview_url}" class="w-full h-full object-cover" onerror="this.outerHTML='<span class=\\'text-xs text-gb-cyan p-1\\'>Media</span>'"></a>`;
+                        mediaThumb = `<a href="${p.media_preview_url}" target="_blank" class="block w-11 h-11 rounded-lg overflow-hidden border border-slate-600 hover:border-gb-cyan transition-all"><img src="${p.media_preview_url}" loading="lazy" class="w-full h-full object-cover" onerror="this.outerHTML='<span class=\\'text-xs text-gb-cyan p-1\\'>Media</span>'"></a>`;
                     }
                 } else if (p.status === 'processing_payload' && p.post_type !== 'text') {
                     mediaThumb = `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] whitespace-nowrap"><i class="fas fa-cloud-upload-alt fa-fade"></i> Uploading...</span>`;

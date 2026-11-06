@@ -139,6 +139,7 @@ LOCAL_USER_SETTINGS_CACHE_PATH = os.path.join(BASE_DIR, "user_settings_profiles_
 USER_SETTINGS_LOCK = threading.Lock()
 DEFAULT_ACCOUNT_USER_SETTINGS: Dict[str, Any] = {
     "theme": "default",  # "default" | "light" | "dark"
+    "bandwidthSaverMode": True,
     "instantBackgroundQueue": True,
     "autoClearAfterLaunch": True,
     "fadeEffects": True,
@@ -163,6 +164,7 @@ def _normalize_user_settings_dict(raw: Any) -> Dict[str, Any]:
         vol = 85
     return {
         "theme": theme_val,
+        "bandwidthSaverMode": bool(src.get("bandwidthSaverMode", True)),
         "instantBackgroundQueue": bool(src.get("instantBackgroundQueue", True)),
         "autoClearAfterLaunch": bool(src.get("autoClearAfterLaunch", True)),
         "fadeEffects": bool(src.get("fadeEffects", True)),

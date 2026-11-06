@@ -26,6 +26,7 @@ spreadsheets_store_cache.json
 automations_canvas_workflows_cache.json
 user_settings_profiles_cache.json
 public/assets/aistudio/
+.playwright-cli/
 .pytest_cache/
 .DS_Store
 Thumbs.db
