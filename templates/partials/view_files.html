@@ -23,12 +23,16 @@
                     </div>
                 </div>
 
-                <!-- Search + Refresh + Upload Button -->
+                <!-- Search + Expanded View + Refresh + Upload Button -->
                 <div class="flex flex-wrap items-center gap-2">
                     <div class="relative flex-1 sm:flex-none sm:w-64">
                         <i class="fas fa-search text-slate-500 text-xs absolute left-3 top-1/2 -translate-y-1/2"></i>
                         <input type="text" id="vault-files-search" oninput="renderVaultFilesList()" placeholder="Search by File ID, filename, or note..." class="w-full bg-slate-900 border border-slate-700 focus:border-gb-cyan rounded-xl pl-8 pr-3 py-2 text-xs text-white focus:outline-none">
                     </div>
+                    <button type="button" id="btn-files-expanded-view" onclick="openExpandedFilesVaultWindow(event)" class="px-3 py-2 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]" title="Open Files Vault in a separate OAuth-style Expanded Window">
+                        <i class="fas fa-external-link-square-alt"></i>
+                        <span>Expanded View</span>
+                    </button>
                     <button type="button" onclick="fetchVaultFiles(true)" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-semibold flex items-center gap-1.5 transition-all">
                         <i id="vault-files-sync-icon" class="fas fa-sync-alt"></i>
                         <span>Refresh</span>

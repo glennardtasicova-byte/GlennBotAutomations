@@ -34,6 +34,12 @@
                         <option value="" selected>-- Select Spreadsheet (.xlsx / .xls) --</option>
                     </select>
 
+                    <!-- Expanded View (Separate OAuth-style Window for Selected Spreadsheet) -->
+                    <button type="button" id="btn-ss-expanded-view" onclick="openExpandedSpreadsheetWindow(event)" class="px-3 py-1.5 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]" title="Open the selected Spreadsheet in a separate OAuth-style Expanded Window">
+                        <i class="fas fa-external-link-square-alt"></i>
+                        <span>Expanded View</span>
+                    </button>
+
                     <button type="button" onclick="createNewBlankSpreadsheetWorkbook()" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold flex items-center gap-1" title="Reset to a new blank worksheet">
                         <i class="fas fa-file-medical text-gb-cyan"></i>
                         <span>New</span>

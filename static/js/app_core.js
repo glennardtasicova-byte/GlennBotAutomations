@@ -1809,3 +1809,773 @@
             closeModalWithFade('day-modal');
         }
 
+        // =========================================================================
+        // --- OAUTH-STYLE SEPARATE EXPANDED WINDOW & FULL-WINDOW FOCUS ENGINE ---
+        // --- Supports:
+        // ---   1. comment_thread  (Comments Modal -> Media + Caption + Thread)
+        // ---   2. spreadsheet     (Spread Sheet Modal -> Selected Workbook)
+        // ---   3. email_view      (Email Reader / Expanded Email)
+        // ---   4. message_thread  (Messages Modal -> Active Conversation Thread)
+        // ---   5. new_sms         (Create New SMS Modal)
+        // ---   6. compose_email   (Compose New Email Modal)
+        // ---   7. files_vault     (Files Vault Modal)
+        // =========================================================================
+        window.gbActivePopoutMode = '';
+        window.gbActivePopoutParams = {};
+        window.gbIsInPageFocusFallback = false;
+
+        function getUrlPopoutParams() {
+            try {
+                const sp = new URLSearchParams(window.location.search || '');
+                const mode = String(sp.get('popout_mode') || '').trim();
+                if (!mode) return null;
+                const params = {};
+                sp.forEach((val, key) => {
+                    params[key] = val;
+                });
+                return { mode, params };
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function openGlennBotExpandedWindow(mode, params = {}, width = 1140, height = 840) {
+            const cleanMode = String(mode || '').trim();
+            if (!cleanMode) return null;
+
+            const sp = new URLSearchParams();
+            sp.set('popout_mode', cleanMode);
+            Object.entries(params || {}).forEach(([k, v]) => {
+                if (v !== undefined && v !== null && String(v) !== '') {
+                    sp.set(k, String(v));
+                }
+            });
+            sp.set('_ts', String(Date.now()));
+
+            const popoutUrl = `${window.location.origin}${window.location.pathname}?${sp.toString()}`;
+            const availW = window.screen?.availWidth || window.screen?.width || 1440;
+            const availH = window.screen?.availHeight || window.screen?.height || 900;
+            const w = Math.min(width, availW - 40);
+            const h = Math.min(height, availH - 40);
+            const left = Math.max(0, Math.round((availW - w) / 2));
+            const top = Math.max(0, Math.round((availH - h) / 2));
+
+            const windowName = `GlennBotExpanded_${cleanMode}_${String(params.record_id || params.workbook_id || params.message_id || params.conv_id || 'main').replace(/[^a-zA-Z0-9_-]/g, '')}`;
+            const features = `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`;
+
+            let popupWin = null;
+            try {
+                popupWin = window.open(popoutUrl, windowName, features);
+            } catch (_) {
+                popupWin = null;
+            }
+
+            if (popupWin && !popupWin.closed) {
+                try { popupWin.focus(); } catch (_) {}
+                showToast('🗗 Opened Expanded View in a separate window!');
+                return popupWin;
+            }
+
+            // Fallback if browser/iframe blocks popups: activate Full-Window Expanded Focus Mode in-place
+            window.gbIsInPageFocusFallback = true;
+            applyGlennBotPopoutLayout(cleanMode, params);
+            showToast('🗗 Entered Full-Window Expanded Focus View!');
+            return null;
+        }
+
+        // 1. Comments Modal -> Expanded View (next to Delete Thread)
+        function openExpandedCommentThreadWindow(recordId, event) {
+            if (event) event.stopPropagation();
+            const targetRecordId = String(recordId || selectedCommentRecordId || '').trim();
+            if (!targetRecordId) {
+                showToast('⚠️ Select a comment thread first to open Expanded View.');
+                return;
+            }
+            try {
+                const threadItems = (typeof commentsList !== 'undefined' && Array.isArray(commentsList))
+                    ? commentsList.filter(c => String(c.record_id) === targetRecordId)
+                    : [];
+                const draftReply = document.getElementById('comment-reply-input')?.value || '';
+                localStorage.setItem('gb_popout_comment_thread_cache', JSON.stringify({
+                    record_id: targetRecordId,
+                    comment_id: (typeof selectedCommentId !== 'undefined' && selectedCommentId) ? selectedCommentId : '',
+                    items: threadItems,
+                    draft_reply: draftReply,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            openGlennBotExpandedWindow('comment_thread', {
+                record_id: targetRecordId,
+                comment_id: (typeof selectedCommentId !== 'undefined' && selectedCommentId) ? selectedCommentId : ''
+            }, 1080, 860);
+        }
+
+        // 2. Spread Sheet Modal -> Expanded View (for Selected Spreadsheet)
+        function openExpandedSpreadsheetWindow(event) {
+            if (event) event.stopPropagation();
+            const wbId = String(currentSpreadsheetWorkbook?.workbook_id || document.getElementById('ss-saved-workbooks-select')?.value || '').trim();
+            const shIdx = typeof activeSheetIndex === 'number' ? activeSheetIndex : 0;
+            try {
+                localStorage.setItem('gb_popout_spreadsheet_cache', JSON.stringify({
+                    workbook_id: wbId,
+                    active_sheet_index: shIdx,
+                    workbook: currentSpreadsheetWorkbook || null,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            openGlennBotExpandedWindow('spreadsheet', {
+                workbook_id: wbId,
+                sheet_idx: String(shIdx)
+            }, 1280, 860);
+        }
+
+        // 3. Email Reader / Expanded Email -> Expanded View
+        function openExpandedEmailWindow(msgId, event) {
+            if (event) event.stopPropagation();
+            const targetMsgId = String(msgId || (typeof selectedEmailMessageId !== 'undefined' ? selectedEmailMessageId : '') || '').trim();
+            if (!targetMsgId) {
+                showToast('⚠️ Select an email first to open Expanded View.');
+                return;
+            }
+            const accId = (typeof activeEmailAccountId !== 'undefined' && activeEmailAccountId) ? activeEmailAccountId : '';
+            const folder = (typeof activeEmailFolder !== 'undefined' && activeEmailFolder) ? activeEmailFolder : 'inbox';
+            try {
+                const msgObj = (typeof activeEmailMessages !== 'undefined' && Array.isArray(activeEmailMessages))
+                    ? activeEmailMessages.find(m => String(m.id) === targetMsgId)
+                    : null;
+                const draftReply = document.getElementById('expanded-email-reply-input')?.value
+                    || document.getElementById('email-quick-reply-input')?.value
+                    || '';
+                localStorage.setItem('gb_popout_email_view_cache', JSON.stringify({
+                    account_id: accId,
+                    message_id: targetMsgId,
+                    folder: folder,
+                    message: msgObj || null,
+                    draft_reply: draftReply,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            const popup = openGlennBotExpandedWindow('email_view', {
+                account_id: accId,
+                message_id: targetMsgId,
+                folder: folder
+            }, 1120, 860);
+
+            if (popup && typeof closeExpandedEmailModal === 'function') {
+                closeExpandedEmailModal();
+            }
+        }
+
+        // 4. Messages Modal -> Expanded View (Active Conversation Thread)
+        function openExpandedMessageThreadWindow(convKey, conversationId, accountId, event) {
+            if (event) event.stopPropagation();
+            const cKey = String(convKey || activeConversationObj?.conv_key || '').trim();
+            const cId = String(conversationId || activeConversationObj?.conversation_id || '').trim();
+            const aId = String(accountId || activeConversationObj?.account_id || '').trim();
+            if (!cKey && !cId) {
+                showToast('⚠️ Select a conversation first to open Expanded View.');
+                return;
+            }
+            try {
+                const draftMsg = document.getElementById('direct-message-input')?.value || '';
+                localStorage.setItem('gb_popout_message_thread_cache', JSON.stringify({
+                    conv_key: cKey,
+                    conv_id: cId,
+                    account_id: aId,
+                    conversation: (typeof activeConversationObj !== 'undefined') ? activeConversationObj : null,
+                    messages: (typeof activeConversationMessages !== 'undefined') ? activeConversationMessages : [],
+                    draft_message: draftMsg,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            openGlennBotExpandedWindow('message_thread', {
+                conv_key: cKey,
+                conv_id: cId,
+                account_id: aId
+            }, 1040, 840);
+        }
+
+        // 5. Create New SMS Modal -> Expanded View
+        function openExpandedCreateNewSmsWindow(event) {
+            if (event) event.stopPropagation();
+            const phone = document.getElementById('new-sms-recipient-phone')?.value || '';
+            const name = document.getElementById('new-sms-recipient-name')?.value || '';
+            const sim = document.getElementById('new-sms-sim-slot')?.value || '2';
+            const body = document.getElementById('new-sms-message-body')?.value || '';
+            try {
+                localStorage.setItem('gb_popout_new_sms_cache', JSON.stringify({
+                    phone,
+                    name,
+                    sim,
+                    body,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            const popup = openGlennBotExpandedWindow('new_sms', {
+                phone: phone
+            }, 820, 780);
+
+            if (popup && typeof closeCreateNewSmsModal === 'function') {
+                closeCreateNewSmsModal();
+            }
+        }
+
+        // 6. Compose New Email Modal -> Expanded View
+        function openExpandedComposeEmailWindow(event) {
+            if (event) event.stopPropagation();
+            const accountId = document.getElementById('compose-email-sender-select')?.value || (typeof activeEmailAccountId !== 'undefined' ? activeEmailAccountId : '') || '';
+            const to = document.getElementById('compose-email-to')?.value || '';
+            const cc = document.getElementById('compose-email-cc')?.value || '';
+            const subject = document.getElementById('compose-email-subject')?.value || '';
+            const body = document.getElementById('compose-email-body')?.value || '';
+            try {
+                localStorage.setItem('gb_popout_compose_email_cache', JSON.stringify({
+                    account_id: accountId,
+                    to,
+                    cc,
+                    subject,
+                    body,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            const popup = openGlennBotExpandedWindow('compose_email', {
+                account_id: accountId
+            }, 860, 800);
+
+            if (popup && typeof closeComposeEmailModal === 'function') {
+                closeComposeEmailModal();
+            }
+        }
+
+        // 7. Files Vault Modal -> Expanded View
+        function openExpandedFilesVaultWindow(event) {
+            if (event) event.stopPropagation();
+            const searchVal = document.getElementById('vault-files-search')?.value || '';
+            try {
+                localStorage.setItem('gb_popout_files_vault_cache', JSON.stringify({
+                    search: searchVal,
+                    saved_at: Date.now()
+                }));
+            } catch (_) {}
+
+            openGlennBotExpandedWindow('files_vault', {
+                search: searchVal
+            }, 1220, 840);
+        }
+
+        function setGlennBotPopoutBarHeader(titleText, subtitleText, iconClass = 'fa-external-link-square-alt') {
+            const bar = document.getElementById('gb-popout-window-bar');
+            const titleEl = document.getElementById('gb-popout-window-title');
+            const subEl = document.getElementById('gb-popout-window-subtitle');
+            const iconEl = document.getElementById('gb-popout-window-icon');
+            const closeLbl = document.getElementById('gb-popout-close-label');
+
+            if (bar) {
+                bar.classList.remove('hidden');
+                bar.classList.add('flex');
+            }
+            if (titleEl && titleText) titleEl.textContent = titleText;
+            if (subEl && subtitleText) subEl.textContent = subtitleText;
+            if (iconEl && iconClass) iconEl.className = `fas ${iconClass} text-sm`;
+            if (closeLbl) {
+                const isRealPopup = Boolean(window.opener && !window.opener.closed);
+                closeLbl.textContent = isRealPopup ? 'Close Window' : 'Exit Expanded View';
+            }
+            if (titleText) {
+                document.title = `${titleText} • GlennBot Automations`;
+            }
+        }
+
+        async function refreshGlennBotPopoutWindow() {
+            const mode = window.gbActivePopoutMode;
+            const p = window.gbActivePopoutParams || {};
+            if (mode === 'comment_thread') {
+                await fetchComments(true);
+                if (p.record_id) renderSelectedCommentDetail(p.record_id, true);
+            } else if (mode === 'message_thread') {
+                await fetchConversations(true);
+                if (p.conv_key || p.conv_id) {
+                    selectMessageConversation(p.conv_key || '', p.conv_id || '', p.account_id || '');
+                }
+            } else if (mode === 'spreadsheet') {
+                if (typeof syncActiveSpreadsheetFromGoogleDriveNow === 'function') {
+                    await syncActiveSpreadsheetFromGoogleDriveNow(true);
+                }
+            } else if (mode === 'email_view') {
+                if (typeof refreshActiveEmailInbox === 'function') {
+                    await refreshActiveEmailInbox(true, false);
+                }
+                if (p.message_id && typeof renderExpandedEmailModalContent === 'function') {
+                    renderExpandedEmailModalContent(p.message_id);
+                }
+            } else if (mode === 'files_vault') {
+                if (typeof fetchVaultFiles === 'function') {
+                    await fetchVaultFiles(true);
+                }
+            } else if (mode === 'new_sms') {
+                if (typeof fetchTextbeeStatusSilently === 'function') {
+                    await fetchTextbeeStatusSilently(true);
+                    showToast('🔄 Refreshed TextBee SIM 2 Gateway status!');
+                }
+            } else if (mode === 'compose_email') {
+                if (typeof fetchEmailAccounts === 'function') {
+                    await fetchEmailAccounts(true);
+                    populateComposeEmailSenderSelect(p.account_id || '');
+                    showToast('🔄 Refreshed Connected Email Accounts!');
+                }
+            }
+        }
+
+        function closeGlennBotPopoutWindow() {
+            const isUrlPopout = Boolean(getUrlPopoutParams());
+            if (isUrlPopout && window.opener && !window.opener.closed) {
+                window.close();
+                return;
+            }
+            if (isUrlPopout) {
+                try { window.close(); } catch (_) {}
+                window.location.href = window.location.pathname;
+                return;
+            }
+
+            // Restore in-page fallback mode back to normal dashboard layout
+            window.gbActivePopoutMode = '';
+            window.gbActivePopoutParams = {};
+            window.gbIsInPageFocusFallback = false;
+            document.title = 'GlennBot Automations';
+
+            const bar = document.getElementById('gb-popout-window-bar');
+            if (bar) {
+                bar.classList.add('hidden');
+                bar.classList.remove('flex');
+            }
+            document.getElementById('main-dashboard-header')?.classList.remove('hidden');
+            document.getElementById('left-nav-sidebar')?.classList.remove('hidden');
+            document.querySelector('main')?.classList.remove('hidden');
+
+            // Restore Comments split columns
+            document.getElementById('comments-top-filter-bar')?.classList.remove('hidden');
+            document.getElementById('comments-left-column')?.classList.remove('hidden');
+            const cDetail = document.getElementById('comment-detail-panel');
+            if (cDetail) {
+                cDetail.classList.remove('w-full', 'lg:w-full');
+                cDetail.classList.add('lg:w-7/12');
+                if (cDetail.dataset.recordId && typeof renderSelectedCommentDetail === 'function') {
+                    renderSelectedCommentDetail(cDetail.dataset.recordId, false);
+                }
+            }
+
+            // Restore Messages split columns
+            document.getElementById('messages-top-filter-bar')?.classList.remove('hidden');
+            document.getElementById('messages-left-column')?.classList.remove('hidden');
+            const mDetail = document.getElementById('message-detail-panel');
+            if (mDetail) {
+                mDetail.classList.remove('w-full', 'lg:w-full');
+                mDetail.classList.add('lg:w-7/12');
+                if (typeof renderActiveConversationThread === 'function') {
+                    renderActiveConversationThread(false);
+                }
+            }
+
+            // Restore Spread Sheet & Files Expanded View buttons
+            document.getElementById('btn-ss-expanded-view')?.classList.remove('hidden');
+            document.getElementById('btn-files-expanded-view')?.classList.remove('hidden');
+
+            // Restore modals if they were converted to full-window mode
+            const expEmailModal = document.getElementById('expanded-email-modal');
+            if (expEmailModal) {
+                expEmailModal.className = 'fixed inset-0 z-[9995] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4';
+                const inner = document.getElementById('expanded-email-modal-content');
+                if (inner) {
+                    inner.className = 'glass-panel rounded-2xl w-full max-w-5xl h-[92vh] overflow-hidden border border-gb-cyan/60 shadow-[0_0_50px_rgba(0,240,255,0.25)] flex flex-col bg-slate-950';
+                }
+            }
+
+            const smsModal = document.getElementById('create-new-sms-modal');
+            if (smsModal) {
+                smsModal.className = 'fixed inset-0 z-[9997] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4';
+                const inner = smsModal.firstElementChild;
+                if (inner) {
+                    inner.className = 'glass-panel rounded-2xl w-full max-w-xl overflow-hidden border border-emerald-400/60 shadow-[0_0_50px_rgba(16,185,129,0.28)] flex flex-col max-h-[92vh] bg-slate-950';
+                }
+                document.getElementById('btn-new-sms-expanded-view')?.classList.remove('hidden');
+                document.getElementById('btn-new-sms-close')?.classList.remove('hidden');
+            }
+
+            const compModal = document.getElementById('compose-email-modal');
+            if (compModal) {
+                compModal.className = 'fixed inset-0 z-[9994] hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4';
+                const inner = compModal.firstElementChild;
+                if (inner) {
+                    inner.className = 'glass-panel rounded-2xl w-full max-w-xl overflow-hidden border border-gb-cyan/60 shadow-[0_0_45px_rgba(0,240,255,0.25)] flex flex-col max-h-[92vh]';
+                }
+                document.getElementById('btn-compose-email-expanded-view')?.classList.remove('hidden');
+                document.getElementById('btn-compose-email-close')?.classList.remove('hidden');
+            }
+        }
+
+        async function applyGlennBotPopoutLayout(mode, params = {}) {
+            const cleanMode = String(mode || '').trim();
+            if (!cleanMode) return;
+
+            window.gbActivePopoutMode = cleanMode;
+            window.gbActivePopoutParams = params || {};
+
+            // Hide main navigation chrome so the window looks and feels like a dedicated OAuth/App Window
+            document.getElementById('main-dashboard-header')?.classList.add('hidden');
+            document.getElementById('left-nav-sidebar')?.classList.add('hidden');
+
+            // 1. COMMENT THREAD EXPANDED WINDOW
+            if (cleanMode === 'comment_thread') {
+                setGlennBotPopoutBarHeader(
+                    'Post Thread — Expanded View',
+                    'Focused on Post Media, Original Caption, Comment Thread & Direct Reply',
+                    'fa-comments'
+                );
+                switchTab('comments');
+                document.getElementById('comments-top-filter-bar')?.classList.add('hidden');
+                document.getElementById('comments-left-column')?.classList.add('hidden');
+                const cDetail = document.getElementById('comment-detail-panel');
+                if (cDetail) {
+                    cDetail.classList.remove('lg:w-7/12');
+                    cDetail.classList.add('w-full', 'lg:w-full', 'flex-1');
+                }
+
+                let targetRecordId = String(params.record_id || '').trim();
+                let cachedDraft = '';
+                try {
+                    const raw = localStorage.getItem('gb_popout_comment_thread_cache');
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (!targetRecordId && parsed.record_id) targetRecordId = String(parsed.record_id);
+                        if (parsed.comment_id && typeof selectedCommentId !== 'undefined') {
+                            selectedCommentId = String(parsed.comment_id);
+                        }
+                        if (parsed.draft_reply) cachedDraft = String(parsed.draft_reply);
+                        if (Array.isArray(parsed.items) && parsed.items.length > 0 && typeof commentsList !== 'undefined') {
+                            const existingIds = new Set(commentsList.map(c => c.comment_id));
+                            parsed.items.forEach(item => {
+                                if (!existingIds.has(item.comment_id)) commentsList.push(item);
+                            });
+                        }
+                    }
+                } catch (_) {}
+
+                if (params.comment_id && typeof selectedCommentId !== 'undefined') {
+                    selectedCommentId = String(params.comment_id);
+                }
+
+                if (targetRecordId && typeof renderSelectedCommentDetail === 'function') {
+                    await renderSelectedCommentDetail(targetRecordId, true);
+                    if (cachedDraft) {
+                        const inputEl = document.getElementById('comment-reply-input');
+                        if (inputEl && !inputEl.value) inputEl.value = cachedDraft;
+                    }
+                }
+                // Also refresh comments in background to ensure latest replies are present
+                if (typeof fetchComments === 'function') {
+                    await fetchComments(false);
+                    if (targetRecordId && typeof renderSelectedCommentDetail === 'function') {
+                        await renderSelectedCommentDetail(targetRecordId, false);
+                    }
+                }
+                return;
+            }
+
+            // 2. SPREADSHEET EXPANDED WINDOW (FOR SELECTED SPREADSHEET)
+            if (cleanMode === 'spreadsheet') {
+                switchTab('spreadsheet');
+                document.getElementById('btn-ss-expanded-view')?.classList.add('hidden');
+
+                let targetWbId = String(params.workbook_id || '').trim();
+                let targetSheetIdx = parseInt(String(params.sheet_idx || '0'), 10) || 0;
+                let cachedWb = null;
+                try {
+                    const raw = localStorage.getItem('gb_popout_spreadsheet_cache');
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (!targetWbId && parsed.workbook_id) targetWbId = String(parsed.workbook_id);
+                        if (typeof parsed.active_sheet_index === 'number') targetSheetIdx = parsed.active_sheet_index;
+                        if (parsed.workbook) cachedWb = parsed.workbook;
+                    }
+                } catch (_) {}
+
+                if (cachedWb && typeof loadWorkbookObjectIntoEditor === 'function') {
+                    loadWorkbookObjectIntoEditor(cachedWb);
+                    if (targetSheetIdx > 0 && typeof switchSpreadsheetSheetTab === 'function') {
+                        switchSpreadsheetSheetTab(targetSheetIdx);
+                    }
+                }
+                if (targetWbId && typeof onSelectSavedSpreadsheetWorkbook === 'function') {
+                    await onSelectSavedSpreadsheetWorkbook(targetWbId);
+                    if (targetSheetIdx > 0 && typeof switchSpreadsheetSheetTab === 'function') {
+                        switchSpreadsheetSheetTab(targetSheetIdx);
+                    }
+                }
+
+                const wbTitle = currentSpreadsheetWorkbook?.title || 'Untitled_Spreadsheet.xlsx';
+                setGlennBotPopoutBarHeader(
+                    `Spread Sheet — ${wbTitle}`,
+                    'Focused Spreadsheet Window • Two-Way Live Sync with Google Drive & Files Vault',
+                    'fa-file-excel'
+                );
+                return;
+            }
+
+            // 3. EMAIL VIEW EXPANDED WINDOW
+            if (cleanMode === 'email_view') {
+                switchTab('email');
+                let targetAccId = String(params.account_id || '').trim();
+                let targetMsgId = String(params.message_id || '').trim();
+                let cachedMsg = null;
+                let cachedDraft = '';
+                try {
+                    const raw = localStorage.getItem('gb_popout_email_view_cache');
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (!targetAccId && parsed.account_id) targetAccId = String(parsed.account_id);
+                        if (!targetMsgId && parsed.message_id) targetMsgId = String(parsed.message_id);
+                        if (parsed.message) cachedMsg = parsed.message;
+                        if (parsed.draft_reply) cachedDraft = String(parsed.draft_reply);
+                    }
+                } catch (_) {}
+
+                if (targetAccId && typeof activeEmailAccountId !== 'undefined') {
+                    activeEmailAccountId = targetAccId;
+                }
+                if (cachedMsg && typeof activeEmailMessages !== 'undefined' && Array.isArray(activeEmailMessages)) {
+                    if (!activeEmailMessages.some(m => String(m.id) === String(cachedMsg.id))) {
+                        activeEmailMessages.unshift(cachedMsg);
+                    }
+                }
+
+                // Hide the background workspace and display #expanded-email-modal as a full-window workspace
+                document.getElementById('main-workspace-wrapper')?.classList.add('hidden');
+                document.querySelector('main')?.classList.add('hidden');
+                const expEmailModal = document.getElementById('expanded-email-modal');
+                const expEmailContent = document.getElementById('expanded-email-modal-content');
+                if (expEmailModal && expEmailContent) {
+                    expEmailModal.className = 'flex-1 w-full min-h-0 flex flex-col overflow-hidden';
+                    expEmailContent.className = 'glass-panel rounded-2xl w-full flex-1 min-h-0 overflow-hidden border border-gb-cyan/60 shadow-[0_0_30px_rgba(0,240,255,0.18)] flex flex-col bg-slate-950';
+                }
+
+                if (targetMsgId && typeof openExpandedEmailModal === 'function') {
+                    openExpandedEmailModal(targetMsgId);
+                }
+
+                if (!cachedMsg && typeof fetchEmailAccounts === 'function') {
+                    await fetchEmailAccounts(false);
+                    if (targetAccId) activeEmailAccountId = targetAccId;
+                    if (typeof refreshActiveEmailInbox === 'function') {
+                        await refreshActiveEmailInbox(false, false);
+                    }
+                    if (targetMsgId && typeof openExpandedEmailModal === 'function') {
+                        openExpandedEmailModal(targetMsgId);
+                    }
+                }
+
+                if (cachedDraft) {
+                    const replyInput = document.getElementById('expanded-email-reply-input');
+                    if (replyInput && !replyInput.value) replyInput.value = cachedDraft;
+                }
+
+                const activeMsg = (typeof activeEmailMessages !== 'undefined' && Array.isArray(activeEmailMessages))
+                    ? activeEmailMessages.find(m => String(m.id) === targetMsgId)
+                    : cachedMsg;
+                setGlennBotPopoutBarHeader(
+                    activeMsg?.subject ? `Email: ${activeMsg.subject}` : 'Expanded Email View',
+                    activeMsg?.sender ? `From: ${activeMsg.sender}` : 'Focused Standalone Email Reader & Reply Composer',
+                    'fa-envelope-open-text'
+                );
+                return;
+            }
+
+            // 4. MESSAGE THREAD EXPANDED WINDOW
+            if (cleanMode === 'message_thread') {
+                switchTab('messages');
+                document.getElementById('messages-top-filter-bar')?.classList.add('hidden');
+                document.getElementById('messages-left-column')?.classList.add('hidden');
+                const mDetail = document.getElementById('message-detail-panel');
+                if (mDetail) {
+                    mDetail.classList.remove('lg:w-7/12');
+                    mDetail.classList.add('w-full', 'lg:w-full', 'flex-1');
+                }
+
+                let cKey = String(params.conv_key || '').trim();
+                let cId = String(params.conv_id || '').trim();
+                let aId = String(params.account_id || '').trim();
+                let cachedDraft = '';
+                try {
+                    const raw = localStorage.getItem('gb_popout_message_thread_cache');
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (!cKey && parsed.conv_key) cKey = String(parsed.conv_key);
+                        if (!cId && parsed.conv_id) cId = String(parsed.conv_id);
+                        if (!aId && parsed.account_id) aId = String(parsed.account_id);
+                        if (parsed.draft_message) cachedDraft = String(parsed.draft_message);
+                        if (parsed.conversation && typeof activeConversationObj !== 'undefined') {
+                            activeConversationObj = parsed.conversation;
+                            if (Array.isArray(conversationsList) && !conversationsList.some(x => x.conv_key === parsed.conversation.conv_key)) {
+                                conversationsList.unshift(parsed.conversation);
+                            }
+                        }
+                        if (Array.isArray(parsed.messages) && typeof activeConversationMessages !== 'undefined') {
+                            activeConversationMessages = parsed.messages;
+                        }
+                    }
+                } catch (_) {}
+
+                if (typeof activeConversationObj !== 'undefined' && activeConversationObj && typeof renderActiveConversationThread === 'function') {
+                    renderActiveConversationThread(true);
+                }
+                if ((cKey || cId) && typeof selectMessageConversation === 'function') {
+                    await selectMessageConversation(cKey, cId, aId);
+                }
+                if (cachedDraft) {
+                    const inputEl = document.getElementById('direct-message-input');
+                    if (inputEl && !inputEl.value) inputEl.value = cachedDraft;
+                }
+
+                const pName = (typeof activeConversationObj !== 'undefined' && activeConversationObj?.participant_name)
+                    ? activeConversationObj.participant_name
+                    : 'Direct Message Thread';
+                setGlennBotPopoutBarHeader(
+                    `Chat with ${pName} — Expanded View`,
+                    'Focused Conversation Window • Real-Time Direct Messaging & Replies',
+                    'fa-comments'
+                );
+                return;
+            }
+
+            // 5. CREATE NEW SMS EXPANDED WINDOW
+            if (cleanMode === 'new_sms') {
+                setGlennBotPopoutBarHeader(
+                    'Create New SMS (TextBee.dev • SIM 2) — Expanded View',
+                    'Dedicated Outbound SMS Composer Window',
+                    'fa-sms'
+                );
+                document.getElementById('main-workspace-wrapper')?.classList.add('hidden');
+                document.querySelector('main')?.classList.add('hidden');
+                const smsModal = document.getElementById('create-new-sms-modal');
+                if (smsModal) {
+                    smsModal.className = 'flex-1 w-full min-h-0 flex flex-col overflow-hidden';
+                    const inner = smsModal.firstElementChild;
+                    if (inner) {
+                        inner.className = 'glass-panel rounded-2xl w-full flex-1 min-h-0 overflow-y-auto border border-emerald-400/60 shadow-[0_0_35px_rgba(16,185,129,0.2)] flex flex-col bg-slate-950';
+                    }
+                    document.getElementById('btn-new-sms-expanded-view')?.classList.add('hidden');
+                    document.getElementById('btn-new-sms-close')?.classList.add('hidden');
+                }
+
+                let cached = {};
+                try {
+                    cached = JSON.parse(localStorage.getItem('gb_popout_new_sms_cache') || '{}') || {};
+                } catch (_) {}
+
+                const prefillPhone = String(params.phone || cached.phone || '').trim();
+                const prefillName = String(cached.name || '').trim();
+                if (typeof openCreateNewSmsModal === 'function') {
+                    await openCreateNewSmsModal(prefillPhone, prefillName);
+                }
+                if (cached.body) {
+                    const msgInput = document.getElementById('new-sms-message-body');
+                    if (msgInput) {
+                        msgInput.value = cached.body;
+                        if (typeof updateNewSmsCharCount === 'function') updateNewSmsCharCount();
+                    }
+                }
+                return;
+            }
+
+            // 6. COMPOSE NEW EMAIL EXPANDED WINDOW
+            if (cleanMode === 'compose_email') {
+                setGlennBotPopoutBarHeader(
+                    'Compose New Email — Expanded View',
+                    'Dedicated Outbound Email Composer Window',
+                    'fa-paper-plane'
+                );
+                document.getElementById('main-workspace-wrapper')?.classList.add('hidden');
+                document.querySelector('main')?.classList.add('hidden');
+                const compModal = document.getElementById('compose-email-modal');
+                if (compModal) {
+                    compModal.className = 'flex-1 w-full min-h-0 flex flex-col overflow-hidden';
+                    const inner = compModal.firstElementChild;
+                    if (inner) {
+                        inner.className = 'glass-panel rounded-2xl w-full flex-1 min-h-0 overflow-y-auto border border-gb-cyan/60 shadow-[0_0_35px_rgba(0,240,255,0.2)] flex flex-col bg-slate-950';
+                    }
+                    document.getElementById('btn-compose-email-expanded-view')?.classList.add('hidden');
+                    document.getElementById('btn-compose-email-close')?.classList.add('hidden');
+                }
+
+                let cached = {};
+                try {
+                    cached = JSON.parse(localStorage.getItem('gb_popout_compose_email_cache') || '{}') || {};
+                } catch (_) {}
+
+                if (typeof openComposeEmailModal === 'function') {
+                    await openComposeEmailModal(cached.to || '');
+                }
+                const targetAcc = String(params.account_id || cached.account_id || '').trim();
+                if (targetAcc && typeof populateComposeEmailSenderSelect === 'function') {
+                    populateComposeEmailSenderSelect(targetAcc);
+                }
+                if (cached.cc) {
+                    const ccEl = document.getElementById('compose-email-cc');
+                    if (ccEl) ccEl.value = cached.cc;
+                }
+                if (cached.subject) {
+                    const subEl = document.getElementById('compose-email-subject');
+                    if (subEl) subEl.value = cached.subject;
+                }
+                if (cached.body) {
+                    const bodyEl = document.getElementById('compose-email-body');
+                    if (bodyEl) {
+                        bodyEl.value = cached.body;
+                        bodyEl.rows = 12;
+                    }
+                }
+                return;
+            }
+
+            // 7. FILES VAULT EXPANDED WINDOW
+            if (cleanMode === 'files_vault') {
+                setGlennBotPopoutBarHeader(
+                    'Files Vault (Google Drive API) — Expanded View',
+                    'Dedicated Standalone File Manager & Python File ID Generator',
+                    'fa-folder-open'
+                );
+                switchTab('files');
+                document.getElementById('btn-files-expanded-view')?.classList.add('hidden');
+
+                let searchVal = String(params.search || '').trim();
+                if (!searchVal) {
+                    try {
+                        const cached = JSON.parse(localStorage.getItem('gb_popout_files_vault_cache') || '{}') || {};
+                        if (cached.search) searchVal = String(cached.search);
+                    } catch (_) {}
+                }
+                const searchInput = document.getElementById('vault-files-search');
+                if (searchInput && searchVal) {
+                    searchInput.value = searchVal;
+                }
+                if (typeof fetchVaultFiles === 'function') {
+                    await fetchVaultFiles(false);
+                }
+                return;
+            }
+        }
+
+        async function applyGlennBotPopoutModeIfPresent() {
+            const parsed = getUrlPopoutParams();
+            if (!parsed || !parsed.mode) return false;
+            await applyGlennBotPopoutLayout(parsed.mode, parsed.params);
+            return true;
+        }
+
+

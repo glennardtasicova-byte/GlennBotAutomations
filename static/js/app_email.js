@@ -1211,8 +1211,11 @@
                             <button type="button" onclick="openAddToContactsFromEmail('${escapeHTML(msg.id)}')" class="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300 text-[11px] font-bold flex items-center gap-1 transition-all" title="Add Email Sender to CRM Contacts">
                                 <i class="fas fa-user-plus text-[10px]"></i> <span>+ Contact</span>
                             </button>
-                            <button type="button" onclick="openExpandedEmailModal('${escapeHTML(msg.id)}')" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/50 text-gb-cyan text-[11px] font-bold flex items-center gap-1 transition-all" title="Open Full Expanded Email View">
-                                <i class="fas fa-expand-alt text-[10px]"></i> <span>Expand</span>
+                            <button type="button" id="btn-email-reader-expanded-view" onclick="openExpandedEmailWindow('${escapeHTML(msg.id)}', event)" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-[11px] font-bold flex items-center gap-1 transition-all shadow-[0_0_10px_rgba(0,240,255,0.2)]" title="Open this Email in a separate OAuth-style Expanded Window">
+                                <i class="fas fa-external-link-square-alt text-[10px]"></i> <span>Expanded View</span>
+                            </button>
+                            <button type="button" onclick="openExpandedEmailModal('${escapeHTML(msg.id)}')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-[11px] font-bold flex items-center gap-1 transition-all" title="Open In-Page Expanded Email Modal">
+                                <i class="fas fa-expand-alt text-[10px]"></i> <span>Modal</span>
                             </button>
                             <button type="button" onclick="trashSelectedEmailMessage('${escapeHTML(msg.id)}')" class="px-2.5 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-600 border border-rose-500/40 text-rose-200 hover:text-white text-[11px] font-semibold flex items-center gap-1 transition-all" title="Move to Trash">
                                 <i class="fas fa-trash-alt text-[10px]"></i> <span>Trash</span>
@@ -1385,6 +1388,12 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
                             ${viewToggleHTML}
+                            ${window.gbActivePopoutMode !== 'email_view' ? `
+                                <button type="button" id="btn-expanded-modal-popout-email" onclick="openExpandedEmailWindow('${escapeHTML(msg.id)}', event)" class="px-3 py-1.5 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]" title="Open this Email in a separate OAuth-style Expanded Window">
+                                    <i class="fas fa-external-link-square-alt"></i>
+                                    <span>Expanded View</span>
+                                </button>
+                            ` : ''}
                             <button type="button" onclick="openAddToContactsFromEmail('${escapeHTML(msg.id)}')" class="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition-all" title="Add Email Sender to CRM Contacts">
                                 <i class="fas fa-user-plus"></i>
                                 <span>Add to Contacts</span>
@@ -1393,9 +1402,11 @@
                                 <i class="fas fa-trash-alt"></i>
                                 <span>Trash</span>
                             </button>
-                            <button type="button" onclick="closeExpandedEmailModal()" class="w-9 h-9 rounded-xl bg-slate-800 hover:bg-rose-900/70 border border-slate-600 text-slate-200 hover:text-white flex items-center justify-center transition-all" title="Close Expanded View">
-                                <i class="fas fa-times text-sm"></i>
-                            </button>
+                            ${window.gbActivePopoutMode !== 'email_view' ? `
+                                <button type="button" onclick="closeExpandedEmailModal()" class="w-9 h-9 rounded-xl bg-slate-800 hover:bg-rose-900/70 border border-slate-600 text-slate-200 hover:text-white flex items-center justify-center transition-all" title="Close Expanded View">
+                                    <i class="fas fa-times text-sm"></i>
+                                </button>
+                            ` : ''}
                         </div>
                     </div>
                     <div class="w-full space-y-1">

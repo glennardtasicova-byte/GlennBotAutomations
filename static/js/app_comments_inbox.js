@@ -883,11 +883,18 @@
                                 ${formatPostTypeBadge(activeComment.post_type)}
                                 ${methodBadge}
                             </div>
-                            <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-2 flex-wrap">
                                 ${permalink ? `
                                     <a href="${permalink}" target="_blank" class="bg-gb-cyan/15 hover:bg-gb-cyan/25 border border-gb-cyan/50 text-gb-cyan px-3 py-1 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all">
                                         <i class="fas fa-external-link-alt"></i> <span>Open Actual Post</span>
                                     </a>
+                                ` : ''}
+                                ${window.gbActivePopoutMode !== 'comment_thread' ? `
+                                    <button type="button" id="btn-comment-thread-expanded-view" onclick="openExpandedCommentThreadWindow('${recordId}', event)"
+                                        class="bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white px-2.5 py-1 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]"
+                                        title="Open this Post Thread (Media + Original Caption + Comments) in a separate OAuth-style Expanded Window">
+                                        <i class="fas fa-external-link-square-alt"></i> <span>Expanded View</span>
+                                    </button>
                                 ` : ''}
                                 <button type="button" onclick="deletePostNotificationCard('${recordId}', event)"
                                     class="bg-rose-950/70 hover:bg-rose-600 border border-rose-500/60 text-rose-200 hover:text-white px-2.5 py-1 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all"
@@ -903,7 +910,7 @@
                         <!-- POST CAPTION -->
                         <div class="p-3 rounded-xl bg-slate-950/70 border border-slate-800/90">
                             <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Original Post Caption</span>
-                            <p class="text-xs text-slate-200 whitespace-pre-wrap max-h-20 overflow-y-auto">${activeComment.post_caption ? escapeHTML(activeComment.post_caption) : '<span class="italic text-slate-500">No caption</span>'}</p>
+                            <p class="text-xs text-slate-200 whitespace-pre-wrap ${window.gbActivePopoutMode === 'comment_thread' ? 'max-h-44' : 'max-h-20'} overflow-y-auto">${activeComment.post_caption ? escapeHTML(activeComment.post_caption) : '<span class="italic text-slate-500">No caption</span>'}</p>
                         </div>
 
                         <!-- ALL COMMENTS ON THIS POST THREAD -->
@@ -915,7 +922,7 @@
                                 ${postComments.length > 1 ? `<span class="text-[10px] text-slate-400">Click any comment below to select who to reply to</span>` : ''}
                             </div>
 
-                            <div id="post-comments-thread-list" class="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                            <div id="post-comments-thread-list" class="space-y-2.5 ${window.gbActivePopoutMode === 'comment_thread' ? 'max-h-[480px]' : 'max-h-[320px]'} overflow-y-auto pr-1">
                                 ${allPostCommentsHTML}
                             </div>
                         </div>
@@ -1842,7 +1849,14 @@
                                 </p>
                             </div>
                         </div>
-                        <div class="flex items-center gap-2 shrink-0">
+                        <div class="flex items-center gap-2 shrink-0 flex-wrap">
+                            ${window.gbActivePopoutMode !== 'message_thread' ? `
+                                <button type="button" id="btn-message-thread-expanded-view" onclick="openExpandedMessageThreadWindow('${escapeHTML(c.conv_key)}', '${escapeHTML(c.conversation_id)}', '${escapeHTML(c.account_id)}', event)"
+                                    class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]"
+                                    title="Open this Conversation Thread in a separate OAuth-style Expanded Window">
+                                    <i class="fas fa-external-link-square-alt text-[10px]"></i> <span>Expanded View</span>
+                                </button>
+                            ` : ''}
                             <button type="button" onclick="openAddToContactsFromMessage('${escapeHTML(c.conv_key)}', event)"
                                 class="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-300 hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)]"
                                 title="Add ${escapeHTML(c.participant_name)} to CRM Contacts with Auto-Fill">

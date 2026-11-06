@@ -1,5 +1,31 @@
+    <!-- EXPANDED VIEW / STANDALONE OAUTH-STYLE POPUP WINDOW BAR (HIDDEN UNLESS POPOUT_MODE IS ACTIVE) -->
+    <div id="gb-popout-window-bar" class="hidden order-first flex-none items-center justify-between gap-3 px-4 py-2.5 mb-2.5 rounded-2xl bg-slate-900/95 border border-gb-cyan/50 shadow-[0_0_20px_rgba(0,240,255,0.18)] w-full">
+        <div class="flex items-center gap-2.5 min-w-0">
+            <span class="w-8 h-8 rounded-xl bg-gb-cyan/15 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan shrink-0">
+                <i id="gb-popout-window-icon" class="fas fa-external-link-square-alt text-sm"></i>
+            </span>
+            <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="px-2 py-0.5 rounded-md bg-gb-cyan/20 border border-gb-cyan/40 text-gb-cyan text-[10px] font-extrabold uppercase tracking-wider">Expanded Focus Window</span>
+                    <h2 id="gb-popout-window-title" class="text-xs sm:text-sm font-extrabold text-white truncate">GlennBot Expanded View</h2>
+                </div>
+                <p id="gb-popout-window-subtitle" class="text-[10px] text-slate-400 truncate">Dedicated standalone window • Synced live with GlennBot Automations</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+            <button type="button" onclick="refreshGlennBotPopoutWindow()" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-bold inline-flex items-center gap-1.5 transition-all" title="Refresh live data in this Expanded Window">
+                <i class="fas fa-sync-alt text-[11px]"></i>
+                <span>Refresh</span>
+            </button>
+            <button type="button" onclick="closeGlennBotPopoutWindow()" class="px-3 py-1.5 rounded-xl bg-rose-950/80 hover:bg-rose-600 border border-rose-500/60 text-rose-200 hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all" title="Close Expanded Window">
+                <i class="fas fa-times text-[11px]"></i>
+                <span id="gb-popout-close-label">Close Window</span>
+            </button>
+        </div>
+    </div>
+
     <!-- HEADER WITH 3-DASH SIDEBAR TOGGLE -->
-    <header class="flex-none flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 mb-2.5 sm:mb-3 w-full max-w-none mx-auto">
+    <header id="main-dashboard-header" class="flex-none flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 mb-2.5 sm:mb-3 w-full max-w-none mx-auto">
         <div class="flex items-center gap-3 sm:gap-3.5 min-w-0">
             <!-- 3-DASH TOGGLE AUXILIARY PANE BUTTON -->
             <button onclick="toggleLeftSidebar()" id="btn-toggle-sidebar" class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-slate-900/90 hover:bg-gb-cyan/20 border border-gb-cyan/50 text-gb-cyan flex items-center justify-center transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)] shrink-0" title="Toggle Navigation Sidebar">
@@ -43,7 +69,7 @@
     </header>
 
     <!-- MAIN WORKSPACE WRAPPER: LEFT COLLAPSIBLE STACK MENU + RIGHT CONTENT PANE -->
-    <div class="flex-1 lg:min-h-0 flex flex-col lg:flex-row gap-3.5 w-full max-w-none mx-auto overflow-hidden">
+    <div id="main-workspace-wrapper" class="flex-1 lg:min-h-0 flex flex-col lg:flex-row gap-3.5 w-full max-w-none mx-auto overflow-hidden">
 
         <!-- LEFT COLLAPSIBLE STACK MENU (AUXILIARY PANE) -->
         <aside id="left-nav-sidebar" class="glass-panel rounded-2xl p-3 lg:w-60 shrink-0 flex flex-col justify-between gap-3 transition-all duration-200 lg:h-full">

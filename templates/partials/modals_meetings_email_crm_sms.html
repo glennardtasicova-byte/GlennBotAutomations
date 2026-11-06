@@ -515,10 +515,16 @@
                         <p id="compose-email-from-label" class="text-[11px] text-gb-cyan font-medium">From: --</p>
                     </div>
                 </div>
-                <button type="button" onclick="closeComposeEmailModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" id="btn-compose-email-expanded-view" onclick="openExpandedComposeEmailWindow(event)" class="px-3 py-1.5 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]" title="Open Compose Email in a separate OAuth-style Expanded Window">
+                            <i class="fas fa-external-link-square-alt"></i>
+                            <span>Expanded View</span>
+                        </button>
+                        <button type="button" id="btn-compose-email-close" onclick="closeComposeEmailModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
             <div class="p-5 space-y-3.5 overflow-y-auto">
                 <!-- Connected Email Account Sender Picker -->
                 <div class="p-3 rounded-xl bg-slate-900/90 border border-gb-cyan/40 space-y-1.5">
@@ -902,9 +908,15 @@
                         <p class="text-[11px] text-slate-400">Initiate an outbound SMS to any mobile number even without a prior chat</p>
                     </div>
                 </div>
-                <button type="button" onclick="closeCreateNewSmsModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="flex items-center gap-2">
+                    <button type="button" id="btn-new-sms-expanded-view" onclick="openExpandedCreateNewSmsWindow(event)" class="px-3 py-1.5 rounded-xl bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/60 text-gb-cyan hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,240,255,0.2)]" title="Open Create New SMS in a separate OAuth-style Expanded Window">
+                        <i class="fas fa-external-link-square-alt"></i>
+                        <span>Expanded View</span>
+                    </button>
+                    <button type="button" id="btn-new-sms-close" onclick="closeCreateNewSmsModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
             </div>
 
             <!-- Body -->

@@ -3833,6 +3833,12 @@
             window.gbDashboardInitialized = true;
             loadUserSettings();
             initCalendarControls();
+
+            // If this window was opened via an "Expanded View" OAuth-style popup URL (?popout_mode=...), immediately apply the focused layout!
+            const isPopoutWindow = typeof applyGlennBotPopoutModeIfPresent === 'function'
+                ? await applyGlennBotPopoutModeIfPresent()
+                : false;
+
             // Initialize real-time email webhook sequence baseline
             await pollRealtimeEmailWebhookEvents();
             // Load initial dashboard data in parallel so Analytics, Comments, Messages, Email, Contacts, Files, and Spread Sheet never block each other
@@ -3847,6 +3853,11 @@
                 fetchComments(false),
                 fetchConversations(false)
             ]);
+
+            // Re-sync active popout view after fresh data arrives
+            if (isPopoutWindow && typeof applyGlennBotPopoutModeIfPresent === 'function') {
+                await applyGlennBotPopoutModeIfPresent();
+            }
         }
 
         window.onload = async () => {
