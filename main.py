@@ -48,6 +48,8 @@ except ImportError:
         except Exception:
             pass
     _req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    if not os.path.exists(_req_path):
+        _req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core", "requirements.txt")
     if os.path.exists(_req_path):
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-q", "--root-user-action=ignore", "-r", _req_path],
