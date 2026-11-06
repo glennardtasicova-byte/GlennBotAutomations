@@ -81,20 +81,20 @@
                     </button>
                 </div>
 
-                <button onclick="switchTab('scheduler')" id="tab-btn-scheduler" class="tab-btn active w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('scheduler')" ondblclick="openExpandedWorkspaceViewWindow('scheduler', event)" id="tab-btn-scheduler" class="tab-btn active w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-plus-circle w-4 text-center"></i> Create Post</span>
                 </button>
 
-                <button onclick="switchTab('calendar')" id="tab-btn-calendar" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('calendar')" ondblclick="openExpandedWorkspaceViewWindow('calendar', event)" id="tab-btn-calendar" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-calendar-alt w-4 text-center"></i> Calendar</span>
                 </button>
 
-                <button onclick="switchTab('queue')" id="tab-btn-queue" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('queue')" ondblclick="openExpandedWorkspaceViewWindow('queue', event)" id="tab-btn-queue" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-table w-4 text-center"></i> Queue</span>
                     <span id="queue-badge" class="bg-gb-cyan/20 text-gb-cyan border border-gb-cyan/40 px-2 py-0.5 rounded-full text-[10px] font-bold">0</span>
                 </button>
 
-                <button onclick="switchTab('comments')" id="tab-btn-comments" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('comments')" ondblclick="openExpandedWorkspaceViewWindow('comments', event)" id="tab-btn-comments" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-comments w-4 text-center"></i> Comments</span>
                     <span class="flex items-center gap-1">
                         <span id="comments-unread-badge" class="hidden bg-rose-500 text-white border border-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.8)] px-1.5 py-0.5 rounded-full text-[10px] font-bold animate-pulse" title="New Unread Comments">0</span>
@@ -102,7 +102,7 @@
                     </span>
                 </button>
 
-                <button onclick="switchTab('messages')" id="tab-btn-messages" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('messages')" ondblclick="openExpandedWorkspaceViewWindow('messages', event)" id="tab-btn-messages" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-envelope w-4 text-center"></i> Messages</span>
                     <span class="flex items-center gap-1">
                         <span id="messages-unread-badge" class="hidden bg-rose-500 text-white border border-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.8)] px-1.5 py-0.5 rounded-full text-[10px] font-bold animate-pulse" title="Unread Messages">0</span>
@@ -110,7 +110,7 @@
                     </span>
                 </button>
 
-                <button onclick="switchTab('email')" id="tab-btn-email" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('email')" ondblclick="openExpandedWorkspaceViewWindow('email', event)" id="tab-btn-email" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-at w-4 text-center text-gb-cyan"></i> Email</span>
                     <span class="flex items-center gap-1">
                         <span id="email-unread-badge" class="hidden bg-rose-500 text-white border border-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.8)] px-1.5 py-0.5 rounded-full text-[10px] font-bold animate-pulse" title="Unread Emails in Selected Account">0</span>
@@ -118,46 +118,46 @@
                     </span>
                 </button>
 
-                <button onclick="switchTab('contacts')" id="tab-btn-contacts" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('contacts')" ondblclick="openExpandedWorkspaceViewWindow('contacts', event)" id="tab-btn-contacts" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-address-book w-4 text-center text-emerald-400"></i> Contacts</span>
                     <span id="contacts-total-badge" class="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full text-[10px] font-bold" title="Total Saved CRM Contacts">0</span>
                 </button>
 
-                <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('analytics')" ondblclick="openExpandedWorkspaceViewWindow('analytics', event)" id="tab-btn-analytics" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-chart-line w-4 text-center"></i> Analytics</span>
                     <span id="analytics-pages-badge" class="bg-gb-cyan/20 text-gb-cyan border border-gb-cyan/40 px-2 py-0.5 rounded-full text-[10px] font-bold" title="Connected Social Media Pages Tracked">0</span>
                 </button>
 
-                <button onclick="switchTab('files')" id="tab-btn-files" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('files')" ondblclick="openExpandedWorkspaceViewWindow('files', event)" id="tab-btn-files" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-folder-open w-4 text-center text-amber-400"></i> Files</span>
                     <span id="files-total-badge" class="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full text-[10px] font-bold" title="Files Uploaded to Google Drive with Automation File IDs">0</span>
                 </button>
 
-                <button onclick="switchTab('spreadsheet')" id="tab-btn-spreadsheet" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('spreadsheet')" ondblclick="openExpandedWorkspaceViewWindow('spreadsheet', event)" id="tab-btn-spreadsheet" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-file-excel w-4 text-center text-emerald-400"></i> Spread Sheet</span>
                     <span id="spreadsheet-total-badge" class="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full text-[10px] font-bold" title="Saved .xlsx Spreadsheets in Cloudinary">1</span>
                 </button>
 
-                <button onclick="switchTab('automations')" id="tab-btn-automations" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between">
+                <button onclick="switchTab('automations')" ondblclick="openExpandedWorkspaceViewWindow('automations', event)" id="tab-btn-automations" class="tab-btn w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-transparent text-slate-300 hover:text-white hover:bg-slate-800/70 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2.5"><i class="fas fa-project-diagram w-4 text-center text-purple-400"></i> Automations</span>
                     <span id="automations-canvas-lock-badge" class="bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full text-[10px] font-bold" title="Blank Canvas — Upload or Ask AI for a .JSON file to unlock editing">LOCKED</span>
                 </button>
             </div>
 
             <div class="pt-2 border-t border-slate-800 space-y-2">
-                <button onclick="openSettingsModal()" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-900/80 hover:border-gb-cyan/50 text-slate-300 hover:text-gb-cyan transition-all flex items-center justify-between" title="Customize Sound Effects, Fade Animations & Launch Automation">
+                <button onclick="openSettingsModal()" ondblclick="openExpandedGenericModalWindow('settings-modal', event)" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-900/80 hover:border-gb-cyan/50 text-slate-300 hover:text-gb-cyan transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2"><i class="fas fa-cog text-gb-cyan"></i> Settings</span>
                     <i class="fas fa-chevron-right text-[10px]"></i>
                 </button>
-                <button id="sidebar-internal-api-btn" onclick="openInternalApiModal()" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 transition-all flex items-center justify-between" title="Administrator Only: Generate GlennBot Internal API Keys & Configure n8n Automation">
+                <button id="sidebar-internal-api-btn" onclick="openInternalApiModal()" ondblclick="openExpandedGenericModalWindow('internal-api-n8n-modal', event)" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2"><i class="fas fa-robot text-emerald-400"></i> Internal API (n8n)</span>
                     <i class="fas fa-chevron-right text-[10px]"></i>
                 </button>
-                <button onclick="openManageApiModal()" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-900/80 hover:border-gb-cyan/50 text-slate-300 hover:text-gb-cyan transition-all flex items-center justify-between" title="Manage External API Keys & Buffer Queue">
+                <button onclick="openManageApiModal()" ondblclick="openExpandedGenericModalWindow('external-api-manager-modal', event)" class="w-full px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 bg-slate-900/80 hover:border-gb-cyan/50 text-slate-300 hover:text-gb-cyan transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2"><i class="fas fa-sliders-h text-gb-cyan"></i> Manage API</span>
                     <i class="fas fa-chevron-right text-[10px]"></i>
                 </button>
-                <button onclick="openConnectAccountsModal('manage')" class="w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-gb-cyan/50 bg-gb-cyan/10 hover:bg-gb-cyan/20 text-gb-cyan transition-all flex items-center justify-between" title="Connect or Remove Facebook, Instagram & TikTok Accounts">
+                <button onclick="openConnectAccountsModal('manage')" ondblclick="openExpandedGenericModalWindow('connect-accounts-modal', event)" class="w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold border border-gb-cyan/50 bg-gb-cyan/10 hover:bg-gb-cyan/20 text-gb-cyan transition-all flex items-center justify-between" title="Click to open • Double-click for Expanded View">
                     <span class="flex items-center gap-2"><i class="fas fa-plug"></i> Connect Accounts</span>
                     <span id="nav-connected-badge" class="bg-gb-cyan text-slate-950 px-2 py-0.5 rounded-full text-[10px] font-bold">0</span>
                 </button>

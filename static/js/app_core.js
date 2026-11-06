@@ -2135,14 +2135,27 @@
                 showToast('🔄 Refreshed Expanded Modal View!');
             } else if (mode === 'workspace_view') {
                 const tab = String(p.tab || '').trim();
-                if (tab === 'queue' && typeof fetchQueue === 'function') await fetchQueue();
-                else if (tab === 'calendar' && typeof fetchCalendarEvents === 'function') await fetchCalendarEvents(true);
-                else if (tab === 'analytics' && typeof fetchAnalytics === 'function') await fetchAnalytics(true);
-                else if (tab === 'contacts' && typeof fetchCrmContacts === 'function') await fetchCrmContacts(true);
-                else if (tab === 'automations' && typeof fetchAutomationsHubData === 'function') await fetchAutomationsHubData(true);
-                else if (tab === 'comments' && typeof fetchComments === 'function') await fetchComments(true);
-                else if (tab === 'messages' && typeof fetchConversations === 'function') await fetchConversations(true);
-                else if (tab === 'email' && typeof refreshActiveEmailInbox === 'function') await refreshActiveEmailInbox(true, false);
+                if (tab === 'scheduler') {
+                    if (typeof fetchSocialAccounts === 'function') await fetchSocialAccounts();
+                    if (typeof updatePreviews === 'function') updatePreviews();
+                } else if (tab === 'queue' && typeof fetchScheduledPosts === 'function') {
+                    await fetchScheduledPosts();
+                } else if (tab === 'calendar') {
+                    if (typeof fetchScheduledPosts === 'function') await fetchScheduledPosts();
+                    if (typeof fetchComposioCalendarEvents === 'function') await fetchComposioCalendarEvents(true);
+                } else if (tab === 'analytics' && typeof fetchAnalyticsData === 'function') {
+                    await fetchAnalyticsData(true);
+                } else if (tab === 'contacts' && typeof fetchCrmContacts === 'function') {
+                    await fetchCrmContacts(true);
+                } else if (tab === 'automations' && typeof initAutomationsCanvasView === 'function') {
+                    await initAutomationsCanvasView();
+                } else if (tab === 'comments' && typeof fetchComments === 'function') {
+                    await fetchComments(true);
+                } else if (tab === 'messages' && typeof fetchConversations === 'function') {
+                    await fetchConversations(true);
+                } else if (tab === 'email' && typeof refreshActiveEmailInbox === 'function') {
+                    await refreshActiveEmailInbox(true, false);
+                }
                 showToast('🔄 Refreshed Expanded Workspace Window!');
             }
         }
@@ -2450,11 +2463,15 @@
             }
         }
 
-        // 9. Workspace Tab View -> Expanded View (Triggered on Double-Click)
+        // 9. Workspace Tab View -> Expanded View (Triggered on Double-Clicking Left Sidebar Navigation Buttons)
         function openExpandedWorkspaceViewWindow(tabName, event) {
             if (event) event.stopPropagation();
             const cleanTab = String(tabName || '').trim();
             if (!cleanTab) return;
+
+            if (activeTab !== cleanTab && typeof switchTab === 'function') {
+                switchTab(cleanTab);
+            }
 
             if (cleanTab === 'spreadsheet') return openExpandedSpreadsheetWindow(event);
             if (cleanTab === 'files') return openExpandedFilesVaultWindow(event);
@@ -3071,101 +3088,28 @@
             return true;
         }
 
-        // Universal Double-Click Expanded View Listener for ALL Overlay Modals & Workspace Modals/Views
+        // Double-Click Expanded View Listener — ONLY on Left Sidebar Navigation Menu Buttons (#left-nav-sidebar)
         function initGlennBotDoubleClickExpandedView() {
             if (window.gbDblClickExpandedInitialized) return;
             window.gbDblClickExpandedInitialized = true;
 
-            document.addEventListener('dblclick', (e) => {
-                // Do not re-trigger if this window is already in Expanded View mode
-                if (window.gbActivePopoutMode) return;
+            const sidebar = document.getElementById('left-nav-sidebar');
+            if (!sidebar) return;
 
+            sidebar.addEventListener('dblclick', (e) => {
+                if (window.gbActivePopoutMode) return;
                 const target = e.target;
                 if (!target || typeof target.closest !== 'function') return;
 
-                // Ignore double-clicks on interactive inputs, buttons, links, media players, spreadsheet cells, or elements with explicit ondblclick
-                const interactiveSelector = [
-                    'input',
-                    'textarea',
-                    'select',
-                    'button',
-                    'a',
-                    'label',
-                    'video',
-                    'audio',
-                    'iframe',
-                    '[contenteditable="true"]',
-                    '.ss-cell-input',
-                    '[ondblclick]'
-                ].join(', ');
-                if (target.closest(interactiveSelector)) return;
+                // If button already has an explicit inline ondblclick handler, let that handler run once without duplicating
+                if (target.closest('[ondblclick]')) return;
 
-                //Ignore double-clicking an email list row (which opens the email reader)
-                if (target.closest('#email-messages-list-container [onclick*="selectEmailMessage"]')) return;
-
-                // 1. Check if the user double-clicked inside an open Overlay Modal (#...-modal)
-                const modalEl = target.closest('[id$="-modal"]');
-                if (modalEl && !modalEl.classList.contains('hidden')) {
-                    // Ensure the double-click happened inside the modal card/panel (not the dark backdrop)
-                    const modalCard = modalEl.firstElementChild;
-                    if (modalCard && modalCard.contains(target)) {
-                        openExpandedGenericModalWindow(modalEl.id, e);
-                        return;
+                const tabBtn = target.closest('button[id^="tab-btn-"]');
+                if (tabBtn) {
+                    const tabName = tabBtn.id.replace(/^tab-btn-/, '');
+                    if (tabName) {
+                        openExpandedWorkspaceViewWindow(tabName, e);
                     }
-                }
-
-                // 2. Check if the user double-clicked inside an active Main Workspace View (#view-...)
-                const viewEl = target.closest('[id^="view-"]');
-                if (viewEl && !viewEl.classList.contains('hidden')) {
-                    const viewId = viewEl.id; // e.g. 'view-comments', 'view-automations'
-                    const tabName = viewId.replace(/^view-/, '');
-
-                    if (tabName === 'comments') {
-                        const hasSelectedThread = typeof selectedCommentRecordId !== 'undefined' && Boolean(selectedCommentRecordId);
-                        if (hasSelectedThread && target.closest('#comment-detail-panel')) {
-                            openExpandedCommentThreadWindow(selectedCommentRecordId, e);
-                        } else {
-                            openExpandedWorkspaceViewWindow('comments', e);
-                        }
-                        return;
-                    }
-
-                    if (tabName === 'messages') {
-                        const hasSelectedConv = typeof activeConversationObj !== 'undefined' && Boolean(activeConversationObj);
-                        if (hasSelectedConv && target.closest('#message-detail-panel')) {
-                            openExpandedMessageThreadWindow(
-                                activeConversationObj.conv_key || '',
-                                activeConversationObj.conversation_id || '',
-                                activeConversationObj.account_id || '',
-                                e
-                            );
-                        } else {
-                            openExpandedWorkspaceViewWindow('messages', e);
-                        }
-                        return;
-                    }
-
-                    if (tabName === 'email') {
-                        const hasSelectedEmail = typeof selectedEmailMessageId !== 'undefined' && Boolean(selectedEmailMessageId);
-                        if (hasSelectedEmail && target.closest('#email-reader-panel')) {
-                            openExpandedEmailWindow(selectedEmailMessageId, e);
-                        } else {
-                            openExpandedWorkspaceViewWindow('email', e);
-                        }
-                        return;
-                    }
-
-                    if (tabName === 'spreadsheet') {
-                        openExpandedSpreadsheetWindow(e);
-                        return;
-                    }
-
-                    if (tabName === 'files') {
-                        openExpandedFilesVaultWindow(e);
-                        return;
-                    }
-
-                    openExpandedWorkspaceViewWindow(tabName, e);
                 }
             });
         }
