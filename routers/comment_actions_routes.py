@@ -214,7 +214,7 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
                     c_copy["post_caption"] = db_post["caption"]
                 if db_post.get("permalink_url"):
                     c_copy["post_permalink"] = db_post["permalink_url"]
-                enriched = enrich_comment_with_reply_notifications(c_copy, seen_ids)
+                enriched = enrich_comment_with_reply_notifications(c_copy, seen_ids, deleted_cids=del_cids)
                 visible_comments.append(enriched)
 
         if store_cleaned:
@@ -1757,7 +1757,10 @@ def send_zernio_comment_moderation_action(
 
     p_enc = urllib.parse.quote(str(post_id).strip(), safe="")
     c_enc = urllib.parse.quote(str(comment_id).strip(), safe="")
-    url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}/{action_type}"
+    if action_type == "delete":
+        url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}"
+    else:
+        url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}/{action_type}"
     last_result: Dict[str, Any] = {"status_code": 500, "data": {}, "raw_text": "No External API key available."}
     best_non_404_result: Optional[Dict[str, Any]] = None
 
@@ -1771,7 +1774,9 @@ def send_zernio_comment_moderation_action(
             body["hidden"] = bool(enable)
 
         try:
-            if enable:
+            if action_type == "delete":
+                resp = HTTP_SESSION.delete(url, params=params, headers=headers, json=body, timeout=15)
+            elif enable:
                 resp = HTTP_SESSION.post(url, params=params, headers=headers, json=body, timeout=20)
             else:
                 resp = HTTP_SESSION.delete(url, params=params, headers=headers, json=body, timeout=20)
@@ -1836,10 +1841,10 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
         is_ext_post = rec_id_str.startswith("post_ext_")
         platform = (r_dict.get("platform") or "").strip().lower()
 
-        if action_type == "like" and platform != "facebook":
+        if action_type == "like" and platform not in ("facebook", "instagram"):
             return {
                 "status": "error",
-                "message": "Comment Like via External API is only supported on Facebook."
+                "message": "Comment Like via External API is only supported on Facebook and Instagram."
             }
         if action_type == "hide" and platform not in ("facebook", "instagram", "tiktok"):
             return {
@@ -2120,6 +2125,14 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                 except Exception:
                     continue
 
+        # For Instagram comment/reply likes, local/optimistic replies, or nested replies in CLOUDINARY_COMMENTS_STORE
+        # where the platform Graph API restricts direct nested-reply moderation, persist the state in GlennBot's store.
+        if (
+            (action_type == "like" and platform in ("facebook", "instagram") and (platform == "instagram" or target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
+            or (action_type == "hide" and platform in ("facebook", "instagram", "tiktok") and (target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
+        ):
+            return _finalize_moderation_success()
+
         return {"status": "error", "message": f"External API {action_type.capitalize()} Comment Error ({platform.upper()}): {last_err}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -2143,5 +2156,56 @@ def hide_or_unhide_comment(payload: CommentHidePayload):
         action_type="hide",
         enable=bool(payload.hidden if payload.hidden is not None else True)
     )
+
+
+class CommentDeleteReplyPayload(BaseModel):
+    record_id: str
+    parent_comment_id: Optional[str] = ""
+    reply_id: str
+
+
+@router.post("/api/comments/delete_reply")
+def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
+    try:
+        rec_id = (payload.record_id or "").strip()
+        parent_cid = (payload.parent_comment_id or "").strip()
+        rep_id = (payload.reply_id or "").strip()
+        if not rep_id:
+            return {"status": "error", "message": "Missing reply_id."}
+
+        from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
+        dismiss_or_clear_comment_notifications(
+            DismissCommentsPayload(
+                record_id=rec_id,
+                comment_ids=[rep_id],
+                parent_comment_id=parent_cid,
+                clear_all=False,
+                single_comment=True,
+                is_reply=True
+            )
+        )
+
+        # Also attempt platform-level deletion in background if it's a real platform reply ID
+        if rec_id and not rep_id.startswith(("local_", "opt_", "z_rep_")):
+            threading.Thread(
+                target=_perform_comment_moderation,
+                kwargs={
+                    "record_id": rec_id,
+                    "comment_id": rep_id,
+                    "action_type": "delete",
+                    "enable": True
+                },
+                daemon=True
+            ).start()
+
+        return {
+            "status": "success",
+            "record_id": rec_id,
+            "parent_comment_id": parent_cid,
+            "reply_id": rep_id
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 

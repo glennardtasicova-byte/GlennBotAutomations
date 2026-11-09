@@ -194,6 +194,57 @@
             }
         }
 
+        async function deleteSingleCommentReply(recordId, parentCommentId, replyId, event) {
+            if (event) event.stopPropagation();
+            const cleanParentId = String(parentCommentId || '');
+            const cleanReplyId = String(replyId || '');
+
+            if (pendingOptimisticReplies[cleanParentId]) {
+                pendingOptimisticReplies[cleanParentId] = pendingOptimisticReplies[cleanParentId].filter(
+                    r => String(r.id) !== cleanReplyId
+                );
+            }
+
+            commentsList.forEach(c => {
+                if (c.record_id === recordId && (String(c.comment_id) === cleanParentId || (c.replies || []).some(r => String(r.id) === cleanReplyId))) {
+                    c.replies = (c.replies || []).filter(r => String(r.id) !== cleanReplyId);
+                    const unreadReps = c.replies.filter(r => !r.is_own && r.is_read === false);
+                    c.unread_reply_ids = unreadReps.map(r => String(r.id));
+                    c.unread_replies_count = unreadReps.length;
+                    c.has_unread_reply = unreadReps.length > 0;
+                    c.is_read = Boolean(c.parent_is_read) && !c.has_unread_reply;
+                    const commenterReps = c.replies.filter(r => !r.is_own);
+                    c.latest_commenter_reply = commenterReps.length > 0 ? commenterReps[commenterReps.length - 1] : null;
+                    if (String(selectedCommentId) === cleanReplyId) {
+                        selectedCommentId = c.replies.length > 0
+                            ? String(c.replies[c.replies.length - 1].id)
+                            : String(c.comment_id);
+                    }
+                }
+            });
+
+            updateCommentsBadges();
+            renderCommentsList();
+            if (selectedRecordId === recordId) {
+                syncOpenPostThreadLive(recordId);
+            }
+            showToast("🗑️ Reply deleted from comment thread!");
+
+            try {
+                await fetch('/api/comments/delete_reply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        record_id: String(recordId),
+                        parent_comment_id: cleanParentId,
+                        reply_id: cleanReplyId
+                    })
+                });
+            } catch (e) {
+                console.error("Delete single comment reply error:", e);
+            }
+        }
+
         async function clearAllCommentNotifications() {
             if (commentsList.length === 0) {
                 return showToast("✨ Your Comment Notifications are already clean!");
@@ -533,31 +584,35 @@
                 const hasReplies = repliesList.length > 0;
                 const isParentTargetForReply = (!hasReplies && String(c.comment_id) === String(activeCommentId));
                 const platLower = (c.platform || '').toLowerCase();
+                const platLabel = platLower === 'facebook' ? 'Facebook' : (platLower === 'instagram' ? 'Instagram' : platLower.toUpperCase());
                 const canSendDm = (platLower === 'facebook' || platLower === 'instagram');
-                const canLikeComment = (platLower === 'facebook');
+                const canLikeComment = (platLower === 'facebook' || platLower === 'instagram');
                 const canHideComment = (platLower === 'facebook' || platLower === 'instagram' || platLower === 'tiktok');
 
                 const repliesHTML = hasReplies
                     ? repliesList.map(rep => {
                         const isReplyTarget = (String(rep.id) === String(activeCommentId));
-                        const repLikeBtn = (!rep.is_own && canLikeComment)
+                        const dmTargetCommentId = rep.is_own ? c.comment_id : rep.id;
+                        const dmTargetAuthorName = rep.is_own ? (c.author_name || 'Commenter') : (rep.author_name || c.author_name || 'Commenter');
+                        const isDmSentOnReply = Boolean(rep.dm_sent || (rep.is_own && c.dm_sent));
+                        const repLikeBtn = canLikeComment
                             ? `<button type="button" id="btn-like-comment-${rep.id}" onclick="toggleLikeComment('${recordId}', '${rep.id}', event)"
                                     class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${rep.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_8px_rgba(37,99,235,0.4)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200'}"
-                                    title="${rep.is_liked ? 'Unlike this reply on Facebook' : 'Like this reply on Facebook'}">
+                                    title="${rep.is_liked ? 'Unlike this reply on ' + platLabel : 'Like this reply on ' + platLabel}">
                                     <i class="${rep.is_liked ? 'fas' : 'far'} fa-thumbs-up text-[9px]"></i> <span>${rep.is_liked ? 'Liked' : 'Like'}</span>
                                </button>`
                             : '';
-                        const repHideBtn = (!rep.is_own && canHideComment)
+                        const repHideBtn = canHideComment
                             ? `<button type="button" id="btn-hide-comment-${rep.id}" onclick="toggleHideComment('${recordId}', '${rep.id}', event)"
                                     class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${rep.is_hidden ? 'bg-amber-500/30 hover:bg-amber-500/45 border border-amber-400 text-amber-200' : 'bg-slate-900/90 hover:bg-amber-500/25 border border-slate-700 hover:border-amber-400/50 text-slate-300 hover:text-amber-200'}"
                                     title="${rep.is_hidden ? 'Unhide this reply on the actual ' + platLower.toUpperCase() + ' post' : 'Hide this reply on the actual ' + platLower.toUpperCase() + ' post'}">
                                     <i class="fas ${rep.is_hidden ? 'fa-eye' : 'fa-eye-slash'} text-[9px]"></i> <span>${rep.is_hidden ? 'Unhide' : 'Hide'}</span>
                                </button>`
                             : '';
-                        const repSendDmBtn = (!rep.is_own && canSendDm)
-                            ? `<button type="button" onclick="openCommentDmModal('${recordId}', '${rep.id}', event)"
+                        const repSendDmBtn = canSendDm
+                            ? `<button type="button" onclick="openCommentDmModal('${recordId}', '${dmTargetCommentId}', event)"
                                     class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/50 text-indigo-300 hover:text-white"
-                                    title="Send a Direct Message (Private Reply) to ${escapeHTML(rep.author_name)}">
+                                    title="Send a Direct Message (Private Reply) to ${escapeHTML(dmTargetAuthorName)} on ${platLabel}">
                                     <i class="fas fa-paper-plane text-[9px]"></i> <span>Send a DM</span>
                                </button>`
                             : '';
@@ -584,10 +639,18 @@
                                                 : ''))
                                     }
                                     ${rep.is_hidden ? `<span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 font-bold"><i class="fas fa-eye-slash mr-1"></i>Hidden on Page</span>` : ''}
-                                    ${rep.dm_sent ? `<span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-400/40 font-bold"><i class="fas fa-check mr-1"></i>DM Sent</span>` : ''}
+                                    ${isDmSentOnReply ? `<span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-400/40 font-bold"><i class="fas fa-check mr-1"></i>DM Sent</span>` : ''}
                                     ${isReplyTarget ? `<span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-gb-cyan/20 text-gb-cyan border border-gb-cyan/40 font-bold">Replying</span>` : ''}
                                 </div>
-                                <span class="text-[10px] text-slate-400 shrink-0">${rep.display_time}</span>
+                                <div class="flex items-center gap-1.5 shrink-0">
+                                    <span class="text-[10px] text-slate-400">${rep.display_time}</span>
+                                    <button type="button" onclick="deleteSingleCommentReply('${recordId}', '${c.comment_id}', '${rep.id}', event)"
+                                        class="w-6 h-6 rounded-lg bg-slate-900/90 hover:bg-rose-600 border border-slate-700 hover:border-rose-400 text-slate-400 hover:text-white flex items-center justify-center text-[10px] transition-all"
+                                        title="Delete this reply"
+                                        aria-label="Delete reply from ${escapeHTML(rep.author_name)}">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                </div>
                             </div>
                             <p class="text-xs text-slate-200 bg-slate-950/60 p-2 rounded-lg border border-slate-800/80 whitespace-pre-wrap">${escapeHTML(rep.message)}</p>
                             <div class="flex items-center gap-1.5 flex-wrap mt-2 pt-1.5 border-t border-slate-700/50">
@@ -613,7 +676,7 @@
                 const parentLikeButtonHTML = canLikeComment
                     ? `<button type="button" id="btn-like-comment-${c.comment_id}" onclick="toggleLikeComment('${recordId}', '${c.comment_id}', event)"
                             class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${c.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_10px_rgba(37,99,235,0.45)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200'}"
-                            title="${c.is_liked ? 'Unlike this comment on Facebook' : 'Like this comment on Facebook'}">
+                            title="${c.is_liked ? 'Unlike this comment on ' + platLabel : 'Like this comment on ' + platLabel}">
                             <i class="${c.is_liked ? 'fas' : 'far'} fa-thumbs-up text-[10px]"></i> <span>${c.is_liked ? 'Liked' : 'Like'}</span>
                        </button>`
                     : '';
@@ -629,7 +692,7 @@
                 const parentSendDmButtonHTML = canSendDm
                     ? `<button type="button" onclick="openCommentDmModal('${recordId}', '${c.comment_id}', event)"
                             class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/55 text-indigo-300 hover:text-white"
-                            title="Send a Direct Message (Private Reply) to ${escapeHTML(c.author_name)}">
+                            title="Send a Direct Message (Private Reply) to ${escapeHTML(c.author_name)} on ${platLabel}">
                             <i class="fas fa-paper-plane text-[10px]"></i> <span>Send a DM</span>
                        </button>`
                     : '';
@@ -1152,7 +1215,7 @@
             }
         }
 
-        // --- LIKE COMMENT (FACEBOOK ONLY) & HIDE COMMENT (FACEBOOK, INSTAGRAM, TIKTOK) ---
+        // --- LIKE COMMENT (FACEBOOK & INSTAGRAM) & HIDE COMMENT (FACEBOOK, INSTAGRAM, TIKTOK) ---
         async function toggleLikeComment(recordId, commentId, event) {
             if (event) event.stopPropagation();
             const postComments = commentsList.filter(c => c.record_id === recordId);
@@ -1164,11 +1227,13 @@
             if (!parentComm) return;
 
             const plat = (parentComm.platform || '').toLowerCase();
-            if (plat !== 'facebook') {
-                return showToast("⚠️ Comment Like is only supported on Facebook.");
+            if (plat !== 'facebook' && plat !== 'instagram') {
+                return showToast("⚠️ Comment Like is only supported on Facebook and Instagram.");
             }
+            const platLabel = plat === 'facebook' ? 'Facebook' : 'Instagram';
 
             const targetObj = (targetMatch && targetMatch.targetReply) ? targetMatch.targetReply : parentComm;
+            const isReplyItem = Boolean(targetMatch && targetMatch.targetReply);
             const nextLikedState = !Boolean(targetObj.is_liked);
             const btn = document.getElementById(`btn-like-comment-${commentId}`);
             const origBtnHTML = btn ? btn.innerHTML : '';
@@ -1195,8 +1260,8 @@
                         syncOpenPostThreadLive(recordId);
                     }
                     showToast(nextLikedState
-                        ? `👍 Liked ${targetObj.author_name || 'user'}'s comment on Facebook!`
-                        : `👍 Removed like from ${targetObj.author_name || 'user'}'s comment.`
+                        ? `👍 Liked ${targetObj.author_name || 'user'}'s ${isReplyItem ? 'reply' : 'comment'} on ${platLabel}!`
+                        : `👍 Removed like from ${targetObj.author_name || 'user'}'s ${isReplyItem ? 'reply' : 'comment'} on ${platLabel}.`
                     );
                 } else {
                     if (btn) {

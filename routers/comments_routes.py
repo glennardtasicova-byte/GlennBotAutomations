@@ -1456,6 +1456,8 @@ def fetch_zernio_comments_for_post(
                             continue
                         parsed_rep = _parse_single_zernio_reply(rep, clean_user, account_name, parent_comment_id=cid, replied_to_id=cid)
                         r_id_val = str(parsed_rep.get("id") or "").strip()
+                        if r_id_val and (r_id_val in deleted_comment_ids or _normalize_comment_key(r_id_val) in deleted_comment_ids):
+                            continue
                         if r_id_val and r_id_val not in seen_parsed_rids:
                             seen_parsed_rids.add(r_id_val)
                             replies_list.append(parsed_rep)
@@ -1514,6 +1516,8 @@ def fetch_zernio_comments_for_post(
                                 replied_to_id=(r_id_val or cid)
                             )
                             sub_id_val = str(parsed_sub.get("id") or "").strip()
+                            if sub_id_val and (sub_id_val in deleted_comment_ids or _normalize_comment_key(sub_id_val) in deleted_comment_ids):
+                                continue
                             if sub_id_val and sub_id_val not in seen_parsed_rids:
                                 seen_parsed_rids.add(sub_id_val)
                                 replies_list.append(parsed_sub)
@@ -1612,6 +1616,8 @@ def fetch_zernio_comments_for_post(
 
                         existing_reps = target_parent.setdefault("replies", [])
                         rep_item_id = str(rep_item.get("id") or "").strip()
+                        if rep_item_id and (rep_item_id in deleted_comment_ids or _normalize_comment_key(rep_item_id) in deleted_comment_ids):
+                            continue
                         if not any(str(r.get("id")) == rep_item_id for r in existing_reps):
                             existing_reps.append(rep_item)
                             if rep_item_id:
@@ -1668,6 +1674,8 @@ def fetch_zernio_comments_for_post(
                                 replied_to_id=(rep_item_id or root_parent_cid)
                             )
                             sub_o_id = str(parsed_o_sub.get("id") or "").strip()
+                            if sub_o_id and (sub_o_id in deleted_comment_ids or _normalize_comment_key(sub_o_id) in deleted_comment_ids):
+                                continue
                             if sub_o_id and not any(str(r.get("id")) == sub_o_id for r in existing_reps):
                                 existing_reps.append(parsed_o_sub)
                                 reply_id_to_parent_comm[sub_o_id] = target_parent
@@ -1795,26 +1803,39 @@ def record_buffered_own_reply(record_id: str, comment_id: str, reply_id: str, au
 
     return rep_entry
 
-def merge_buffered_own_replies(comment_id: str, replies_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def merge_buffered_own_replies(comment_id: str, replies_list: List[Dict[str, Any]], deleted_cids: Optional[set] = None) -> List[Dict[str, Any]]:
     now_ts = time.time()
     norm_cid = _normalize_comment_key(comment_id)
     raw_cid = str(comment_id or "").strip()
+    del_set = deleted_cids or set()
     buffered = []
     for k in {norm_cid, raw_cid}:
         if k in RECENT_OWN_REPLIES_BUFFER:
             RECENT_OWN_REPLIES_BUFFER[k] = [
                 r for r in RECENT_OWN_REPLIES_BUFFER[k]
                 if (now_ts - r.get("buffered_at", 0)) < 900
+                and str(r.get("id") or "") not in del_set
+                and _normalize_comment_key(str(r.get("id") or "")) not in del_set
             ]
             buffered.extend(RECENT_OWN_REPLIES_BUFFER[k])
 
     if not buffered:
-        return replies_list
+        return [
+            r for r in replies_list
+            if str(r.get("id") or "") not in del_set
+            and _normalize_comment_key(str(r.get("id") or "")) not in del_set
+        ]
 
-    merged = list(replies_list)
+    merged = [
+        r for r in replies_list
+        if str(r.get("id") or "") not in del_set
+        and _normalize_comment_key(str(r.get("id") or "")) not in del_set
+    ]
     for b_rep in buffered:
         b_msg = (b_rep.get("message") or "").strip().lower()
         b_id = str(b_rep.get("id") or "")
+        if b_id and (b_id in del_set or _normalize_comment_key(b_id) in del_set):
+            continue
         already_indexed = any(
             (b_id and not b_id.startswith("local_") and b_id != "ok" and str(r.get("id") or "") == b_id)
             or (r.get("is_own") and (r.get("message") or "").strip().lower() == b_msg)
@@ -1824,14 +1845,14 @@ def merge_buffered_own_replies(comment_id: str, replies_list: List[Dict[str, Any
             merged.append({k: v for k, v in b_rep.items() if k != "buffered_at"})
     return merged
 
-def enrich_comment_with_reply_notifications(comment_obj: Dict[str, Any], seen_ids: set) -> Dict[str, Any]:
+def enrich_comment_with_reply_notifications(comment_obj: Dict[str, Any], seen_ids: set, deleted_cids: Optional[set] = None) -> Dict[str, Any]:
     cid_str = str(comment_obj.get("comment_id") or "")
     parent_sf_dt = extract_snowflake_timestamp(cid_str)
     if parent_sf_dt is not None:
         comment_obj["created_iso"] = parent_sf_dt.isoformat()
         comment_obj["display_time"] = parent_sf_dt.strftime("%b %d, %Y • %I:%M %p")
 
-    reps = merge_buffered_own_replies(cid_str, list(comment_obj.get("replies") or []))
+    reps = merge_buffered_own_replies(cid_str, list(comment_obj.get("replies") or []), deleted_cids=deleted_cids)
     for r in reps:
         r_id = str(r.get("id") or "")
         r_sf_dt = extract_snowflake_timestamp(r_id)
@@ -2063,14 +2084,22 @@ def update_cloudinary_store_for_post(
                 elif prev_c.get("author_name") in generic_names and fc.get("author_name") not in generic_names:
                     changed = True
 
-                prev_reps = prev_c.get("replies") or []
+                prev_reps = [
+                    r for r in (prev_c.get("replies") or [])
+                    if str(r.get("id") or "") not in deleted_cids
+                    and _normalize_comment_key(str(r.get("id") or "")) not in deleted_cids
+                ]
                 prev_rep_map = {str(r.get("id")): r for r in prev_reps if r.get("id")}
-                new_reps = fc.get("replies") or []
+                new_reps = [
+                    r for r in (fc.get("replies") or [])
+                    if str(r.get("id") or "") not in deleted_cids
+                    and _normalize_comment_key(str(r.get("id") or "")) not in deleted_cids
+                ]
 
                 merged_reps = list(prev_reps)
                 for nr in new_reps:
                     nr_id = str(nr.get("id") or "")
-                    if not nr_id:
+                    if not nr_id or nr_id in deleted_cids or _normalize_comment_key(nr_id) in deleted_cids:
                         continue
                     if nr_id not in prev_rep_map:
                         upgraded_placeholder = False
@@ -2423,14 +2452,18 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
 class DismissCommentsPayload(BaseModel):
     record_id: Optional[str] = ""
     comment_ids: Optional[List[str]] = []
+    parent_comment_id: Optional[str] = ""
     clear_all: Optional[bool] = False
     single_comment: Optional[bool] = False
+    is_reply: Optional[bool] = False
 
 @router.post("/api/comments/dismiss")
 def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
     try:
         ids_to_mark_seen = set(str(cid) for cid in (payload.comment_ids or []) if cid)
         rec_id = (payload.record_id or "").strip()
+        parent_cid_hint = (payload.parent_comment_id or "").strip()
+        is_reply_only = bool(payload.is_reply)
         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
 
         if payload.clear_all:
@@ -2442,15 +2475,45 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                         if rep.get("id"):
                             ids_to_mark_seen.add(str(rep["id"]))
         elif payload.single_comment and ids_to_mark_seen:
+            norm_targets = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
+            # Purge any buffered own replies matching deleted IDs
+            for buf_key in list(RECENT_OWN_REPLIES_BUFFER.keys()):
+                RECENT_OWN_REPLIES_BUFFER[buf_key] = [
+                    r for r in RECENT_OWN_REPLIES_BUFFER.get(buf_key, [])
+                    if str(r.get("id") or "") not in ids_to_mark_seen
+                    and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
+                ]
+
             for p_key, p_entry in posts_store.items():
                 if rec_id and p_key != rec_id:
                     continue
                 c_map = p_entry.get("comments") or {}
                 del_list = list(p_entry.get("deleted_comment_ids") or [])
                 for target_cid in ids_to_mark_seen:
-                    c_map.pop(target_cid, None)
+                    norm_tc = _normalize_comment_key(target_cid)
+                    if not is_reply_only and target_cid in c_map:
+                        c_map.pop(target_cid, None)
+                    # Also remove from nested replies across all parent comments in this post
+                    for c_k, c_obj in c_map.items():
+                        if not isinstance(c_obj, dict):
+                            continue
+                        if parent_cid_hint and c_k != parent_cid_hint and _normalize_comment_key(c_k) != _normalize_comment_key(parent_cid_hint):
+                            # Still check all comments in the post in case parent_cid_hint differed
+                            pass
+                        orig_reps = c_obj.get("replies") or []
+                        if orig_reps:
+                            filtered_reps = [
+                                r for r in orig_reps
+                                if str(r.get("id") or "") not in ids_to_mark_seen
+                                and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
+                            ]
+                            if len(filtered_reps) != len(orig_reps):
+                                c_obj["replies"] = filtered_reps
+                                c_obj["can_reply"] = (len(filtered_reps) == 0)
                     if target_cid not in del_list:
                         del_list.append(target_cid)
+                    if norm_tc and norm_tc not in del_list:
+                        del_list.append(norm_tc)
                 p_entry["deleted_comment_ids"] = del_list
         elif rec_id:
             p_entry = posts_store.get(rec_id)
