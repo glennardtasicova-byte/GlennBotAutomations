@@ -380,43 +380,97 @@ threading.Thread(target=load_messages_store_from_cloudinary, daemon=True).start(
 # ==============================================================================
 LAST_TIKWM_CALL_TS = 0.0
 TIKWM_LOCK = threading.Lock()
+TIKWM_META_CACHE: Dict[str, Dict[str, Any]] = {}
+TIKWM_COMMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
+TIKWM_BACKOFF_UNTIL_TS = 0.0
+TIKWM_LAST_WARN_TS = 0.0
 
 
 def fetch_tikwm_video_metadata(video_id: str, username: str = "") -> Dict[str, str]:
-    global LAST_TIKWM_CALL_TS
+    global LAST_TIKWM_CALL_TS, TIKWM_BACKOFF_UNTIL_TS, TIKWM_LAST_WARN_TS
     vid = str(video_id or "").strip()
     if not vid or not vid.isdigit():
         return {}
     clean_u = (username or "tiktok").strip().lstrip("@")
     tk_url = f"https://www.tiktok.com/@{clean_u}/video/{vid}"
+
+    now_ts = time.time()
+    cached_entry = TIKWM_META_CACHE.get(vid)
+    if cached_entry and now_ts < float(cached_entry.get("exp") or 0.0):
+        res_copy = dict(cached_entry.get("data") or {})
+        if not res_copy.get("permalink"):
+            res_copy["permalink"] = tk_url
+        return res_copy
+
+    if now_ts < TIKWM_BACKOFF_UNTIL_TS:
+        TIKWM_META_CACHE[vid] = {"exp": now_ts + 3600.0, "data": {"permalink": tk_url}}
+        return {"permalink": tk_url}
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json"
     }
     with TIKWM_LOCK:
-        elapsed = time.time() - LAST_TIKWM_CALL_TS
+        now_locked = time.time()
+        cached_locked = TIKWM_META_CACHE.get(vid)
+        if cached_locked and now_locked < float(cached_locked.get("exp") or 0.0):
+            res_copy = dict(cached_locked.get("data") or {})
+            if not res_copy.get("permalink"):
+                res_copy["permalink"] = tk_url
+            return res_copy
+
+        if now_locked < TIKWM_BACKOFF_UNTIL_TS:
+            TIKWM_META_CACHE[vid] = {"exp": now_locked + 3600.0, "data": {"permalink": tk_url}}
+            return {"permalink": tk_url}
+
+        elapsed = now_locked - LAST_TIKWM_CALL_TS
         if elapsed < 1.1:
             time.sleep(1.1 - elapsed)
         try:
             LAST_TIKWM_CALL_TS = time.time()
-            res = HTTP_SESSION.get("https://www.tikwm.com/api/", params={"url": tk_url}, headers=headers, timeout=12).json()
+            raw_resp = HTTP_SESSION.get("https://www.tikwm.com/api/", params={"url": tk_url}, headers=headers, timeout=10)
+            raw_text = (raw_resp.text or "").strip()
+            if raw_resp.status_code != 200 or not raw_text.startswith("{"):
+                TIKWM_BACKOFF_UNTIL_TS = time.time() + 1800.0
+                TIKWM_META_CACHE[vid] = {"exp": time.time() + 3600.0, "data": {"permalink": tk_url}}
+                if (time.time() - TIKWM_LAST_WARN_TS) > 1800.0:
+                    TIKWM_LAST_WARN_TS = time.time()
+                    print(f"[ℹ️ TIKWM COOLDOWN]: TikWM returned non-JSON/rate-limit (HTTP {raw_resp.status_code}); pausing TikWM lookups for 30m.")
+                return {"permalink": tk_url}
+
+            res = raw_resp.json()
             if res.get("code") == 0 and isinstance(res.get("data"), dict):
                 d = res["data"]
-                return {
+                meta_out = {
                     "caption": str(d.get("title") or "").strip(),
                     "video_url": str(d.get("play") or d.get("wmplay") or "").strip(),
                     "cover_url": str(d.get("cover") or d.get("origin_cover") or "").strip(),
                     "permalink": tk_url
                 }
+                TIKWM_META_CACHE[vid] = {"exp": time.time() + 21600.0, "data": meta_out}
+                return dict(meta_out)
         except Exception as e:
-            print(f"[⚠️ TIKWM VIDEO META WARNING ({vid})]: {e}")
+            TIKWM_BACKOFF_UNTIL_TS = time.time() + 1800.0
+            if (time.time() - TIKWM_LAST_WARN_TS) > 1800.0:
+                TIKWM_LAST_WARN_TS = time.time()
+                print(f"[⚠️ TIKWM VIDEO META WARNING ({vid})]: {e} (cooldown 30m)")
+        TIKWM_META_CACHE[vid] = {"exp": time.time() + 3600.0, "data": {"permalink": tk_url}}
     return {"permalink": tk_url}
 
 
 def fetch_tikwm_comments_lookup(video_id: str) -> Dict[str, Dict[str, str]]:
-    global LAST_TIKWM_CALL_TS
+    global LAST_TIKWM_CALL_TS, TIKWM_BACKOFF_UNTIL_TS, TIKWM_LAST_WARN_TS
     vid = str(video_id or "").strip()
     if not vid or not vid.isdigit():
+        return {}
+
+    now_ts = time.time()
+    cached_c = TIKWM_COMMENTS_CACHE.get(vid)
+    if cached_c and now_ts < float(cached_c.get("exp") or 0.0):
+        return dict(cached_c.get("data") or {})
+
+    if now_ts < TIKWM_BACKOFF_UNTIL_TS:
+        TIKWM_COMMENTS_CACHE[vid] = {"exp": now_ts + 1800.0, "data": {}}
         return {}
 
     headers = {
@@ -426,12 +480,24 @@ def fetch_tikwm_comments_lookup(video_id: str) -> Dict[str, Dict[str, str]]:
     lookup: Dict[str, Dict[str, str]] = {}
 
     with TIKWM_LOCK:
-        elapsed = time.time() - LAST_TIKWM_CALL_TS
+        now_locked = time.time()
+        if now_locked < TIKWM_BACKOFF_UNTIL_TS:
+            TIKWM_COMMENTS_CACHE[vid] = {"exp": now_locked + 1800.0, "data": {}}
+            return {}
+
+        elapsed = now_locked - LAST_TIKWM_CALL_TS
         if elapsed < 1.1:
             time.sleep(1.1 - elapsed)
         try:
             LAST_TIKWM_CALL_TS = time.time()
-            res = HTTP_SESSION.get(f"https://www.tikwm.com/api/comment/list?url={vid}&count=50", headers=headers, timeout=12).json()
+            raw_resp = HTTP_SESSION.get(f"https://www.tikwm.com/api/comment/list?url={vid}&count=50", headers=headers, timeout=10)
+            raw_text = (raw_resp.text or "").strip()
+            if raw_resp.status_code != 200 or not raw_text.startswith("{"):
+                TIKWM_BACKOFF_UNTIL_TS = time.time() + 1800.0
+                TIKWM_COMMENTS_CACHE[vid] = {"exp": time.time() + 1800.0, "data": {}}
+                return {}
+
+            res = raw_resp.json()
             if res.get("code") == 0:
                 comm_list = (res.get("data") or {}).get("comments") or []
                 for c in comm_list:
@@ -474,8 +540,13 @@ def fetch_tikwm_comments_lookup(video_id: str) -> Dict[str, Dict[str, str]]:
                                 lookup[f"id:{rcid}"] = rinfo
                             if rtxt:
                                 lookup[f"txt:{rtxt}"] = rinfo
+            TIKWM_COMMENTS_CACHE[vid] = {"exp": time.time() + 3600.0, "data": lookup}
         except Exception as e:
-            print(f"[⚠️ TIKWM AUTHOR LOOKUP WARNING ({vid})]: {e}")
+            TIKWM_BACKOFF_UNTIL_TS = time.time() + 1800.0
+            TIKWM_COMMENTS_CACHE[vid] = {"exp": time.time() + 1800.0, "data": {}}
+            if (time.time() - TIKWM_LAST_WARN_TS) > 1800.0:
+                TIKWM_LAST_WARN_TS = time.time()
+                print(f"[⚠️ TIKWM AUTHOR LOOKUP WARNING ({vid})]: {e} (cooldown 30m)")
 
     return lookup
 

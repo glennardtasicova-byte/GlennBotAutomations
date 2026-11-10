@@ -603,13 +603,6 @@ def ensure_external_post_record_in_db(
     if plat_clean == "tiktok" and target_pid.isdigit():
         if not final_permalink:
             final_permalink = f"https://www.tiktok.com/@{final_uname or 'tiktok'}/video/{target_pid}"
-        if not final_caption or not final_preview:
-            _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
-            tk_meta = _tikwm_fn(target_pid, final_uname) if _tikwm_fn else {}
-            if not final_caption and tk_meta.get("caption"):
-                final_caption = tk_meta["caption"]
-            if not final_preview and (tk_meta.get("video_url") or tk_meta.get("cover_url")):
-                final_preview = tk_meta.get("video_url") or tk_meta.get("cover_url") or ""
     elif plat_clean == "facebook" and not final_permalink and target_pid:
         final_permalink = f"https://www.facebook.com/{target_pid}"
     elif plat_clean == "youtube" and target_pid:
@@ -650,6 +643,7 @@ def ensure_external_post_record_in_db(
             }
             clean_target_cap = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", final_caption).strip().lower() if final_caption and final_caption != "Previous Post" else ""
             canonical_matched_id = ""
+            matched_er_dict: Optional[Dict[str, Any]] = None
             duplicate_ext_ids_to_remove: List[str] = []
 
             for er in existing_plat_rows:
@@ -677,8 +671,25 @@ def ensure_external_post_record_in_db(
                 if id_match or cap_match:
                     if not canonical_matched_id:
                         canonical_matched_id = er_id
+                        matched_er_dict = er_dict
                     elif er_id != canonical_matched_id and er_id.startswith("post_ext_"):
                         duplicate_ext_ids_to_remove.append(er_id)
+
+            if matched_er_dict:
+                existing_cap = str(matched_er_dict.get("caption") or "").strip()
+                existing_prev = str(matched_er_dict.get("media_preview_url") or "").strip()
+                if (not final_caption or final_caption == "Previous Post") and existing_cap and existing_cap != "Previous Post":
+                    final_caption = existing_cap
+                if not final_preview and existing_prev:
+                    final_preview = existing_prev
+
+            if plat_clean == "tiktok" and target_pid.isdigit() and (not final_caption or final_caption == "Previous Post" or not final_preview):
+                _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
+                tk_meta = _tikwm_fn(target_pid, final_uname) if _tikwm_fn else {}
+                if (not final_caption or final_caption == "Previous Post") and tk_meta.get("caption"):
+                    final_caption = tk_meta["caption"]
+                if not final_preview and (tk_meta.get("video_url") or tk_meta.get("cover_url")):
+                    final_preview = tk_meta.get("video_url") or tk_meta.get("cover_url") or ""
 
             if canonical_matched_id:
                 rec_id = canonical_matched_id
