@@ -2034,6 +2034,59 @@ def update_cloudinary_store_for_post(
         }
         live_norm_cids = {_normalize_comment_key(c) for c in live_cids if c}
 
+        # If another post entry in CLOUDINARY_COMMENTS_STORE represents this exact same external post
+        # (e.g. a legacy split `post_ext_...` entry vs canonical `post_...`), merge its deleted_comment_ids
+        # and reconcile or collapse it so stale deleted comments never linger in a duplicate entry!
+        row_known_tokens = {
+            str(k).strip()
+            for k in extract_all_known_ids_for_row(r_dict)
+            if k and len(str(k).strip()) >= 6 and str(k).strip() != "OK"
+        }
+        row_known_suffixes = {k.split("_")[-1].strip() for k in row_known_tokens if "_" in k}
+        all_row_post_tokens = row_known_tokens | row_known_suffixes
+
+        if all_row_post_tokens:
+            for other_rid, other_p in list(posts_store.items()):
+                if other_rid == record_id or not isinstance(other_p, dict):
+                    continue
+                other_c_map = other_p.get("comments") if isinstance(other_p.get("comments"), dict) else {}
+                other_plink = str(other_p.get("post_permalink") or "")
+                other_matches_same_post = any(tok in other_plink for tok in all_row_post_tokens if len(tok) >= 8)
+                if not other_matches_same_post and other_c_map:
+                    for oc_val in other_c_map.values():
+                        if not isinstance(oc_val, dict):
+                            continue
+                        oc_pids = {
+                            str(oc_val.get("zernio_post_id") or "").strip(),
+                            str(oc_val.get("external_post_id") or "").strip(),
+                            str(oc_val.get("comment_id") or "").split("_")[0].strip() if "_" in str(oc_val.get("comment_id") or "") else "",
+                        }
+                        oc_suffixes = {p.split("_")[-1].strip() for p in oc_pids if "_" in p}
+                        if all_row_post_tokens & ((oc_pids | oc_suffixes) - {""}):
+                            other_matches_same_post = True
+                            break
+                if other_matches_same_post:
+                    for od_cid in (other_p.get("deleted_comment_ids") or []):
+                        if od_cid:
+                            s_od = str(od_cid).strip()
+                            deleted_cids.add(s_od)
+                            deleted_cids.add(_normalize_comment_key(s_od))
+                            if s_od not in post_entry.setdefault("deleted_comment_ids", []):
+                                post_entry["deleted_comment_ids"].append(s_od)
+                    if reconcile_remote_deletions and other_c_map:
+                        for oc_k, oc_v in list(other_c_map.items()):
+                            norm_oc_k = _normalize_comment_key(oc_k)
+                            if (
+                                oc_k in deleted_cids
+                                or norm_oc_k in deleted_cids
+                                or (oc_k not in live_cids and norm_oc_k not in live_norm_cids)
+                            ):
+                                other_c_map.pop(oc_k, None)
+                                changed = True
+                    if other_rid.startswith("post_ext_") and not record_id.startswith("post_ext_") and not other_c_map:
+                        posts_store.pop(other_rid, None)
+                        changed = True
+
         for old_cid, old_c in list(existing_comments_map.items()):
             norm_old_cid = _normalize_comment_key(old_cid)
             obj_old_cid = str((old_c or {}).get("comment_id") or "").strip() if isinstance(old_c, dict) else ""
@@ -2051,10 +2104,10 @@ def update_cloudinary_store_for_post(
 
             # If Zernio returned a confirmed 200 OK live comments list for this post (reconcile_remote_deletions=True)
             # and this comment is no longer on the post (e.g. deleted by the commenter on Facebook/Instagram/YouTube/TikTok),
-            # automatically remove it from Cloudinary too (unless it was just saved by webhook < 30s ago).
+            # automatically remove it from Cloudinary too (unless it was just saved by webhook < 15s ago and not a forced sync).
             if reconcile_remote_deletions:
                 wh_saved_ts = float(old_c.get("_webhook_saved_ts") or 0.0)
-                recently_saved_via_wh = (now_sync_ts - wh_saved_ts) < 30.0 and not force_unhide
+                recently_saved_via_wh = (now_sync_ts - wh_saved_ts) < 15.0 and not force_unhide
                 if (
                     not recently_saved_via_wh
                     and old_cid not in live_cids
@@ -2076,9 +2129,12 @@ def update_cloudinary_store_for_post(
             fc["record_id"] = record_id
 
             for other_rid, other_p in list(posts_store.items()):
-                if other_rid != record_id and isinstance(other_p.get("comments"), dict) and cid in other_p["comments"]:
-                    other_p["comments"].pop(cid, None)
-                    changed = True
+                if other_rid != record_id and isinstance(other_p.get("comments"), dict):
+                    norm_fc_cid = _normalize_comment_key(cid)
+                    for ok_cid in list(other_p["comments"].keys()):
+                        if ok_cid == cid or _normalize_comment_key(ok_cid) == norm_fc_cid:
+                            other_p["comments"].pop(ok_cid, None)
+                            changed = True
 
             if cid not in existing_comments_map:
                 has_brand_new_activity = True
@@ -2140,7 +2196,7 @@ def update_cloudinary_store_for_post(
                     if reconcile_remote_deletions:
                         is_local_placeholder = r_id_str.startswith(("local_", "opt_", "z_rep_"))
                         r_wh_ts = float(r.get("_webhook_saved_ts") or 0.0)
-                        recently_wh_reply = (now_sync_ts - r_wh_ts) < 30.0 and not force_unhide
+                        recently_wh_reply = (now_sync_ts - r_wh_ts) < 15.0 and not force_unhide
                         if (
                             not is_local_placeholder
                             and not recently_wh_reply
@@ -2439,7 +2495,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                 FROM glennbot_scheduled_posts
                 WHERE status = 'published'
                   AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube')
-                ORDER BY scheduled_time DESC
+                ORDER BY CASE WHEN id NOT LIKE 'post_ext_%' THEN 0 ELSE 1 END, scheduled_time DESC
                 LIMIT 60
             """)).mappings().all()
 
@@ -2539,6 +2595,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                                 r_dict,
                                 p_comms,
                                 unhide_if_new=True,
+                                force_unhide=bool(force_refresh),
                                 reconcile_remote_deletions=True
                             ):
                                 any_store_change = True

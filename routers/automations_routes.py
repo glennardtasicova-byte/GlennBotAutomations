@@ -1086,7 +1086,7 @@ def _execute_n8n_workflow_json_natively(
                             target_url,
                             headers=req_headers,
                             json=req_body_obj if req_body_obj is not None else {},
-                            timeout=25
+                            timeout=45
                         )
                     try:
                         out_json = r_http.json() if r_http.content else {"status_code": r_http.status_code}
@@ -1961,24 +1961,56 @@ async def api_v1_get_comments(
 
 def _resolve_record_id_for_comment_v1(rec_id: str, comm_id: str, post_id_in: str = "") -> str:
     resolved = str(rec_id or "").strip()
-    if resolved:
-        return resolved
+    c_clean = str(comm_id or "").strip()
+    norm_c = _normalize_comment_key(c_clean) if c_clean else ""
+    p_clean = str(post_id_in or "").strip()
+    p_suffix = p_clean.split("_")[-1].strip() if "_" in p_clean else p_clean
     try:
         if not CLOUDINARY_COMMENTS_STORE.get("loaded"):
             load_comments_store_from_cloudinary()
         posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
-        for cand_rid, p_entry in posts_store.items():
-            c_map = p_entry.get("comments") or {}
-            if comm_id in c_map:
-                return str(cand_rid)
-            for k_cid, c_val in c_map.items():
-                if str(k_cid) == comm_id or any(str(r.get("id")) == comm_id for r in (c_val.get("replies") or [])):
+
+        # 1. If a record_id was provided AND it actually contains comm_id right now, use it immediately
+        if resolved and resolved in posts_store and c_clean:
+            c_map_res = (posts_store[resolved] or {}).get("comments") or {}
+            if c_clean in c_map_res or any(_normalize_comment_key(str(k)) == norm_c for k in c_map_res.keys()):
+                return resolved
+            for c_val in c_map_res.values():
+                if isinstance(c_val, dict) and any(
+                    str(r.get("id") or "") == c_clean or _normalize_comment_key(str(r.get("id") or "")) == norm_c
+                    for r in (c_val.get("replies") or [])
+                ):
+                    return resolved
+
+        # 2. Otherwise search all post entries for the exact comment_id (handles post_acc... <-> post_ext... migrations)
+        if c_clean:
+            for cand_rid, p_entry in posts_store.items():
+                c_map = (p_entry or {}).get("comments") or {}
+                if c_clean in c_map:
                     return str(cand_rid)
-                if post_id_in and post_id_in in (str(c_val.get("zernio_post_id") or ""), str(c_val.get("external_post_id") or "")):
-                    return str(cand_rid)
+                for k_cid, c_val in c_map.items():
+                    if str(k_cid) == c_clean or (norm_c and _normalize_comment_key(str(k_cid)) == norm_c):
+                        return str(cand_rid)
+                    if isinstance(c_val, dict) and any(
+                        str(r.get("id") or "") == c_clean or (norm_c and _normalize_comment_key(str(r.get("id") or "")) == norm_c)
+                        for r in (c_val.get("replies") or [])
+                    ):
+                        return str(cand_rid)
+
+        # 3. Fallback: match by post_id_in across CLOUDINARY_COMMENTS_STORE
+        if p_clean:
+            for cand_rid, p_entry in posts_store.items():
+                c_map = (p_entry or {}).get("comments") or {}
+                for c_val in c_map.values():
+                    if not isinstance(c_val, dict):
+                        continue
+                    z_pid = str(c_val.get("zernio_post_id") or "").strip()
+                    e_pid = str(c_val.get("external_post_id") or "").strip()
+                    if p_clean in (z_pid, e_pid) or (p_suffix and p_suffix in (z_pid.split("_")[-1], e_pid.split("_")[-1])):
+                        return str(cand_rid)
     except Exception:
         pass
-    return ""
+    return resolved
 
 
 @router.get("/api/v1/comments/thread-status")

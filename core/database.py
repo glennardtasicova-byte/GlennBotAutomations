@@ -630,6 +630,65 @@ def ensure_external_post_record_in_db(
 
     try:
         with db_engine.begin() as conn:
+            # First check if a canonical (non-post_ext_) or existing row ALREADY matches this post so we never split a post across two record_ids
+            existing_plat_rows = conn.execute(
+                text("""
+                    SELECT id, platform, page_id, account_name, post_type, caption,
+                           media_preview_url, scheduled_time, status, status_message, external_post_id, permalink_url
+                    FROM glennbot_scheduled_posts
+                    WHERE LOWER(platform) = :plat AND status = 'published'
+                    ORDER BY CASE WHEN id NOT LIKE 'post_ext_%' THEN 0 ELSE 1 END, scheduled_time DESC
+                    LIMIT 80
+                """),
+                {"plat": plat_clean}
+            ).mappings().all()
+
+            cand_tokens = {
+                str(t).strip()
+                for t in (target_pid, target_pid_suffix, z_post_id)
+                if t and len(str(t).strip()) >= 6 and str(t).strip() != "OK"
+            }
+            clean_target_cap = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", final_caption).strip().lower() if final_caption and final_caption != "Previous Post" else ""
+            canonical_matched_id = ""
+            duplicate_ext_ids_to_remove: List[str] = []
+
+            for er in existing_plat_rows:
+                er_dict = dict(er)
+                er_id = str(er_dict.get("id") or "").strip()
+                if not er_id:
+                    continue
+                er_known = set(str(k).strip() for k in extract_all_known_ids_for_row(er_dict) if k)
+                er_known_suffixes = {k.split("_")[-1].strip() for k in er_known if "_" in k}
+                er_smsg = str(er_dict.get("status_message") or "")
+                er_plink = str(er_dict.get("permalink_url") or "")
+                id_match = bool(
+                    (cand_tokens & (er_known | er_known_suffixes))
+                    or any(tok in er_smsg or tok in er_plink for tok in cand_tokens)
+                )
+                cap_match = False
+                if not id_match and clean_target_cap and not er_id.startswith("post_ext_"):
+                    er_cap_clean = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", str(er_dict.get("caption") or "")).strip().lower()
+                    if er_cap_clean and er_cap_clean == clean_target_cap:
+                        er_pid = str(er_dict.get("page_id") or "").strip()
+                        er_aname = str(er_dict.get("account_name") or "").strip()
+                        if (er_pid and er_pid in (candidate_acc_ids | {final_page_id})) or _is_same_social_page_name(er_aname, final_acc_name):
+                            cap_match = True
+
+                if id_match or cap_match:
+                    if not canonical_matched_id:
+                        canonical_matched_id = er_id
+                    elif er_id != canonical_matched_id and er_id.startswith("post_ext_"):
+                        duplicate_ext_ids_to_remove.append(er_id)
+
+            if canonical_matched_id:
+                rec_id = canonical_matched_id
+                if duplicate_ext_ids_to_remove:
+                    for dup_ext_id in duplicate_ext_ids_to_remove:
+                        conn.execute(
+                            text("DELETE FROM glennbot_scheduled_posts WHERE id = :dup_id"),
+                            {"dup_id": dup_ext_id}
+                        )
+
             conn.execute(
                 text("""
                     INSERT INTO glennbot_scheduled_posts
@@ -640,7 +699,7 @@ def ensure_external_post_record_in_db(
                     ON CONFLICT (id) DO UPDATE SET
                         page_id = CASE WHEN :verified_match = 1 AND EXCLUDED.page_id != '' THEN EXCLUDED.page_id ELSE glennbot_scheduled_posts.page_id END,
                         account_name = CASE WHEN :verified_match = 1 AND EXCLUDED.account_name != '' THEN EXCLUDED.account_name ELSE glennbot_scheduled_posts.account_name END,
-                        scheduled_time = EXCLUDED.scheduled_time,
+                        scheduled_time = CASE WHEN glennbot_scheduled_posts.id LIKE 'post_ext_%' THEN EXCLUDED.scheduled_time ELSE glennbot_scheduled_posts.scheduled_time END,
                         status_message = CASE WHEN EXCLUDED.status_message != '' THEN EXCLUDED.status_message ELSE glennbot_scheduled_posts.status_message END,
                         external_post_id = COALESCE(NULLIF(EXCLUDED.external_post_id, ''), glennbot_scheduled_posts.external_post_id),
                         caption = CASE WHEN glennbot_scheduled_posts.caption = '' OR glennbot_scheduled_posts.caption IS NULL OR glennbot_scheduled_posts.caption = 'Previous Post' THEN EXCLUDED.caption ELSE glennbot_scheduled_posts.caption END,
