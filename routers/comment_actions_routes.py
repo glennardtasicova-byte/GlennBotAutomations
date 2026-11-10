@@ -1814,7 +1814,14 @@ def send_zernio_comment_moderation_action(
     return best_non_404_result or last_result
 
 
-def _perform_comment_moderation(record_id: str, comment_id: str, action_type: str, enable: bool) -> Dict[str, Any]:
+def _perform_comment_moderation(
+    record_id: str,
+    comment_id: str,
+    action_type: str,
+    enable: bool,
+    parent_comment_id_hint: str = "",
+    reply_message_hint: str = ""
+) -> Dict[str, Any]:
     try:
         with db_engine.connect() as conn:
             row = conn.execute(
@@ -1859,6 +1866,8 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
         posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
         post_entry = posts_store.get(rec_id_str) or {}
         parent_comm, target_sub_reply = find_parent_and_target_comment(post_entry, str(comment_id))
+        if not parent_comm and parent_comment_id_hint:
+            parent_comm, _ = find_parent_and_target_comment(post_entry, str(parent_comment_id_hint))
         cached_comm = parent_comm or (post_entry.get("comments") or {}).get(str(comment_id))
 
         z_info = resolve_zernio_post_identifiers(r_dict, force=False)
@@ -1870,22 +1879,28 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
 
         raw_target_cid = str(comment_id or "").strip()
         explicit_parent_cid = str(
-            (parent_comm or {}).get("comment_id")
+            parent_comment_id_hint
+            or (parent_comm or {}).get("comment_id")
             or (cached_comm or {}).get("parent_comment_id")
             or (cached_comm or {}).get("parentId")
             or (cached_comm or {}).get("parent_id")
             or raw_target_cid
         ).strip()
         parent_cid = explicit_parent_cid or raw_target_cid
+        target_msg_clean = str(
+            reply_message_hint
+            or (target_sub_reply or {}).get("message")
+            or ""
+        ).strip().lower()
 
-        # For Like and Hide, always target the exact clicked comment/reply ID first!
+        # Strictly target ONLY the clicked comment/reply ID (never fallback to parent_cid so reply actions never hit the parent comment!)
         candidate_comment_ids: List[str] = []
-        for c_cand in (raw_target_cid, parent_cid):
-            clean_c = c_cand.split("_")[-1] if (platform == "tiktok" and "_" in c_cand) else c_cand
+        if raw_target_cid and not raw_target_cid.startswith(("local_", "opt_", "z_rep_")):
+            clean_c = raw_target_cid.split("_")[-1] if (platform == "tiktok" and "_" in raw_target_cid) else raw_target_cid
             if clean_c and clean_c not in candidate_comment_ids:
                 candidate_comment_ids.append(clean_c)
-            if c_cand and c_cand not in candidate_comment_ids:
-                candidate_comment_ids.append(c_cand)
+            if raw_target_cid not in candidate_comment_ids:
+                candidate_comment_ids.append(raw_target_cid)
 
         permalink_str = str(r_dict.get("permalink_url") or z_info.get("permalink_url") or "").strip()
         fbid_from_link = ""
@@ -1973,7 +1988,7 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                     expanded_cids.append(c_suffix)
             return expanded_cids
 
-        def _finalize_moderation_success():
+        def _finalize_moderation_success(zernio_synced: bool = True):
             target_obj = target_sub_reply if (target_sub_reply is not None and isinstance(target_sub_reply, dict)) else (cached_comm if isinstance(cached_comm, dict) else None)
             if target_obj is not None:
                 if action_type == "like":
@@ -1993,6 +2008,7 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                 "status": "success",
                 "comment_id": raw_target_cid,
                 "action": action_type,
+                "zernio_synced": zernio_synced,
                 "is_liked": bool(enable) if action_type == "like" else bool((target_obj or {}).get("is_liked")),
                 "is_hidden": bool(enable) if action_type == "hide" else bool((target_obj or {}).get("is_hidden"))
             }
@@ -2001,24 +2017,25 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
         last_err = f"Could not resolve External API Post or Comment ID for {action_type}."
         tried_combos = set()
 
-        # Pass 1: Standard Moderation Loop
-        for target_pid in cand_post_ids:
-            p1_cids = _expand_comment_ids_for_mod(target_pid, candidate_comment_ids, extra_format=True)
-            for api_cid in p1_cids:
-                tried_combos.add((target_pid, z_acc_id, api_cid))
-                z_res = send_zernio_comment_moderation_action(
-                    target_pid,
-                    z_acc_id,
-                    api_cid,
-                    action_type=action_type,
-                    enable=enable,
-                    preferred_api_key=pref_key,
-                    platform=platform,
-                    account_name=acc_name
-                )
-                if z_res["status_code"] in (200, 201, 204):
-                    return _finalize_moderation_success()
-                last_err = str(z_res["data"] or z_res["raw_text"])
+        # Pass 1: Standard Moderation Loop (when candidate_comment_ids has real platform IDs)
+        if candidate_comment_ids:
+            for target_pid in cand_post_ids:
+                p1_cids = _expand_comment_ids_for_mod(target_pid, candidate_comment_ids, extra_format=True)
+                for api_cid in p1_cids:
+                    tried_combos.add((target_pid, z_acc_id, api_cid))
+                    z_res = send_zernio_comment_moderation_action(
+                        target_pid,
+                        z_acc_id,
+                        api_cid,
+                        action_type=action_type,
+                        enable=enable,
+                        preferred_api_key=pref_key,
+                        platform=platform,
+                        account_name=acc_name
+                    )
+                    if z_res["status_code"] in (200, 201, 204):
+                        return _finalize_moderation_success(zernio_synced=True)
+                    last_err = str(z_res["data"] or z_res["raw_text"])
 
         # Pass 2: Multi-Account / Multi-Key Discovery across commented posts & connected pages
         known_suffixes = {p.split("_")[-1].strip() for p in base_post_ids if p and p != "OK"}
@@ -2037,40 +2054,41 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                         base_post_ids.insert(0, new_p)
 
         connected_plat_accounts = fetch_zernio_connected_accounts(platform=platform or None, force=True)
-        for za in connected_plat_accounts:
-            if not isinstance(za, dict):
-                continue
-            za_id = str(za.get("_id") or za.get("id") or "").strip()
-            za_key = str(za.get("_zernio_api_key") or "").strip()
-            za_dname = str(za.get("displayName") or za.get("name") or za.get("username") or acc_name or platform.upper()).strip()
-            if not za_id or not za_key:
-                continue
+        if candidate_comment_ids:
+            for za in connected_plat_accounts:
+                if not isinstance(za, dict):
+                    continue
+                za_id = str(za.get("_id") or za.get("id") or "").strip()
+                za_key = str(za.get("_zernio_api_key") or "").strip()
+                za_dname = str(za.get("displayName") or za.get("name") or za.get("username") or acc_name or platform.upper()).strip()
+                if not za_id or not za_key:
+                    continue
 
-            za_post_ids = _expand_post_ids_for_mod(base_post_ids, za_id, za_dname)
-            for target_pid in za_post_ids:
-                p2_cids = _expand_comment_ids_for_mod(target_pid, candidate_comment_ids, extra_format=True)
-                for api_cid in p2_cids:
-                    if (target_pid, za_id, api_cid) in tried_combos:
-                        continue
-                    tried_combos.add((target_pid, za_id, api_cid))
-                    z_res = send_zernio_comment_moderation_action(
-                        target_pid,
-                        za_id,
-                        api_cid,
-                        action_type=action_type,
-                        enable=enable,
-                        preferred_api_key=za_key,
-                        platform=platform,
-                        account_name=za_dname
-                    )
-                    if z_res["status_code"] in (200, 201, 204):
-                        return _finalize_moderation_success()
-                    err_data = z_res.get("data")
-                    err_code = str((err_data or {}).get("code") or "").strip().lower() if isinstance(err_data, dict) else ""
-                    if err_code != "account_not_found":
-                        last_err = str(z_res["data"] or z_res["raw_text"])
+                za_post_ids = _expand_post_ids_for_mod(base_post_ids, za_id, za_dname)
+                for target_pid in za_post_ids:
+                    p2_cids = _expand_comment_ids_for_mod(target_pid, candidate_comment_ids, extra_format=True)
+                    for api_cid in p2_cids:
+                        if (target_pid, za_id, api_cid) in tried_combos:
+                            continue
+                        tried_combos.add((target_pid, za_id, api_cid))
+                        z_res = send_zernio_comment_moderation_action(
+                            target_pid,
+                            za_id,
+                            api_cid,
+                            action_type=action_type,
+                            enable=enable,
+                            preferred_api_key=za_key,
+                            platform=platform,
+                            account_name=za_dname
+                        )
+                        if z_res["status_code"] in (200, 201, 204):
+                            return _finalize_moderation_success(zernio_synced=True)
+                        err_data = z_res.get("data")
+                        err_code = str((err_data or {}).get("code") or "").strip().lower() if isinstance(err_data, dict) else ""
+                        if err_code != "account_not_found":
+                            last_err = str(z_res["data"] or z_res["raw_text"])
 
-        # Pass 3: Live Comment Thread Inspection
+        # Pass 3: Live Comment Thread Inspection (resolves canonical IDs AND newly posted replies by message text)
         target_cid_suffixes = {c.split("_")[-1].strip() for c in candidate_comment_ids if c}
         for za in connected_plat_accounts:
             if not isinstance(za, dict):
@@ -2089,13 +2107,33 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                     if c_resp.status_code != 200:
                         continue
                     live_comments = extract_list_from_api_payload(c_resp.json()) or []
+                    # If targeting a nested reply under parent_cid, also fetch the parent comment's sub-thread from Zernio
+                    if parent_cid and parent_cid != raw_target_cid and not parent_cid.startswith(("local_", "opt_", "z_rep_")):
+                        try:
+                            sub_resp = HTTP_SESSION.get(
+                                f"{ZERNIO_BASE_URL}/inbox/comments/{encoded_pid}",
+                                params={"accountId": za_id, "commentId": parent_cid},
+                                headers=get_zernio_headers(za_key),
+                                timeout=8
+                            )
+                            if sub_resp.status_code == 200:
+                                sub_items = extract_list_from_api_payload(sub_resp.json()) or []
+                                live_comments.extend(sub_items)
+                        except Exception:
+                            pass
+
                     discovered_live_cids: List[str] = []
                     for lc in live_comments:
                         if not isinstance(lc, dict):
                             continue
                         lc_id = str(lc.get("id") or lc.get("_id") or lc.get("commentId") or "").strip()
                         lc_suffix = lc_id.split("_")[-1].strip() if "_" in lc_id else lc_id
-                        if lc_id and (lc_id in candidate_comment_ids or lc_suffix in target_cid_suffixes):
+                        lc_msg = str(lc.get("text") or lc.get("Text") or lc.get("message") or lc.get("content") or "").strip().lower()
+                        if lc_id and (
+                            lc_id in candidate_comment_ids
+                            or (lc_suffix and lc_suffix in target_cid_suffixes)
+                            or (target_msg_clean and lc_msg == target_msg_clean and lc_id != parent_cid)
+                        ):
                             if lc_id not in discovered_live_cids:
                                 discovered_live_cids.append(lc_id)
                         for sub_r in (lc.get("replies") or lc.get("children") or []):
@@ -2103,7 +2141,12 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                                 continue
                             sr_id = str(sub_r.get("id") or sub_r.get("_id") or sub_r.get("commentId") or "").strip()
                             sr_suffix = sr_id.split("_")[-1].strip() if "_" in sr_id else sr_id
-                            if sr_id and (sr_id in candidate_comment_ids or sr_suffix in target_cid_suffixes):
+                            sr_msg = str(sub_r.get("text") or sub_r.get("Text") or sub_r.get("message") or sub_r.get("content") or "").strip().lower()
+                            if sr_id and (
+                                sr_id in candidate_comment_ids
+                                or (sr_suffix and sr_suffix in target_cid_suffixes)
+                                or (target_msg_clean and sr_msg == target_msg_clean)
+                            ):
                                 if sr_id not in discovered_live_cids:
                                     discovered_live_cids.append(sr_id)
                     for live_cid in discovered_live_cids:
@@ -2121,7 +2164,7 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
                             account_name=za_dname
                         )
                         if z_res["status_code"] in (200, 201, 204):
-                            return _finalize_moderation_success()
+                            return _finalize_moderation_success(zernio_synced=True)
                 except Exception:
                     continue
 
@@ -2131,7 +2174,7 @@ def _perform_comment_moderation(record_id: str, comment_id: str, action_type: st
             (action_type == "like" and platform in ("facebook", "instagram") and (platform == "instagram" or target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
             or (action_type == "hide" and platform in ("facebook", "instagram", "tiktok") and (target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
         ):
-            return _finalize_moderation_success()
+            return _finalize_moderation_success(zernio_synced=False)
 
         return {"status": "error", "message": f"External API {action_type.capitalize()} Comment Error ({platform.upper()}): {last_err}"}
     except Exception as e:
@@ -2173,6 +2216,12 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         if not rep_id:
             return {"status": "error", "message": "Missing reply_id."}
 
+        # Look up the reply's message BEFORE removing it from CLOUDINARY_COMMENTS_STORE so Zernio API delete can match it even if it had a local/z_rep ID
+        posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+        post_entry = posts_store.get(rec_id) or {}
+        _, matched_sub_rep = find_parent_and_target_comment(post_entry, rep_id)
+        rep_msg_hint = str((matched_sub_rep or {}).get("message") or "").strip()
+
         from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
         dismiss_or_clear_comment_notifications(
             DismissCommentsPayload(
@@ -2185,15 +2234,17 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
             )
         )
 
-        # Also attempt platform-level deletion in background if it's a real platform reply ID
-        if rec_id and not rep_id.startswith(("local_", "opt_", "z_rep_")):
+        # Communicate with Zernio API (DELETE /v1/inbox/comments/{postId}/{commentId}) in background
+        if rec_id:
             threading.Thread(
                 target=_perform_comment_moderation,
                 kwargs={
                     "record_id": rec_id,
                     "comment_id": rep_id,
                     "action_type": "delete",
-                    "enable": True
+                    "enable": True,
+                    "parent_comment_id_hint": parent_cid,
+                    "reply_message_hint": rep_msg_hint
                 },
                 daemon=True
             ).start()
@@ -2206,6 +2257,7 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 
