@@ -165,6 +165,8 @@
 
         async function deleteSingleCommentNotification(recordId, commentId, event) {
             if (event) event.stopPropagation();
+            const targetComm = commentsList.find(c => c.comment_id === commentId);
+            const platName = (targetComm?.platform || 'social media').toUpperCase();
             commentsList = commentsList.filter(c => c.comment_id !== commentId);
             const remainingForPost = commentsList.filter(c => c.record_id === recordId);
             if (remainingForPost.length === 0) {
@@ -181,14 +183,18 @@
             }
             updateCommentsBadges();
             renderCommentsList();
-            showToast("🗑️ Comment removed from Cloudinary!");
+            showToast(`🗑️ Deleting comment on ${platName} & GlennBot...`);
 
             try {
-                await fetch('/api/comments/dismiss', {
+                const res = await fetch('/api/comments/dismiss', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ record_id: recordId, comment_ids: [commentId], clear_all: false, single_comment: true })
                 });
+                const data = await res.json();
+                if (data && data.zernio_deleted) {
+                    showToast(`🗑️ Comment permanently deleted on ${platName} (via Zernio API) & GlennBot!`);
+                }
             } catch (e) {
                 console.error("Delete single comment error:", e);
             }
@@ -198,6 +204,7 @@
             if (event) event.stopPropagation();
             const cleanParentId = String(parentCommentId || '');
             const cleanReplyId = String(replyId || '');
+            let platName = 'SOCIAL MEDIA';
 
             if (pendingOptimisticReplies[cleanParentId]) {
                 pendingOptimisticReplies[cleanParentId] = pendingOptimisticReplies[cleanParentId].filter(
@@ -207,6 +214,7 @@
 
             commentsList.forEach(c => {
                 if (c.record_id === recordId && (String(c.comment_id) === cleanParentId || (c.replies || []).some(r => String(r.id) === cleanReplyId))) {
+                    if (c.platform) platName = c.platform.toUpperCase();
                     c.replies = (c.replies || []).filter(r => String(r.id) !== cleanReplyId);
                     const unreadReps = c.replies.filter(r => !r.is_own && r.is_read === false);
                     c.unread_reply_ids = unreadReps.map(r => String(r.id));
@@ -228,10 +236,10 @@
             if (selectedRecordId === recordId) {
                 syncOpenPostThreadLive(recordId);
             }
-            showToast("🗑️ Reply deleted from comment thread!");
+            showToast(`🗑️ Deleting reply on ${platName} & GlennBot...`);
 
             try {
-                await fetch('/api/comments/delete_reply', {
+                const res = await fetch('/api/comments/delete_reply', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -240,6 +248,10 @@
                         reply_id: cleanReplyId
                     })
                 });
+                const data = await res.json();
+                if (data && data.zernio_deleted) {
+                    showToast(`🗑️ Reply permanently deleted on ${platName} (via Zernio API) & GlennBot!`);
+                }
             } catch (e) {
                 console.error("Delete single comment reply error:", e);
             }

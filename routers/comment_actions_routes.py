@@ -1757,8 +1757,11 @@ def send_zernio_comment_moderation_action(
 
     p_enc = urllib.parse.quote(str(post_id).strip(), safe="")
     c_enc = urllib.parse.quote(str(comment_id).strip(), safe="")
+    clean_cid = str(comment_id).strip()
     if action_type == "delete":
-        url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}"
+        # Official Zernio API Delete Comment endpoint:
+        # DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId}
+        url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}"
     else:
         url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}/{action_type}"
     last_result: Dict[str, Any] = {"status_code": 500, "data": {}, "raw_text": "No External API key available."}
@@ -1768,14 +1771,29 @@ def send_zernio_comment_moderation_action(
         k = pair["api_key"]
         eff_acc_id = pair["account_id"]
         headers = get_zernio_headers(k)
-        params = {"accountId": eff_acc_id}
+        params: Dict[str, Any] = {"accountId": eff_acc_id}
         body: Dict[str, Any] = {"accountId": eff_acc_id}
-        if action_type == "hide":
+        if action_type == "delete":
+            params["commentId"] = clean_cid
+            body["commentId"] = clean_cid
+        elif action_type == "hide":
             body["hidden"] = bool(enable)
 
         try:
             if action_type == "delete":
                 resp = HTTP_SESSION.delete(url, params=params, headers=headers, json=body, timeout=15)
+                if resp.status_code in (400, 404, 405):
+                    # Secondary fallback to path-based DELETE /v1/inbox/comments/{postId}/{commentId}
+                    alt_url = f"{ZERNIO_BASE_URL}/inbox/comments/{p_enc}/{c_enc}"
+                    alt_resp = HTTP_SESSION.delete(
+                        alt_url,
+                        params={"accountId": eff_acc_id},
+                        headers=headers,
+                        json={"accountId": eff_acc_id},
+                        timeout=15
+                    )
+                    if alt_resp.status_code in (200, 201, 204):
+                        resp = alt_resp
             elif enable:
                 resp = HTTP_SESSION.post(url, params=params, headers=headers, json=body, timeout=20)
             else:
@@ -1890,6 +1908,7 @@ def _perform_comment_moderation(
         target_msg_clean = str(
             reply_message_hint
             or (target_sub_reply or {}).get("message")
+            or ((cached_comm or {}).get("message") if raw_target_cid == parent_cid else "")
             or ""
         ).strip().lower()
 
@@ -2216,12 +2235,26 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         if not rep_id:
             return {"status": "error", "message": "Missing reply_id."}
 
-        # Look up the reply's message BEFORE removing it from CLOUDINARY_COMMENTS_STORE so Zernio API delete can match it even if it had a local/z_rep ID
+        # 1. Look up the reply's message & metadata BEFORE removing it from CLOUDINARY_COMMENTS_STORE
         posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
         post_entry = posts_store.get(rec_id) or {}
         _, matched_sub_rep = find_parent_and_target_comment(post_entry, rep_id)
         rep_msg_hint = str((matched_sub_rep or {}).get("message") or "").strip()
 
+        # 2. Call Zernio API (DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId})
+        # while post_entry still has cached_comm (zernio_post_id, zernio_account_id, zernio_api_key)!
+        mod_res: Dict[str, Any] = {}
+        if rec_id:
+            mod_res = _perform_comment_moderation(
+                record_id=rec_id,
+                comment_id=rep_id,
+                action_type="delete",
+                enable=True,
+                parent_comment_id_hint=parent_cid,
+                reply_message_hint=rep_msg_hint
+            )
+
+        # 3. Remove from GlennBot's Cloudinary Store & mark deleted_comment_ids
         from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
         dismiss_or_clear_comment_notifications(
             DismissCommentsPayload(
@@ -2234,29 +2267,16 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
             )
         )
 
-        # Communicate with Zernio API (DELETE /v1/inbox/comments/{postId}/{commentId}) in background
-        if rec_id:
-            threading.Thread(
-                target=_perform_comment_moderation,
-                kwargs={
-                    "record_id": rec_id,
-                    "comment_id": rep_id,
-                    "action_type": "delete",
-                    "enable": True,
-                    "parent_comment_id_hint": parent_cid,
-                    "reply_message_hint": rep_msg_hint
-                },
-                daemon=True
-            ).start()
-
         return {
             "status": "success",
             "record_id": rec_id,
             "parent_comment_id": parent_cid,
-            "reply_id": rep_id
+            "reply_id": rep_id,
+            "zernio_deleted": bool(mod_res.get("status") == "success" and mod_res.get("zernio_synced"))
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 

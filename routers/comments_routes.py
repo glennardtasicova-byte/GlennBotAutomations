@@ -2466,6 +2466,7 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
         is_reply_only = bool(payload.is_reply)
         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
 
+        zernio_deleted_any = False
         if payload.clear_all:
             for p_key, p_entry in posts_store.items():
                 p_entry["notification_hidden"] = True
@@ -2475,6 +2476,24 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                         if rep.get("id"):
                             ids_to_mark_seen.add(str(rep["id"]))
         elif payload.single_comment and ids_to_mark_seen:
+            # If deleting a single parent comment (not already handled by /api/comments/delete_reply),
+            # call Zernio API DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId} first
+            # while post_entry still holds cached_comm metadata!
+            if not is_reply_only and rec_id:
+                try:
+                    from routers.comment_actions_routes import _perform_comment_moderation
+                    for target_cid in ids_to_mark_seen:
+                        mod_res = _perform_comment_moderation(
+                            record_id=rec_id,
+                            comment_id=target_cid,
+                            action_type="delete",
+                            enable=True
+                        )
+                        if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
+                            zernio_deleted_any = True
+                except Exception as del_err:
+                    print(f"[⚠️ ZERNIO SINGLE COMMENT DELETE WARNING]: {del_err}")
+
             norm_targets = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
             # Purge any buffered own replies matching deleted IDs
             for buf_key in list(RECENT_OWN_REPLIES_BUFFER.keys()):
@@ -2497,9 +2516,6 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                     for c_k, c_obj in c_map.items():
                         if not isinstance(c_obj, dict):
                             continue
-                        if parent_cid_hint and c_k != parent_cid_hint and _normalize_comment_key(c_k) != _normalize_comment_key(parent_cid_hint):
-                            # Still check all comments in the post in case parent_cid_hint differed
-                            pass
                         orig_reps = c_obj.get("replies") or []
                         if orig_reps:
                             filtered_reps = [
@@ -2539,7 +2555,11 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                         {"cid": cid, "rid": rec_id}
                     )
 
-        return {"status": "success", "dismissed_count": len(ids_to_mark_seen)}
+        return {
+            "status": "success",
+            "dismissed_count": len(ids_to_mark_seen),
+            "zernio_deleted": zernio_deleted_any
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
