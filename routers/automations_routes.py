@@ -2311,6 +2311,8 @@ async def api_v1_reply_to_comment(request: Request):
     comm_id = str(body.get("comment_id") or "").strip()
     file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
     media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
+    author_name_in = str(body.get("author_name") or body.get("commenter_name") or "").strip()
+    mention_author_in = bool(body.get("mention_author", True))
     default_msg = "Here is the file you requested:" if (file_id_in or media_url_in) else "Thank you for your comment here is our offers"
     msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or default_msg) or default_msg
     is_send_dm_route = str(request.url.path or "").endswith("/send-dm")
@@ -2356,7 +2358,17 @@ async def api_v1_reply_to_comment(request: Request):
             return None
         if send_dm:
             return send_dm_to_commenter(CommentSendDmPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
-        return reply_to_comment(CommentReplyPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
+        return reply_to_comment(
+            CommentReplyPayload(
+                record_id=resolved_rid,
+                comment_id=comm_id,
+                message=msg_text,
+                file_id=file_id_in,
+                media_url=media_url_in,
+                author_name=author_name_in,
+                mention_author=mention_author_in
+            )
+        )
 
     res = await run_in_threadpool(_execute_v1_comment_reply_or_dm)
     if res is None:

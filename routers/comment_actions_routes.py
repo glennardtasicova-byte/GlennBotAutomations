@@ -396,6 +396,8 @@ class CommentReplyPayload(BaseModel):
     message: str
     file_id: Optional[str] = ""
     media_url: Optional[str] = ""
+    author_name: Optional[str] = ""
+    mention_author: Optional[bool] = True
 
 def send_zernio_comment_reply(
     post_id: str,
@@ -584,29 +586,98 @@ def reply_to_comment(payload: CommentReplyPayload):
             if isinstance(r, dict) and _is_real_platform_cid(str(r.get("id") or ""))
         ]
 
-        # Build Tier 1 (active sub-thread reply IDs: latest reply first, then its sub-thread parent / Page's own reply)
-        # and Tier 2 (root comment fallback). This ensures follow-up replies ALWAYS continue the active conversation thread!
-        subthread_raw_cids: List[str] = []
+        # Automatically resolve and @mention the commenter's name so they are notified of the reply
+        resolved_commenter_name = str(payload.author_name or "").strip()
+        if not resolved_commenter_name and isinstance(target_sub_reply, dict) and not target_sub_reply.get("is_own"):
+            resolved_commenter_name = str(target_sub_reply.get("author_name") or "").strip()
+        if not resolved_commenter_name and raw_target_cid:
+            for r_item in reversed(all_thread_reps):
+                if isinstance(r_item, dict) and not r_item.get("is_own"):
+                    r_id_str = str(r_item.get("id") or "").strip()
+                    if r_id_str == raw_target_cid or _normalize_comment_key(r_id_str) == norm_raw_target:
+                        resolved_commenter_name = str(r_item.get("author_name") or "").strip()
+                        break
+        if not resolved_commenter_name:
+            base_comm_obj = parent_comm or cached_comm or {}
+            if not base_comm_obj.get("is_own_comment") and not base_comm_obj.get("is_own"):
+                resolved_commenter_name = str(base_comm_obj.get("author_name") or "").strip()
+        if not resolved_commenter_name:
+            for r_item in reversed(all_thread_reps):
+                if isinstance(r_item, dict) and not r_item.get("is_own"):
+                    cand_nm = str(r_item.get("author_name") or "").strip()
+                    if cand_nm:
+                        resolved_commenter_name = cand_nm
+                        break
 
-        def _add_subthread_cand(c_val: str):
+        generic_author_placeholders = {
+            "", "user", "commenter", "unknown", "facebook user",
+            "instagram user", "tiktok user", "youtube user", "visitor"
+        }
+        clean_author_tag = resolved_commenter_name.lstrip("@").strip()
+        if platform in ("tiktok", "instagram") and "(@" in clean_author_tag and ")" in clean_author_tag:
+            m_hdl = re.search(r"\(@([^)]+)\)", clean_author_tag)
+            if m_hdl and m_hdl.group(1).strip():
+                clean_author_tag = m_hdl.group(1).strip().lstrip("@")
+        else:
+            clean_author_tag = re.sub(r"\s*\(@[^)]+\)", "", clean_author_tag).strip()
+
+        if (
+            payload.mention_author is not False
+            and clean_author_tag
+            and clean_author_tag.lower() not in generic_author_placeholders
+            and clean_author_tag.lower() != acc_name.lower()
+        ):
+            full_mention_str = f"@{clean_author_tag}"
+            reply_low = reply_msg.lower()
+            if full_mention_str.lower() not in reply_low:
+                first_name_tok = clean_author_tag.split()[0] if clean_author_tag.split() else ""
+                if first_name_tok and len(first_name_tok) >= 2 and re.match(rf"^@{re.escape(first_name_tok)}\b", reply_msg, flags=re.I):
+                    reply_msg = re.sub(rf"^@{re.escape(first_name_tok)}\b", full_mention_str, reply_msg, count=1, flags=re.I)
+                else:
+                    reply_msg = f"{full_mention_str} {reply_msg}".strip()
+                payload.message = reply_msg
+
+        # Build Tier 1 (Commenter-owned comment IDs: target commenter reply -> root commenter comment)
+        # and Tier 2 (Page's own reply fallback ONLY if all commenter-owned IDs fail).
+        # Replying to a Page's own comment ID on Facebook suppresses commenter notifications,
+        # so commenter-owned IDs MUST always be tried first!
+        own_reply_ids_set = {
+            str(r.get("id") or "").strip()
+            for r in real_thread_reps
+            if isinstance(r, dict) and r.get("is_own")
+        }
+        commenter_cids_raw: List[str] = []
+        own_fallback_cids_raw: List[str] = []
+
+        def _add_commenter_cand(c_val: str):
             c_clean = str(c_val or "").strip()
-            if _is_real_platform_cid(c_clean) and c_clean != parent_cid and c_clean not in subthread_raw_cids:
-                subthread_raw_cids.append(c_clean)
+            if not _is_real_platform_cid(c_clean):
+                return
+            if c_clean in own_reply_ids_set:
+                if c_clean not in own_fallback_cids_raw:
+                    own_fallback_cids_raw.append(c_clean)
+            elif c_clean not in commenter_cids_raw:
+                commenter_cids_raw.append(c_clean)
 
         if target_sub_reply is not None or (raw_target_cid and raw_target_cid != parent_cid):
-            _add_subthread_cand(raw_target_cid)
+            _add_commenter_cand(raw_target_cid)
             if isinstance(target_sub_reply, dict):
-                _add_subthread_cand(str(target_sub_reply.get("replied_to_id") or ""))
+                _add_commenter_cand(str(target_sub_reply.get("replied_to_id") or ""))
 
         if real_thread_reps:
-            latest_rep_obj = real_thread_reps[-1]
-            _add_subthread_cand(str(latest_rep_obj.get("id") or ""))
-            _add_subthread_cand(str(latest_rep_obj.get("replied_to_id") or ""))
+            for r_item in reversed(real_thread_reps):
+                if not r_item.get("is_own"):
+                    _add_commenter_cand(str(r_item.get("id") or ""))
+
+        _add_commenter_cand(parent_cid)
+        _add_commenter_cand(raw_target_cid)
+
+        if real_thread_reps:
             for r_item in reversed(real_thread_reps):
                 if r_item.get("is_own"):
-                    _add_subthread_cand(str(r_item.get("id") or ""))
-            for r_item in reversed(real_thread_reps):
-                _add_subthread_cand(str(r_item.get("id") or ""))
+                    c_own = str(r_item.get("id") or "").strip()
+                    if _is_real_platform_cid(c_own) and c_own not in own_fallback_cids_raw:
+                        own_fallback_cids_raw.append(c_own)
 
         def _clean_cid_list(raw_list_in: List[str]) -> List[str]:
             out: List[str] = []
@@ -616,13 +687,13 @@ def reply_to_comment(payload: CommentReplyPayload):
                     out.append(clean_c)
             return out
 
-        subthread_priority_cids = _clean_cid_list(subthread_raw_cids)
-        root_fallback_cids = [
-            c for c in _clean_cid_list([parent_cid, raw_target_cid])
-            if c not in subthread_priority_cids
+        tier1_commenter_cids = _clean_cid_list(commenter_cids_raw)
+        tier2_own_fallback_cids = [
+            c for c in _clean_cid_list(own_fallback_cids_raw)
+            if c not in tier1_commenter_cids
         ]
-        candidate_comment_ids = subthread_priority_cids + root_fallback_cids
-        priority_cid_tiers = [t for t in (subthread_priority_cids, root_fallback_cids) if t]
+        candidate_comment_ids = tier1_commenter_cids + tier2_own_fallback_cids
+        priority_cid_tiers = [t for t in (tier1_commenter_cids, tier2_own_fallback_cids) if t]
 
         permalink_str = str(r_dict.get("permalink_url") or z_info.get("permalink_url") or "").strip()
         fbid_from_link = ""
