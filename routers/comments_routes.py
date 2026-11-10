@@ -409,78 +409,72 @@ def resolve_zernio_post_identifiers(r_dict: Dict[str, Any], force: bool = False,
         if raw_z_cap:
             discovered_caption = raw_z_cap
 
-    need_caption_heal = (not caption or caption in ("previous post", "social media post")) and not discovered_caption
-    force_flags_to_try = [force] if force or not need_caption_heal else [False, True]
+    for cp in get_zernio_commented_posts_list(force=force):
+        if not isinstance(cp, dict):
+            continue
+        cp_plat = (cp.get("platform") or "").strip().lower()
+        if cp_plat and cp_plat != platform:
+            continue
+        cp_id = str(cp.get("id") or cp.get("_id") or cp.get("postId") or "")
+        cp_plat_id = str(cp.get("platformPostId") or cp.get("videoId") or "")
+        raw_cp_content = str(cp.get("content") or cp.get("caption") or cp.get("message") or cp.get("text") or "").strip()
+        cp_content = _strip_invisible_guard_chars(raw_cp_content).lower()
+        cp_acc = cp.get("accountId")
+        if isinstance(cp_acc, dict):
+            cp_acc = cp_acc.get("_id") or cp_acc.get("id")
+        cp_acc_str = str(cp_acc or "").strip()
+        cp_key_str = str(cp.get("_zernio_api_key") or "").strip()
 
-    for cur_force in force_flags_to_try:
-        for cp in get_zernio_commented_posts_list(force=cur_force):
-            if not isinstance(cp, dict):
-                continue
-            cp_plat = (cp.get("platform") or "").strip().lower()
-            if cp_plat and cp_plat != platform:
-                continue
-            cp_id = str(cp.get("id") or cp.get("_id") or cp.get("postId") or "")
-            cp_plat_id = str(cp.get("platformPostId") or cp.get("videoId") or "")
-            raw_cp_content = str(cp.get("content") or cp.get("caption") or cp.get("message") or cp.get("text") or "").strip()
-            cp_content = _strip_invisible_guard_chars(raw_cp_content).lower()
-            cp_acc = cp.get("accountId")
-            if isinstance(cp_acc, dict):
-                cp_acc = cp_acc.get("_id") or cp_acc.get("id")
-            cp_acc_str = str(cp_acc or "").strip()
-            cp_key_str = str(cp.get("_zernio_api_key") or "").strip()
+        cp_ids = {i for i in (cp_id, cp_plat_id) if i}
+        if cp_plat_id and "_" in cp_plat_id:
+            cp_ids.add(cp_plat_id.split("_")[-1])
+        if cp_id and "_" in cp_id:
+            cp_ids.add(cp_id.split("_")[-1])
 
-            cp_ids = {i for i in (cp_id, cp_plat_id) if i}
-            if cp_plat_id and "_" in cp_plat_id:
-                cp_ids.add(cp_plat_id.split("_")[-1])
-            if cp_id and "_" in cp_id:
-                cp_ids.add(cp_id.split("_")[-1])
+        if claimed_ids and bool(cp_ids & claimed_ids):
+            continue
 
-            if claimed_ids and bool(cp_ids & claimed_ids):
-                continue
+        id_matched = bool(known_ids & cp_ids)
+        has_conflicting_zernio_id = bool(
+            z_post_id and cp_id and len(z_post_id) == 24 and len(cp_id) == 24 and z_post_id != cp_id
+        )
 
-            id_matched = bool(known_ids & cp_ids)
-            has_conflicting_zernio_id = bool(
-                z_post_id and cp_id and len(z_post_id) == 24 and len(cp_id) == 24 and z_post_id != cp_id
-            )
+        cp_belongs_to_page = bool(
+            (cp_acc_str and cp_acc_str in valid_page_ids)
+            or (not cp_acc_str and expected_page_key and cp_key_str == expected_page_key)
+        )
 
-            cp_belongs_to_page = bool(
-                (cp_acc_str and cp_acc_str in valid_page_ids)
-                or (not cp_acc_str and expected_page_key and cp_key_str == expected_page_key)
-            )
+        caption_matched = bool(
+            not id_matched
+            and not has_conflicting_zernio_id
+            and not plat_post_id
+            and caption
+            and caption not in ("previous post", "social media post")
+            and cp_content
+            and (cp_content == caption or cp_content.splitlines()[0].strip() == caption.splitlines()[0].strip())
+            and cp_belongs_to_page
+        )
 
-            caption_matched = bool(
-                not id_matched
-                and not has_conflicting_zernio_id
-                and not plat_post_id
-                and caption
-                and caption not in ("previous post", "social media post")
-                and cp_content
-                and (cp_content == caption or cp_content.splitlines()[0].strip() == caption.splitlines()[0].strip())
-                and cp_belongs_to_page
-            )
-
-            if id_matched or caption_matched:
-                if cp_key_str and (not matched_api_key) and (not valid_page_ids or not cp_acc_str or cp_acc_str in valid_page_ids):
-                    matched_api_key = cp_key_str
-                if cp_id:
-                    inbox_post_id = cp_id
-                if cp_plat_id:
-                    inbox_plat_id = cp_plat_id
-                    if not plat_post_id:
-                        plat_post_id = cp_plat_id
-                if cp_acc_str and (not valid_page_ids or cp_acc_str in valid_page_ids):
-                    z_acc_id = cp_acc_str
-                if not permalink and (cp.get("platformPostUrl") or cp.get("permalink")):
-                    permalink = str(cp.get("platformPostUrl") or cp.get("permalink"))
-                if raw_cp_content and not discovered_caption:
-                    discovered_caption = raw_cp_content
-                raw_cp_pic = str(cp.get("picture") or cp.get("imageUrl") or cp.get("thumbnailUrl") or "").strip()
-                if raw_cp_pic and not discovered_preview_url:
-                    discovered_preview_url = raw_cp_pic
-                if claimed_ids is not None:
-                    claimed_ids.update(cp_ids)
-                break
-        if inbox_post_id or discovered_caption:
+        if id_matched or caption_matched:
+            if cp_key_str and (not matched_api_key) and (not valid_page_ids or not cp_acc_str or cp_acc_str in valid_page_ids):
+                matched_api_key = cp_key_str
+            if cp_id:
+                inbox_post_id = cp_id
+            if cp_plat_id:
+                inbox_plat_id = cp_plat_id
+                if not plat_post_id:
+                    plat_post_id = cp_plat_id
+            if cp_acc_str and (not valid_page_ids or cp_acc_str in valid_page_ids):
+                z_acc_id = cp_acc_str
+            if not permalink and (cp.get("platformPostUrl") or cp.get("permalink")):
+                permalink = str(cp.get("platformPostUrl") or cp.get("permalink"))
+            if raw_cp_content and not discovered_caption:
+                discovered_caption = raw_cp_content
+            raw_cp_pic = str(cp.get("picture") or cp.get("imageUrl") or cp.get("thumbnailUrl") or "").strip()
+            if raw_cp_pic and not discovered_preview_url:
+                discovered_preview_url = raw_cp_pic
+            if claimed_ids is not None:
+                claimed_ids.update(cp_ids)
             break
 
     if not z_post_id and ext_id and ext_id != "OK":
@@ -2564,7 +2558,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                         account_name=cp_acc_name,
                         caption=str(cp.get("content") or cp.get("caption") or ""),
                         permalink=str(cp.get("permalink") or cp.get("platformPostUrl") or ""),
-                        preview_url=str(cp.get("imageUrl") or cp.get("thumbnailUrl") or ""),
+                        preview_url=str(cp.get("picture") or cp.get("imageUrl") or cp.get("thumbnailUrl") or ""),
                         connected_items=connected_items
                     )
         except Exception:
@@ -2621,6 +2615,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
         resolved_plans = []
         for vd in valid_post_dicts:
             z_info = resolve_zernio_post_identifiers(vd, force=False, claimed_ids=claimed_ids)
+            _heal_external_post_metadata_from_z_info(vd, z_info)
             resolved_plans.append((vd, z_info))
 
         def _fetch_for_plan(plan_tuple):
@@ -2634,7 +2629,6 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
             z_acc_id = z_info["zernio_account_id"]
             ext_id = extract_external_post_id(r_dict)
 
-            _heal_external_post_metadata_from_z_info(r_dict, z_info)
             discovered_plat_id = z_info["platform_post_id"] or z_info.get("inbox_plat_id") or z_info.get("inbox_post_id")
             status_msg = r_dict.get("status_message") or ""
             if discovered_plat_id and "Platform ID:" not in status_msg:

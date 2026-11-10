@@ -902,17 +902,13 @@
             selectedCommentId = activeTargetId;
 
             let postDetails = livePostDetailsCache[recordId];
-            const isCachedCaptionPlaceholder = postDetails && (!postDetails.caption || postDetails.caption === 'Previous Post' || postDetails.caption === 'Social Media Post');
-
-            if (!postDetails || fetchFreshMedia || isCachedCaptionPlaceholder) {
-                if (!postDetails || fetchFreshMedia) {
-                    panel.innerHTML = `
-                        <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
-                            <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
-                            <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${activeComment.platform.toUpperCase()}...</p>
-                        </div>
-                    `;
-                }
+            if (!postDetails || fetchFreshMedia) {
+                panel.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
+                        <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
+                        <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${activeComment.platform.toUpperCase()}...</p>
+                    </div>
+                `;
                 try {
                     let res = await fetch(`/api/posts/${recordId}/live_details`);
                     let data = await res.json();

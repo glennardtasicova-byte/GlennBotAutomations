@@ -688,35 +688,23 @@ def ensure_external_post_record_in_db(
                     final_preview = existing_prev
 
             if (not final_caption or final_caption in ("Previous Post", "Social Media Post") or not final_preview or not final_permalink) and target_pid:
-                _z_commented_fn = _resolve_service_callable("get_zernio_commented_posts_list")
-                if _z_commented_fn:
-                    for _force_cp in (False, True):
-                        try:
-                            _cp_list = _z_commented_fn(force=_force_cp) or []
-                        except Exception:
-                            _cp_list = []
-                        _matched_cp = None
-                        for _cp in _cp_list:
-                            if not isinstance(_cp, dict):
-                                continue
-                            _cp_id = str(_cp.get("platformPostId") or _cp.get("id") or _cp.get("_id") or "").strip()
-                            _cp_suf = _cp_id.split("_")[-1].strip() if "_" in _cp_id else _cp_id
-                            if _cp_id and (_cp_id in cand_tokens or (_cp_suf and _cp_suf in cand_tokens)):
-                                _matched_cp = _cp
-                                break
-                        if _matched_cp:
-                            _cp_cap = str(_matched_cp.get("content") or _matched_cp.get("caption") or "").strip()
-                            _cp_plink = str(_matched_cp.get("permalink") or _matched_cp.get("platformPostUrl") or "").strip()
-                            _cp_pic = str(_matched_cp.get("picture") or _matched_cp.get("imageUrl") or _matched_cp.get("thumbnailUrl") or "").strip()
-                            if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and _cp_cap:
-                                final_caption = _cp_cap
-                            if not final_preview and _cp_pic:
-                                final_preview = _cp_pic
-                            if (not final_permalink or ("_" in final_permalink and "/posts/" not in final_permalink)) and _cp_plink:
-                                final_permalink = _cp_plink
-                            break
-                        if final_caption and final_caption not in ("Previous Post", "Social Media Post"):
-                            break
+                _cp_list = list(ZERNIO_COMMENTED_POSTS_CACHE.get("items") or [])
+                for _cp in _cp_list:
+                    if not isinstance(_cp, dict):
+                        continue
+                    _cp_id = str(_cp.get("platformPostId") or _cp.get("id") or _cp.get("_id") or "").strip()
+                    _cp_suf = _cp_id.split("_")[-1].strip() if "_" in _cp_id else _cp_id
+                    if _cp_id and (_cp_id in cand_tokens or (_cp_suf and _cp_suf in cand_tokens)):
+                        _cp_cap = str(_cp.get("content") or _cp.get("caption") or "").strip()
+                        _cp_plink = str(_cp.get("permalink") or _cp.get("platformPostUrl") or "").strip()
+                        _cp_pic = str(_cp.get("picture") or _cp.get("imageUrl") or _cp.get("thumbnailUrl") or "").strip()
+                        if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and _cp_cap:
+                            final_caption = _cp_cap
+                        if not final_preview and _cp_pic:
+                            final_preview = _cp_pic
+                        if (not final_permalink or ("_" in final_permalink and "/posts/" not in final_permalink)) and _cp_plink:
+                            final_permalink = _cp_plink
+                        break
 
             if plat_clean == "tiktok" and target_pid.isdigit() and (not final_caption or final_caption == "Previous Post" or not final_preview):
                 _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
