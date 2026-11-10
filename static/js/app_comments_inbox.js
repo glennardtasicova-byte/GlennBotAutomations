@@ -137,10 +137,34 @@
         }
 
         // --- DELETE / CLEAR COMMENT NOTIFICATIONS FUNCTIONS ---
+        const deletedCommentIdsLocal = new Set();
+
+        function _markCommentIdDeletedLocally(rawId) {
+            const s = String(rawId || '').trim();
+            if (!s) return;
+            deletedCommentIdsLocal.add(s);
+            if (s.includes('_')) {
+                deletedCommentIdsLocal.add(s.split('_').pop());
+            }
+        }
+
+        function _isCommentIdDeletedLocally(rawId) {
+            const s = String(rawId || '').trim();
+            if (!s) return false;
+            if (deletedCommentIdsLocal.has(s)) return true;
+            if (s.includes('_') && deletedCommentIdsLocal.has(s.split('_').pop())) return true;
+            return false;
+        }
+
         async function deletePostNotificationCard(recordId, event) {
             if (event) event.stopPropagation();
             const postComms = commentsList.filter(c => c.record_id === recordId);
             const cids = postComms.map(c => c.comment_id);
+            const platName = (postComms[0]?.platform || 'social media').toUpperCase();
+            postComms.forEach(c => {
+                _markCommentIdDeletedLocally(c.comment_id);
+                (c.replies || []).forEach(r => _markCommentIdDeletedLocally(r.id));
+            });
 
             commentsList = commentsList.filter(c => c.record_id !== recordId);
             if (selectedRecordId === recordId) {
@@ -150,14 +174,18 @@
             }
             updateCommentsBadges();
             renderCommentsList();
-            showToast("🗑️ Notification removed from Cloudinary (Comment history preserved for future comments)!");
+            showToast(`🗑️ Deleting comment thread from Cloudinary & ${platName}...`);
 
             try {
-                await fetch('/api/comments/dismiss', {
+                const res = await fetch('/api/comments/dismiss', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ record_id: recordId, comment_ids: cids, clear_all: false, single_comment: false })
+                    body: JSON.stringify({ record_id: recordId, comment_ids: cids, clear_all: false, single_comment: true })
                 });
+                const data = await res.json();
+                if (data && data.status === 'success') {
+                    showToast(`🗑️ Comment thread deleted from Cloudinary & ${platName}!`);
+                }
             } catch (e) {
                 console.error("Delete notification error:", e);
             }
@@ -165,9 +193,13 @@
 
         async function deleteSingleCommentNotification(recordId, commentId, event) {
             if (event) event.stopPropagation();
-            const targetComm = commentsList.find(c => c.comment_id === commentId);
+            const targetComm = commentsList.find(c => String(c.comment_id) === String(commentId));
             const platName = (targetComm?.platform || 'social media').toUpperCase();
-            commentsList = commentsList.filter(c => c.comment_id !== commentId);
+            _markCommentIdDeletedLocally(commentId);
+            if (targetComm && Array.isArray(targetComm.replies)) {
+                targetComm.replies.forEach(r => _markCommentIdDeletedLocally(r.id));
+            }
+            commentsList = commentsList.filter(c => String(c.comment_id) !== String(commentId));
             const remainingForPost = commentsList.filter(c => c.record_id === recordId);
             if (remainingForPost.length === 0) {
                 if (selectedRecordId === recordId) {
@@ -176,14 +208,14 @@
                     resetCommentDetailPanel();
                 }
             } else {
-                if (selectedCommentId === commentId) {
+                if (String(selectedCommentId) === String(commentId)) {
                     selectedCommentId = remainingForPost[0].comment_id;
                 }
                 syncOpenPostThreadLive(recordId);
             }
             updateCommentsBadges();
             renderCommentsList();
-            showToast(`🗑️ Deleting comment on ${platName} & GlennBot...`);
+            showToast(`🗑️ Deleting comment from Cloudinary & ${platName}...`);
 
             try {
                 const res = await fetch('/api/comments/dismiss', {
@@ -192,8 +224,8 @@
                     body: JSON.stringify({ record_id: recordId, comment_ids: [commentId], clear_all: false, single_comment: true })
                 });
                 const data = await res.json();
-                if (data && data.zernio_deleted) {
-                    showToast(`🗑️ Comment permanently deleted on ${platName} (via Zernio API) & GlennBot!`);
+                if (data && data.status === 'success') {
+                    showToast(`🗑️ Comment deleted from Cloudinary & ${platName}!`);
                 }
             } catch (e) {
                 console.error("Delete single comment error:", e);
@@ -205,6 +237,7 @@
             const cleanParentId = String(parentCommentId || '');
             const cleanReplyId = String(replyId || '');
             let platName = 'SOCIAL MEDIA';
+            _markCommentIdDeletedLocally(cleanReplyId);
 
             if (pendingOptimisticReplies[cleanParentId]) {
                 pendingOptimisticReplies[cleanParentId] = pendingOptimisticReplies[cleanParentId].filter(
@@ -236,7 +269,7 @@
             if (selectedRecordId === recordId) {
                 syncOpenPostThreadLive(recordId);
             }
-            showToast(`🗑️ Deleting reply on ${platName} & GlennBot...`);
+            showToast(`🗑️ Deleting reply from Cloudinary & ${platName}...`);
 
             try {
                 const res = await fetch('/api/comments/delete_reply', {
@@ -249,8 +282,8 @@
                     })
                 });
                 const data = await res.json();
-                if (data && data.zernio_deleted) {
-                    showToast(`🗑️ Reply permanently deleted on ${platName} (via Zernio API) & GlennBot!`);
+                if (data && data.status === 'success') {
+                    showToast(`🗑️ Reply deleted from Cloudinary & ${platName}!`);
                 }
             } catch (e) {
                 console.error("Delete single comment reply error:", e);
@@ -300,10 +333,11 @@
                 let res = await _gbFetchWithTimeout(url, {}, showFeedback ? 20000 : 8000);
                 let data = await res.json();
                 if (data.status === 'success') {
-                    const incoming = data.comments || [];
+                    const incoming = (data.comments || []).filter(c => !_isCommentIdDeletedLocally(c.comment_id));
 
                     incoming.forEach(c => {
-                        const pendingList = pendingOptimisticReplies[c.comment_id] || [];
+                        c.replies = (c.replies || []).filter(r => !_isCommentIdDeletedLocally(r.id));
+                        const pendingList = (pendingOptimisticReplies[c.comment_id] || []).filter(r => !_isCommentIdDeletedLocally(r.id));
                         if (pendingList.length > 0) {
                             c.replies = c.replies || [];
                             pendingList.forEach(optRep => {

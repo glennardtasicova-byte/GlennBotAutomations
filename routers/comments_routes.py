@@ -1977,7 +1977,8 @@ def update_cloudinary_store_for_post(
     r_dict: Dict[str, Any],
     fetched_comments: List[Dict[str, Any]],
     unhide_if_new: bool = True,
-    force_unhide: bool = False
+    force_unhide: bool = False,
+    reconcile_remote_deletions: bool = False
 ) -> bool:
     if not CLOUDINARY_COMMENTS_STORE.get("loaded") and "load_comments_store_from_cloudinary" in globals():
         try:
@@ -2017,20 +2018,57 @@ def update_cloudinary_store_for_post(
             }
             posts_store[record_id] = post_entry
 
-        deleted_cids = set(str(x) for x in (post_entry.get("deleted_comment_ids") or []))
+        raw_del_list = [str(x) for x in (post_entry.get("deleted_comment_ids") or []) if x]
+        deleted_cids = set(raw_del_list) | {_normalize_comment_key(x) for x in raw_del_list if x}
         existing_comments_map: Dict[str, Dict[str, Any]] = post_entry.get("comments") or {}
         generic_names = {"", "User", "TikTok User", "Facebook User", "Instagram User", "YouTube User"}
 
-        for old_cid, old_c in list(existing_comments_map.items()):
-            if old_cid in deleted_cids or not is_comment_timestamp_valid_for_post(old_c.get("created_iso", ""), sched_dt, is_external_post=is_ext_post) or old_c.get("is_own_comment"):
-                existing_comments_map.pop(old_cid, None)
-
         has_brand_new_activity = False
         changed = False
+        now_sync_ts = time.time()
+
+        live_cids = {
+            str(fc.get("comment_id") or "").strip()
+            for fc in (fetched_comments or [])
+            if isinstance(fc, dict) and fc.get("comment_id")
+        }
+        live_norm_cids = {_normalize_comment_key(c) for c in live_cids if c}
+
+        for old_cid, old_c in list(existing_comments_map.items()):
+            norm_old_cid = _normalize_comment_key(old_cid)
+            obj_old_cid = str((old_c or {}).get("comment_id") or "").strip() if isinstance(old_c, dict) else ""
+            if (
+                old_cid in deleted_cids
+                or norm_old_cid in deleted_cids
+                or (obj_old_cid and (obj_old_cid in deleted_cids or _normalize_comment_key(obj_old_cid) in deleted_cids))
+                or not isinstance(old_c, dict)
+                or not is_comment_timestamp_valid_for_post(old_c.get("created_iso", ""), sched_dt, is_external_post=is_ext_post)
+                or old_c.get("is_own_comment")
+            ):
+                existing_comments_map.pop(old_cid, None)
+                changed = True
+                continue
+
+            # If Zernio returned a confirmed 200 OK live comments list for this post (reconcile_remote_deletions=True)
+            # and this comment is no longer on the post (e.g. deleted by the commenter on Facebook/Instagram/YouTube/TikTok),
+            # automatically remove it from Cloudinary too (unless it was just saved by webhook < 30s ago).
+            if reconcile_remote_deletions:
+                wh_saved_ts = float(old_c.get("_webhook_saved_ts") or 0.0)
+                recently_saved_via_wh = (now_sync_ts - wh_saved_ts) < 30.0 and not force_unhide
+                if (
+                    not recently_saved_via_wh
+                    and old_cid not in live_cids
+                    and norm_old_cid not in live_norm_cids
+                    and (not obj_old_cid or (obj_old_cid not in live_cids and _normalize_comment_key(obj_old_cid) not in live_norm_cids))
+                ):
+                    existing_comments_map.pop(old_cid, None)
+                    changed = True
+                    print(f"[🗑️ AUTO-SYNC REMOTE DELETION] Removed comment {old_cid} on '{post_entry.get('account_name')}' from Cloudinary (deleted on {post_entry.get('platform', 'platform').upper()}).")
+                    continue
 
         for fc in fetched_comments:
             cid = str(fc.get("comment_id") or "").strip()
-            if not cid or cid in deleted_cids or fc.get("is_own_comment"):
+            if not cid or cid in deleted_cids or _normalize_comment_key(cid) in deleted_cids or fc.get("is_own_comment"):
                 continue
             if not is_comment_timestamp_valid_for_post(fc.get("created_iso", ""), sched_dt, is_external_post=is_ext_post):
                 continue
@@ -2084,17 +2122,37 @@ def update_cloudinary_store_for_post(
                 elif prev_c.get("author_name") in generic_names and fc.get("author_name") not in generic_names:
                     changed = True
 
-                prev_reps = [
-                    r for r in (prev_c.get("replies") or [])
-                    if str(r.get("id") or "") not in deleted_cids
-                    and _normalize_comment_key(str(r.get("id") or "")) not in deleted_cids
-                ]
-                prev_rep_map = {str(r.get("id")): r for r in prev_reps if r.get("id")}
                 new_reps = [
                     r for r in (fc.get("replies") or [])
                     if str(r.get("id") or "") not in deleted_cids
                     and _normalize_comment_key(str(r.get("id") or "")) not in deleted_cids
                 ]
+                live_rep_ids = {str(nr.get("id") or "").strip() for nr in new_reps if nr.get("id")}
+                live_norm_rep_ids = {_normalize_comment_key(rid) for rid in live_rep_ids if rid}
+
+                prev_reps = []
+                for r in (prev_c.get("replies") or []):
+                    r_id_str = str(r.get("id") or "").strip()
+                    norm_r_id_str = _normalize_comment_key(r_id_str)
+                    if not r_id_str or r_id_str in deleted_cids or norm_r_id_str in deleted_cids:
+                        changed = True
+                        continue
+                    if reconcile_remote_deletions:
+                        is_local_placeholder = r_id_str.startswith(("local_", "opt_", "z_rep_"))
+                        r_wh_ts = float(r.get("_webhook_saved_ts") or 0.0)
+                        recently_wh_reply = (now_sync_ts - r_wh_ts) < 30.0 and not force_unhide
+                        if (
+                            not is_local_placeholder
+                            and not recently_wh_reply
+                            and r_id_str not in live_rep_ids
+                            and norm_r_id_str not in live_norm_rep_ids
+                        ):
+                            changed = True
+                            print(f"[🗑️ AUTO-SYNC REMOTE REPLY DELETION] Removed reply {r_id_str} under {cid} from Cloudinary (deleted on platform).")
+                            continue
+                    prev_reps.append(r)
+
+                prev_rep_map = {str(r.get("id")): r for r in prev_reps if r.get("id")}
 
                 merged_reps = list(prev_reps)
                 for nr in new_reps:
@@ -2219,7 +2277,12 @@ def sync_single_post_to_cloudinary(r_dict: Dict[str, Any], force_unhide: bool = 
         z_acc_id = z_info["zernio_account_id"]
         ext_id = extract_external_post_id(r_dict)
 
-        cand_ids = [
+        stored_z_pids = [
+            str(c_v.get("zernio_post_id") or "").strip()
+            for c_v in (p_entry.get("comments") or {}).values()
+            if isinstance(c_v, dict) and c_v.get("zernio_post_id")
+        ]
+        cand_ids = stored_z_pids + [
             z_info.get("inbox_post_id"),
             z_info.get("inbox_plat_id"),
             z_info["platform_post_id"],
@@ -2237,7 +2300,13 @@ def sync_single_post_to_cloudinary(r_dict: Dict[str, Any], force_unhide: bool = 
         )
         changed = False
         if comms is not None:
-            if update_cloudinary_store_for_post(r_dict, comms, unhide_if_new=True, force_unhide=force_unhide):
+            if update_cloudinary_store_for_post(
+                r_dict,
+                comms,
+                unhide_if_new=True,
+                force_unhide=force_unhide,
+                reconcile_remote_deletions=True
+            ):
                 changed = True
         if p_entry and repair_unknown_authors_in_post_entry(p_entry, r_dict):
             changed = True
@@ -2378,6 +2447,34 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
         any_store_change = False
 
+        # Ensure any post in CLOUDINARY_COMMENTS_STORE that currently holds active comments is also synced & reconciled
+        seen_valid_ids = {str(vd.get("id") or "") for vd in valid_post_dicts}
+        extra_store_ids = [
+            str(s_rid)
+            for s_rid, s_entry in list(posts_store.items())
+            if str(s_rid) not in seen_valid_ids and isinstance(s_entry, dict) and bool(s_entry.get("comments"))
+        ]
+        if extra_store_ids:
+            try:
+                with db_engine.connect() as conn:
+                    extra_rows = conn.execute(
+                        text("""
+                            SELECT id, platform, page_id, account_name, post_type, caption,
+                                   media_preview_url, scheduled_time, status, status_message,
+                                   external_post_id, permalink_url
+                            FROM glennbot_scheduled_posts
+                            WHERE id = ANY(:ids)
+                        """),
+                        {"ids": extra_store_ids}
+                    ).mappings().all()
+                for er in extra_rows:
+                    erd = dict(er)
+                    if is_post_account_connected(erd, connected_items):
+                        valid_post_dicts.append(erd)
+                        seen_valid_ids.add(str(erd["id"]))
+            except Exception:
+                pass
+
         claimed_ids: set = set()
         resolved_plans = []
         for vd in valid_post_dicts:
@@ -2407,7 +2504,12 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                     permalink_url=z_info["permalink_url"] or r_dict.get("permalink_url") or None
                 )
 
-            cand_ids = [
+            stored_z_pids = [
+                str(c_v.get("zernio_post_id") or "").strip()
+                for c_v in (p_entry.get("comments") or {}).values()
+                if isinstance(c_v, dict) and c_v.get("zernio_post_id")
+            ]
+            cand_ids = stored_z_pids + [
                 z_info.get("inbox_post_id"),
                 z_info.get("inbox_plat_id"),
                 z_info["platform_post_id"],
@@ -2423,7 +2525,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                 clean_user=clean_user,
                 preferred_api_key=z_info.get("zernio_api_key", "")
             )
-            return r_dict, comms or []
+            return r_dict, comms
 
         if resolved_plans:
             max_workers = min(6, len(resolved_plans))
@@ -2432,8 +2534,14 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                 for fut in as_completed(futures):
                     try:
                         r_dict, p_comms = fut.result()
-                        if update_cloudinary_store_for_post(r_dict, p_comms, unhide_if_new=True):
-                            any_store_change = True
+                        if p_comms is not None:
+                            if update_cloudinary_store_for_post(
+                                r_dict,
+                                p_comms,
+                                unhide_if_new=True,
+                                reconcile_remote_deletions=True
+                            ):
+                                any_store_change = True
                     except Exception as e:
                         print(f"[⚠️ POST SYNC WARNING]: {e}")
 
@@ -2456,6 +2564,7 @@ class DismissCommentsPayload(BaseModel):
     clear_all: Optional[bool] = False
     single_comment: Optional[bool] = False
     is_reply: Optional[bool] = False
+    skip_zernio_delete: Optional[bool] = False
 
 @router.post("/api/comments/dismiss")
 def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
@@ -2464,100 +2573,148 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
         rec_id = (payload.record_id or "").strip()
         parent_cid_hint = (payload.parent_comment_id or "").strip()
         is_reply_only = bool(payload.is_reply)
-        posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
+        skip_zernio = bool(payload.skip_zernio_delete)
 
+        zernio_targets_to_delete: List[Tuple[str, str, Dict[str, Any]]] = []
         zernio_deleted_any = False
-        if payload.clear_all:
-            for p_key, p_entry in posts_store.items():
-                p_entry["notification_hidden"] = True
-                for c_key, c_obj in (p_entry.get("comments") or {}).items():
-                    ids_to_mark_seen.add(str(c_key))
-                    for rep in (c_obj.get("replies") or []):
-                        if rep.get("id"):
-                            ids_to_mark_seen.add(str(rep["id"]))
-        elif payload.single_comment and ids_to_mark_seen:
-            # If deleting a single parent comment (not already handled by /api/comments/delete_reply),
-            # call Zernio API DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId} first
-            # while post_entry still holds cached_comm metadata!
-            if not is_reply_only and rec_id:
-                try:
-                    from routers.comment_actions_routes import _perform_comment_moderation
-                    for target_cid in ids_to_mark_seen:
-                        mod_res = _perform_comment_moderation(
-                            record_id=rec_id,
-                            comment_id=target_cid,
-                            action_type="delete",
-                            enable=True
-                        )
-                        if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
-                            zernio_deleted_any = True
-                except Exception as del_err:
-                    print(f"[⚠️ ZERNIO SINGLE COMMENT DELETE WARNING]: {del_err}")
 
-            norm_targets = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
-            # Purge any buffered own replies matching deleted IDs
-            for buf_key in list(RECENT_OWN_REPLIES_BUFFER.keys()):
-                RECENT_OWN_REPLIES_BUFFER[buf_key] = [
-                    r for r in RECENT_OWN_REPLIES_BUFFER.get(buf_key, [])
-                    if str(r.get("id") or "") not in ids_to_mark_seen
-                    and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
-                ]
+        # STEP 1: IMMEDIATELY remove from CLOUDINARY_COMMENTS_STORE under lock and save to Cloudinary!
+        # This guarantees the comment/reply disappears from the dashboard and Cloudinary immediately,
+        # even if the commenter already deleted their own comment on Facebook/Instagram!
+        with COMMENTS_STORE_LOCK:
+            posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
 
-            for p_key, p_entry in posts_store.items():
-                if rec_id and p_key != rec_id:
-                    continue
-                c_map = p_entry.get("comments") or {}
-                del_list = list(p_entry.get("deleted_comment_ids") or [])
-                for target_cid in ids_to_mark_seen:
-                    norm_tc = _normalize_comment_key(target_cid)
-                    if not is_reply_only and target_cid in c_map:
-                        c_map.pop(target_cid, None)
-                    # Also remove from nested replies across all parent comments in this post
-                    for c_k, c_obj in c_map.items():
-                        if not isinstance(c_obj, dict):
+            if payload.clear_all:
+                for p_key, p_entry in posts_store.items():
+                    p_entry["notification_hidden"] = True
+                    for c_key, c_obj in (p_entry.get("comments") or {}).items():
+                        ids_to_mark_seen.add(str(c_key))
+                        for rep in (c_obj.get("replies") or []):
+                            if rep.get("id"):
+                                ids_to_mark_seen.add(str(rep["id"]))
+            else:
+                # If deleting a post notification card (rec_id provided without single_comment), also collect all comment IDs on that post
+                if rec_id and not payload.single_comment and not ids_to_mark_seen:
+                    p_entry_for_rec = posts_store.get(rec_id) or {}
+                    for c_k in (p_entry_for_rec.get("comments") or {}).keys():
+                        ids_to_mark_seen.add(str(c_k))
+
+                norm_targets = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
+
+                # Snapshot metadata for Zernio API deletion BEFORE popping from c_map
+                if not is_reply_only and not skip_zernio and ids_to_mark_seen:
+                    for p_key, p_entry in posts_store.items():
+                        if rec_id and p_key != rec_id:
                             continue
-                        orig_reps = c_obj.get("replies") or []
-                        if orig_reps:
-                            filtered_reps = [
-                                r for r in orig_reps
-                                if str(r.get("id") or "") not in ids_to_mark_seen
-                                and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
-                            ]
-                            if len(filtered_reps) != len(orig_reps):
-                                c_obj["replies"] = filtered_reps
-                                c_obj["can_reply"] = (len(filtered_reps) == 0)
-                    if target_cid not in del_list:
-                        del_list.append(target_cid)
-                    if norm_tc and norm_tc not in del_list:
-                        del_list.append(norm_tc)
-                p_entry["deleted_comment_ids"] = del_list
-        elif rec_id:
-            p_entry = posts_store.get(rec_id)
-            if p_entry:
-                p_entry["notification_hidden"] = True
-                for c_key, c_obj in (p_entry.get("comments") or {}).items():
-                    ids_to_mark_seen.add(str(c_key))
-                    for rep in (c_obj.get("replies") or []):
-                        if rep.get("id"):
-                            ids_to_mark_seen.add(str(rep["id"]))
+                        c_map = p_entry.get("comments") or {}
+                        for c_k, c_obj in list(c_map.items()):
+                            if not isinstance(c_obj, dict):
+                                continue
+                            obj_cid = str(c_obj.get("comment_id") or c_k).strip()
+                            if (
+                                c_k in ids_to_mark_seen
+                                or _normalize_comment_key(c_k) in norm_targets
+                                or obj_cid in ids_to_mark_seen
+                                or _normalize_comment_key(obj_cid) in norm_targets
+                            ):
+                                zernio_targets_to_delete.append((str(p_key), obj_cid or str(c_k), dict(c_obj)))
 
+                # Purge any buffered own replies matching deleted IDs
+                for buf_key in list(RECENT_OWN_REPLIES_BUFFER.keys()):
+                    RECENT_OWN_REPLIES_BUFFER[buf_key] = [
+                        r for r in RECENT_OWN_REPLIES_BUFFER.get(buf_key, [])
+                        if str(r.get("id") or "") not in ids_to_mark_seen
+                        and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
+                    ]
+
+                # Purge matching comments and replies across ALL post entries in CLOUDINARY_COMMENTS_STORE
+                for p_key, p_entry in posts_store.items():
+                    if not isinstance(p_entry, dict):
+                        continue
+                    c_map = p_entry.get("comments") or {}
+                    del_list = list(p_entry.get("deleted_comment_ids") or [])
+                    matched_in_this_post = (p_key == rec_id)
+
+                    if ids_to_mark_seen:
+                        for c_k, c_obj in list(c_map.items()):
+                            obj_cid = str((c_obj or {}).get("comment_id") or c_k).strip() if isinstance(c_obj, dict) else str(c_k)
+                            if not is_reply_only and (
+                                c_k in ids_to_mark_seen
+                                or _normalize_comment_key(c_k) in norm_targets
+                                or obj_cid in ids_to_mark_seen
+                                or _normalize_comment_key(obj_cid) in norm_targets
+                            ):
+                                c_map.pop(c_k, None)
+                                matched_in_this_post = True
+                                for d_cand in (c_k, _normalize_comment_key(c_k), obj_cid, _normalize_comment_key(obj_cid)):
+                                    if d_cand and d_cand not in del_list:
+                                        del_list.append(d_cand)
+                                continue
+
+                            if isinstance(c_obj, dict):
+                                orig_reps = c_obj.get("replies") or []
+                                if orig_reps:
+                                    filtered_reps = [
+                                        r for r in orig_reps
+                                        if str(r.get("id") or "") not in ids_to_mark_seen
+                                        and _normalize_comment_key(str(r.get("id") or "")) not in norm_targets
+                                    ]
+                                    if len(filtered_reps) != len(orig_reps):
+                                        c_obj["replies"] = filtered_reps
+                                        c_obj["can_reply"] = (len(filtered_reps) == 0)
+                                        matched_in_this_post = True
+
+                    if matched_in_this_post:
+                        for target_cid in ids_to_mark_seen:
+                            norm_tc = _normalize_comment_key(target_cid)
+                            if target_cid and target_cid not in del_list:
+                                del_list.append(target_cid)
+                            if norm_tc and norm_tc not in del_list:
+                                del_list.append(norm_tc)
+                        p_entry["deleted_comment_ids"] = del_list
+                        if not payload.single_comment and p_key == rec_id and not c_map:
+                            p_entry["notification_hidden"] = True
+
+        # Save updated CLOUDINARY_COMMENTS_STORE immediately so no poll can bring the deleted comment back
         save_comments_store_async()
 
+        # STEP 2: Mark as seen in database
         if ids_to_mark_seen:
-            with db_engine.begin() as conn:
-                for cid in ids_to_mark_seen:
-                    conn.execute(
-                        text("""
-                            INSERT INTO glennbot_seen_comments (comment_id, record_id, platform)
-                            VALUES (:cid, :rid, 'zernio')
-                            ON CONFLICT (comment_id) DO NOTHING
-                        """),
-                        {"cid": cid, "rid": rec_id}
+            try:
+                with db_engine.begin() as conn:
+                    for cid in ids_to_mark_seen:
+                        conn.execute(
+                            text("""
+                                INSERT INTO glennbot_seen_comments (comment_id, record_id, platform)
+                                VALUES (:cid, :rid, 'zernio')
+                                ON CONFLICT (comment_id) DO NOTHING
+                            """),
+                            {"cid": cid, "rid": rec_id}
+                        )
+            except Exception:
+                pass
+
+        # STEP 3: Simultaneously delete the comment(s) on Facebook/Instagram/YouTube/TikTok via Zernio API
+        if zernio_targets_to_delete and not is_reply_only and not skip_zernio:
+            try:
+                from routers.comment_actions_routes import _perform_comment_moderation
+                for target_rec_id, target_cid, comm_snapshot in zernio_targets_to_delete:
+                    mod_res = _perform_comment_moderation(
+                        record_id=target_rec_id or rec_id,
+                        comment_id=target_cid,
+                        action_type="delete",
+                        enable=True,
+                        cached_comm_override=comm_snapshot
                     )
+                    if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
+                        zernio_deleted_any = True
+            except Exception as del_err:
+                print(f"[⚠️ ZERNIO COMMENT DELETE WARNING]: {del_err}")
 
         return {
             "status": "success",
             "dismissed_count": len(ids_to_mark_seen),
+            "cloudinary_deleted": True,
             "zernio_deleted": zernio_deleted_any
         }
     except Exception as e:

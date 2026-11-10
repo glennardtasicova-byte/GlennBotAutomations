@@ -562,6 +562,26 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
         if isinstance(c_obj, dict):
             cid = str(c_obj.get("ID") or c_obj.get("id") or c_obj.get("commentId") or c_obj.get("_id") or c_obj.get("platform_id") or "").strip()
             msg_text = (c_obj.get("Text") or c_obj.get("text") or c_obj.get("message") or c_obj.get("content") or "").strip()
+            wh_verb = str(c_obj.get("verb") or root_obj.get("verb") or root_obj.get("action") or body.get("action") or "").strip().lower()
+            is_comment_deleted_wh = (
+                "delete" in event_name
+                or "remove" in event_name
+                or wh_verb in ("delete", "deleted", "remove", "removed")
+                or bool(c_obj.get("deleted") or c_obj.get("isDeleted") or c_obj.get("is_deleted"))
+            )
+            if cid and is_comment_deleted_wh:
+                from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
+                dismiss_or_clear_comment_notifications(
+                    DismissCommentsPayload(
+                        record_id="",
+                        comment_ids=[cid],
+                        clear_all=False,
+                        single_comment=True,
+                        skip_zernio_delete=True
+                    )
+                )
+                print(f"[🗑️ WEBHOOK COMMENT DELETION SYNCED] Removed deleted comment {cid} from Cloudinary.")
+                return {"status": "received", "type": "comment_deleted", "comment_id": cid}
 
             plat_post_id = str(
                 c_obj.get("platformPostId")
@@ -946,8 +966,10 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                     with COMMENTS_STORE_LOCK:
                         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
                         p_entry = posts_store.get(rec_id)
-                        if p_entry and cid in (p_entry.get("deleted_comment_ids") or []):
-                            p_entry["deleted_comment_ids"] = [x for x in p_entry["deleted_comment_ids"] if x != cid]
+                        existing_del_cids = set(str(x) for x in ((p_entry or {}).get("deleted_comment_ids") or []) if x)
+                        norm_existing_del_cids = {_normalize_comment_key(x) for x in existing_del_cids if x}
+                        if cid in existing_del_cids or _normalize_comment_key(cid) in norm_existing_del_cids:
+                            return {"status": "received", "ignored_deleted": True}
 
                         # Only treat cid_prefix as a parent comment ID if it is NOT the post ID / page ID prefix and matches an actual comment key
                         if not is_reply_flag and "_" in cid and p_entry and isinstance(p_entry.get("comments"), dict):
@@ -1020,7 +1042,8 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                                     "can_reply": True,
                                     "message": msg_text,
                                     "created_iso": ts_info["iso"],
-                                    "display_time": ts_info["display"]
+                                    "display_time": ts_info["display"],
+                                    "_webhook_saved_ts": time.time()
                                 }
                                 target_parent["can_reply"] = False
                                 reps = target_parent.setdefault("replies", [])
@@ -1098,9 +1121,10 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                                 "created_iso": ts_info["iso"],
                                 "display_time": ts_info["display"],
                                 "is_read": False,
-                                "replies": []
+                                "replies": [],
+                                "_webhook_saved_ts": time.time()
                             }
-                            update_cloudinary_store_for_post(matched_row, [instant_comment], unhide_if_new=True, force_unhide=True)
+                            update_cloudinary_store_for_post(matched_row, [instant_comment], unhide_if_new=True, force_unhide=True, reconcile_remote_deletions=False)
                             save_comments_store_async()
                             print(f"[🚀 WEBHOOK COMMENT SAVED & UNHIDDEN IN CLOUDINARY] {commenter_name} on '{matched_row.get('account_name')}': '{msg_text}'")
                             if "_notify_n8n_new_comment" in globals():
@@ -1214,6 +1238,32 @@ def sync_youtube_and_active_posts_background(active_record_id: str = ""):
 
         connected_items = refresh_connected_accounts_cache(force=False)
         target_posts = [dict(r) for r in rows if is_post_account_connected(dict(r), connected_items)]
+        seen_target_ids = {str(tp.get("id") or "") for tp in target_posts}
+        posts_store_bg = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+        extra_active_ids = [
+            str(s_rid)
+            for s_rid, s_entry in list(posts_store_bg.items())
+            if str(s_rid) not in seen_target_ids and isinstance(s_entry, dict) and bool(s_entry.get("comments"))
+        ]
+        if extra_active_ids:
+            try:
+                with db_engine.connect() as conn:
+                    extra_bg_rows = conn.execute(
+                        text("""
+                            SELECT id, platform, page_id, account_name, post_type, caption,
+                                   scheduled_time, status, status_message, external_post_id, permalink_url
+                            FROM glennbot_scheduled_posts
+                            WHERE id = ANY(:ids)
+                        """),
+                        {"ids": extra_active_ids}
+                    ).mappings().all()
+                for ebr in extra_bg_rows:
+                    ebrd = dict(ebr)
+                    if is_post_account_connected(ebrd, connected_items):
+                        target_posts.append(ebrd)
+                        seen_target_ids.add(str(ebrd["id"]))
+            except Exception:
+                pass
         if not target_posts:
             return
 

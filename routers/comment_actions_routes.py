@@ -161,14 +161,15 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
             if not p_entry:
                 continue
 
-            del_cids = set(str(x) for x in (p_entry.get("deleted_comment_ids") or []))
+            raw_del_cids = [str(x) for x in (p_entry.get("deleted_comment_ids") or []) if x]
+            del_cids = set(raw_del_cids) | {_normalize_comment_key(x) for x in raw_del_cids if x}
             c_map = p_entry.get("comments") or {}
 
             # Auto-unhide if there is any unread user comment or unread user reply in this post
             if p_entry.get("notification_hidden"):
                 has_unread_activity = False
                 for chk_cid, chk_obj in c_map.items():
-                    if chk_cid in del_cids or not isinstance(chk_obj, dict) or chk_obj.get("is_own_comment"):
+                    if chk_cid in del_cids or _normalize_comment_key(chk_cid) in del_cids or not isinstance(chk_obj, dict) or chk_obj.get("is_own_comment"):
                         continue
                     if chk_cid not in seen_ids:
                         has_unread_activity = True
@@ -176,7 +177,7 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
                     for chk_rep in (chk_obj.get("replies") or []):
                         if isinstance(chk_rep, dict) and not chk_rep.get("is_own"):
                             r_chk_id = str(chk_rep.get("id") or "").strip()
-                            if r_chk_id and r_chk_id not in seen_ids:
+                            if r_chk_id and r_chk_id not in del_cids and _normalize_comment_key(r_chk_id) not in del_cids and r_chk_id not in seen_ids:
                                 has_unread_activity = True
                                 break
                     if has_unread_activity:
@@ -194,7 +195,17 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
             is_ext_post = rec_id.startswith("post_ext_")
 
             for cid, c_obj in list(c_map.items()):
-                if cid in del_cids or c_obj.get("is_own_comment"):
+                obj_cid = str((c_obj or {}).get("comment_id") or cid).strip() if isinstance(c_obj, dict) else str(cid)
+                if (
+                    cid in del_cids
+                    or _normalize_comment_key(cid) in del_cids
+                    or obj_cid in del_cids
+                    or _normalize_comment_key(obj_cid) in del_cids
+                ):
+                    c_map.pop(cid, None)
+                    store_cleaned = True
+                    continue
+                if c_obj.get("is_own_comment"):
                     continue
                 if not is_comment_timestamp_valid_for_post(c_obj.get("created_iso", ""), sched_dt, is_external_post=is_ext_post):
                     continue
@@ -1838,7 +1849,8 @@ def _perform_comment_moderation(
     action_type: str,
     enable: bool,
     parent_comment_id_hint: str = "",
-    reply_message_hint: str = ""
+    reply_message_hint: str = "",
+    cached_comm_override: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     try:
         with db_engine.connect() as conn:
@@ -1886,7 +1898,11 @@ def _perform_comment_moderation(
         parent_comm, target_sub_reply = find_parent_and_target_comment(post_entry, str(comment_id))
         if not parent_comm and parent_comment_id_hint:
             parent_comm, _ = find_parent_and_target_comment(post_entry, str(parent_comment_id_hint))
-        cached_comm = parent_comm or (post_entry.get("comments") or {}).get(str(comment_id))
+        cached_comm = (
+            parent_comm
+            or (post_entry.get("comments") or {}).get(str(comment_id))
+            or (dict(cached_comm_override) if isinstance(cached_comm_override, dict) else None)
+        )
 
         z_info = resolve_zernio_post_identifiers(r_dict, force=False)
         if is_ext_post and not z_info.get("inbox_post_id"):
@@ -2007,9 +2023,9 @@ def _perform_comment_moderation(
                     expanded_cids.append(c_suffix)
             return expanded_cids
 
-        def _finalize_moderation_success(zernio_synced: bool = True):
+        def _finalize_moderation_success(zernio_synced: bool = True, already_deleted_on_platform: bool = False):
             target_obj = target_sub_reply if (target_sub_reply is not None and isinstance(target_sub_reply, dict)) else (cached_comm if isinstance(cached_comm, dict) else None)
-            if target_obj is not None:
+            if target_obj is not None and action_type in ("like", "hide"):
                 if action_type == "like":
                     prev_liked = bool(target_obj.get("is_liked"))
                     target_obj["is_liked"] = bool(enable)
@@ -2028,6 +2044,7 @@ def _perform_comment_moderation(
                 "comment_id": raw_target_cid,
                 "action": action_type,
                 "zernio_synced": zernio_synced,
+                "already_deleted_on_platform": already_deleted_on_platform,
                 "is_liked": bool(enable) if action_type == "like" else bool((target_obj or {}).get("is_liked")),
                 "is_hidden": bool(enable) if action_type == "hide" else bool((target_obj or {}).get("is_hidden"))
             }
@@ -2055,6 +2072,39 @@ def _perform_comment_moderation(
                     if z_res["status_code"] in (200, 201, 204):
                         return _finalize_moderation_success(zernio_synced=True)
                     last_err = str(z_res["data"] or z_res["raw_text"])
+
+        # Fast-path for DELETE when the commenter ALREADY deleted their own comment on Facebook/Instagram:
+        # Check the known post's live comments first before doing slow multi-account discovery!
+        if action_type == "delete" and cand_post_ids and z_acc_id and pref_key:
+            target_cid_suffixes_fast = {c.split("_")[-1].strip() for c in candidate_comment_ids if c}
+            for check_pid in cand_post_ids[:2]:
+                try:
+                    enc_pid = urllib.parse.quote(str(check_pid), safe="")
+                    chk_url = f"{ZERNIO_BASE_URL}/inbox/comments/{enc_pid}?accountId={urllib.parse.quote(z_acc_id, safe='')}"
+                    chk_resp = HTTP_SESSION.get(chk_url, headers=get_zernio_headers(pref_key), timeout=8)
+                    if chk_resp.status_code == 200:
+                        live_list_fast = extract_list_from_api_payload(chk_resp.json()) or []
+                        still_exists = False
+                        for lc in live_list_fast:
+                            if not isinstance(lc, dict):
+                                continue
+                            lc_id = str(lc.get("id") or lc.get("_id") or lc.get("commentId") or "").strip()
+                            lc_suf = lc_id.split("_")[-1].strip() if "_" in lc_id else lc_id
+                            if lc_id in candidate_comment_ids or (lc_suf and lc_suf in target_cid_suffixes_fast):
+                                still_exists = True
+                                break
+                            for sr in (lc.get("replies") or lc.get("children") or []):
+                                if isinstance(sr, dict):
+                                    sr_id = str(sr.get("id") or sr.get("_id") or sr.get("commentId") or "").strip()
+                                    sr_suf = sr_id.split("_")[-1].strip() if "_" in sr_id else sr_id
+                                    if sr_id in candidate_comment_ids or (sr_suf and sr_suf in target_cid_suffixes_fast):
+                                        still_exists = True
+                                        break
+                        if not still_exists and (not parent_cid or parent_cid == raw_target_cid):
+                            # Confirmed 200 OK from Zernio: the comment is already gone from the live post!
+                            return _finalize_moderation_success(zernio_synced=True, already_deleted_on_platform=True)
+                except Exception:
+                    pass
 
         # Pass 2: Multi-Account / Multi-Key Discovery across commented posts & connected pages
         known_suffixes = {p.split("_")[-1].strip() for p in base_post_ids if p and p != "OK"}
@@ -2109,6 +2159,7 @@ def _perform_comment_moderation(
 
         # Pass 3: Live Comment Thread Inspection (resolves canonical IDs AND newly posted replies by message text)
         target_cid_suffixes = {c.split("_")[-1].strip() for c in candidate_comment_ids if c}
+        had_any_live_200 = False
         for za in connected_plat_accounts:
             if not isinstance(za, dict):
                 continue
@@ -2125,6 +2176,7 @@ def _perform_comment_moderation(
                     c_resp = HTTP_SESSION.get(c_url, headers=get_zernio_headers(za_key), timeout=12)
                     if c_resp.status_code != 200:
                         continue
+                    had_any_live_200 = True
                     live_comments = extract_list_from_api_payload(c_resp.json()) or []
                     # If targeting a nested reply under parent_cid, also fetch the parent comment's sub-thread from Zernio
                     if parent_cid and parent_cid != raw_target_cid and not parent_cid.startswith(("local_", "opt_", "z_rep_")):
@@ -2187,6 +2239,9 @@ def _perform_comment_moderation(
                 except Exception:
                     continue
 
+        if action_type == "delete" and (had_any_live_200 or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))):
+            return _finalize_moderation_success(zernio_synced=True, already_deleted_on_platform=True)
+
         # For Instagram comment/reply likes, local/optimistic replies, or nested replies in CLOUDINARY_COMMENTS_STORE
         # where the platform Graph API restricts direct nested-reply moderation, persist the state in GlennBot's store.
         if (
@@ -2235,26 +2290,17 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         if not rep_id:
             return {"status": "error", "message": "Missing reply_id."}
 
-        # 1. Look up the reply's message & metadata BEFORE removing it from CLOUDINARY_COMMENTS_STORE
+        # 1. Snapshot the parent comment & reply metadata BEFORE removing from CLOUDINARY_COMMENTS_STORE
         posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
         post_entry = posts_store.get(rec_id) or {}
-        _, matched_sub_rep = find_parent_and_target_comment(post_entry, rep_id)
+        parent_comm_obj, matched_sub_rep = find_parent_and_target_comment(post_entry, rep_id)
+        if not parent_comm_obj and parent_cid:
+            parent_comm_obj, _ = find_parent_and_target_comment(post_entry, parent_cid)
+        parent_comm_snapshot = dict(parent_comm_obj) if isinstance(parent_comm_obj, dict) else None
         rep_msg_hint = str((matched_sub_rep or {}).get("message") or "").strip()
 
-        # 2. Call Zernio API (DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId})
-        # while post_entry still has cached_comm (zernio_post_id, zernio_account_id, zernio_api_key)!
-        mod_res: Dict[str, Any] = {}
-        if rec_id:
-            mod_res = _perform_comment_moderation(
-                record_id=rec_id,
-                comment_id=rep_id,
-                action_type="delete",
-                enable=True,
-                parent_comment_id_hint=parent_cid,
-                reply_message_hint=rep_msg_hint
-            )
-
-        # 3. Remove from GlennBot's Cloudinary Store & mark deleted_comment_ids
+        # 2. IMMEDIATELY remove from GlennBot's Cloudinary Store & mark deleted_comment_ids
+        # so no background poll can bring the reply back while Zernio is called!
         from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
         dismiss_or_clear_comment_notifications(
             DismissCommentsPayload(
@@ -2263,15 +2309,30 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
                 parent_comment_id=parent_cid,
                 clear_all=False,
                 single_comment=True,
-                is_reply=True
+                is_reply=True,
+                skip_zernio_delete=True
             )
         )
+
+        # 3. Simultaneously call Zernio API (DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId})
+        mod_res: Dict[str, Any] = {}
+        if rec_id:
+            mod_res = _perform_comment_moderation(
+                record_id=rec_id,
+                comment_id=rep_id,
+                action_type="delete",
+                enable=True,
+                parent_comment_id_hint=parent_cid,
+                reply_message_hint=rep_msg_hint,
+                cached_comm_override=parent_comm_snapshot
+            )
 
         return {
             "status": "success",
             "record_id": rec_id,
             "parent_comment_id": parent_cid,
             "reply_id": rep_id,
+            "cloudinary_deleted": True,
             "zernio_deleted": bool(mod_res.get("status") == "success" and mod_res.get("zernio_synced"))
         }
     except Exception as e:
