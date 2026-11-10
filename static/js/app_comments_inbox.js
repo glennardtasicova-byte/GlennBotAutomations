@@ -902,14 +902,17 @@
             selectedCommentId = activeTargetId;
 
             let postDetails = livePostDetailsCache[recordId];
+            const isCachedCaptionPlaceholder = postDetails && (!postDetails.caption || postDetails.caption === 'Previous Post' || postDetails.caption === 'Social Media Post');
 
-            if (!postDetails || fetchFreshMedia) {
-                panel.innerHTML = `
-                    <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
-                        <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
-                        <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${activeComment.platform.toUpperCase()}...</p>
-                    </div>
-                `;
+            if (!postDetails || fetchFreshMedia || isCachedCaptionPlaceholder) {
+                if (!postDetails || fetchFreshMedia) {
+                    panel.innerHTML = `
+                        <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
+                            <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
+                            <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${activeComment.platform.toUpperCase()}...</p>
+                        </div>
+                    `;
+                }
                 try {
                     let res = await fetch(`/api/posts/${recordId}/live_details`);
                     let data = await res.json();
@@ -921,6 +924,22 @@
                     console.error("Live post details error:", e);
                 }
             }
+
+            if (postDetails?.caption && postDetails.caption !== 'Previous Post' && postDetails.caption !== 'Social Media Post') {
+                activeComment.post_caption = postDetails.caption;
+                postComments.forEach(pc => { pc.post_caption = postDetails.caption; });
+            }
+            if (postDetails?.permalink_url && !activeComment.post_permalink) {
+                activeComment.post_permalink = postDetails.permalink_url;
+                postComments.forEach(pc => { if (!pc.post_permalink) pc.post_permalink = postDetails.permalink_url; });
+            }
+
+            const displayPostCaption = (postDetails?.caption && postDetails.caption !== 'Previous Post' && postDetails.caption !== 'Social Media Post')
+                ? postDetails.caption
+                : ((activeComment.post_caption && activeComment.post_caption !== 'Previous Post' && activeComment.post_caption !== 'Social Media Post')
+                    ? activeComment.post_caption
+                    : (postDetails?.caption || activeComment.post_caption || ''));
+            const displayPostType = postDetails?.post_type || activeComment.post_type || 'reels';
 
             const permalink = postDetails?.permalink_url || activeComment.post_permalink || activeComment.comment_permalink || '';
             const videoUrl = postDetails?.video_url || '';
@@ -946,7 +965,7 @@
                 `).join('');
                 mediaViewerHTML = `<div class="grid ${imagesArr.length > 1 ? 'grid-cols-2' : 'grid-cols-1'} gap-2.5">${imgsGrid}</div>`;
             } else if (fallbackPreview) {
-                if (fallbackPreview.match(/\.(mp4|mov|webm)$/i) && activeComment.post_type !== 'image') {
+                if (fallbackPreview.match(/\.(mp4|mov|webm)$/i) && displayPostType !== 'image') {
                     mediaViewerHTML = `
                         <div class="w-full bg-black rounded-xl overflow-hidden border border-slate-700 flex items-center justify-center">
                             <video src="${fallbackPreview}" controls playsinline class="max-h-[280px] w-full object-contain"></video>
@@ -959,7 +978,7 @@
                         </div>
                     `;
                 }
-            } else if (activeComment.post_type === 'text') {
+            } else if (displayPostType === 'text') {
                 mediaViewerHTML = `
                     <div class="p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400 italic">
                         <i class="fas fa-align-left text-gb-cyan mr-1.5"></i> Text-only post (no video or image attached).
@@ -989,7 +1008,7 @@
                                 ${getPlatformBadge(activeComment.platform, true)}
                                 <span class="text-slate-600">•</span>
                                 <span class="text-xs font-bold text-white">${escapeHTML(activeComment.account_name)}</span>
-                                ${formatPostTypeBadge(activeComment.post_type)}
+                                ${formatPostTypeBadge(displayPostType)}
                                 ${methodBadge}
                             </div>
                             <div class="flex items-center gap-2 flex-wrap">
@@ -1019,7 +1038,7 @@
                         <!-- POST CAPTION -->
                         <div class="p-3 rounded-xl bg-slate-950/70 border border-slate-800/90">
                             <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-1">Original Post Caption</span>
-                            <p class="text-xs text-slate-200 whitespace-pre-wrap ${window.gbActivePopoutMode === 'comment_thread' ? 'max-h-44' : 'max-h-20'} overflow-y-auto">${activeComment.post_caption ? escapeHTML(activeComment.post_caption) : '<span class="italic text-slate-500">No caption</span>'}</p>
+                            <p class="text-xs text-slate-200 whitespace-pre-wrap ${window.gbActivePopoutMode === 'comment_thread' ? 'max-h-44' : 'max-h-20'} overflow-y-auto">${displayPostCaption ? escapeHTML(displayPostCaption) : '<span class="italic text-slate-500">No caption</span>'}</p>
                         </div>
 
                         <!-- ALL COMMENTS ON THIS POST THREAD -->

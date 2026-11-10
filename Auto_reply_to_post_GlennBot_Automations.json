@@ -1,0 +1,319 @@
+{
+  "name": "Auto reply to post (GlennBot Automations)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "glennbot-automations-comment-thread-ai-agent",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        64,
+        279
+      ],
+      "webhookId": "glennbot-automations-comment-thread-ai-agent"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.body.account_name || $json.account_name || '' }}",
+              "operation": "contains",
+              "value2": "GlennBot Automations"
+            }
+          ],
+          "boolean": [
+            {
+              "value1": "={{ Boolean(!($json.body.is_own_comment ?? $json.is_own_comment) || ($json.body.is_reply_to_comment ?? $json.is_reply_to_comment) || ($json.body.parent_comment_id ?? $json.parent_comment_id)) }}",
+              "value2": true
+            }
+          ]
+        },
+        "combineOperation": "all"
+      },
+      "id": "node-filter-glennbot-automations",
+      "name": "Filter GlennBot Automations Comments",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        340,
+        428
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://glennbotautomations.onrender.com/api/v1/spreadsheets/read?workbook_id=Conversations.xlsx&sheet_name=Sheet1&sync_gdrive=false",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gb_live_99b6d02bdd6093ac7d58fb09c034ee05b04b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-read-conversations-xlsx",
+      "name": "Read Conversations.xlsx Sheet1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        601,
+        279
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://glennbotautomations.onrender.com/api/v1/spreadsheets/read?workbook_id=Script.xlsx&sheet_name=Sheet1&sync_gdrive=false",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gb_live_99b6d02bdd6093ac7d58fb09c034ee05b04b"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-read-script-xlsx",
+      "name": "Read Script.xlsx Sheet1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        854,
+        422
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const whNode = $('Webhook Trigger').first().json || {};\nconst wb = whNode.body || whNode || {};\nconst convResp = $('Read Conversations.xlsx Sheet1').first().json || {};\nconst scriptResp = $('Read Script.xlsx Sheet1').first().json || $input.first().json || {};\n\nconst existingRows = Array.isArray(convResp.rows) ? convResp.rows : [];\nconst cellsMap = convResp.cells || {};\n\nconst normId = (val) => {\n  const s = String(val || '').trim();\n  return s.includes('_') ? s.split('_').pop().trim() : s;\n};\n\nconst extractIdsFromCellA = (rawA) => {\n  const s = String(rawA || '').trim();\n  if (!s) return [];\n  const out = [];\n  const openIdx = s.indexOf('[');\n  const closeIdx = s.indexOf(']');\n  if (openIdx !== -1 && closeIdx > openIdx) {\n    const inside = s.slice(openIdx + 1, closeIdx);\n    const colonIdx = inside.indexOf(':');\n    const listStr = colonIdx !== -1 ? inside.slice(colonIdx + 1) : inside;\n    for (const part of listStr.split(',')) {\n      const n = normId(part);\n      if (n) out.push(n);\n    }\n    const prefix = normId(s.slice(0, openIdx).trim());\n    if (prefix) out.push(prefix);\n  } else {\n    const clean = normId(s);\n    if (clean) out.push(clean);\n  }\n  return out;\n};\n\nconst rawCid = String(wb.comment_id || '').trim();\nconst rawParentCid = String(wb.parent_comment_id || wb.replied_to_id || '').trim();\nconst isReplyInThread = Boolean(wb.is_reply_to_comment || rawParentCid);\n\nlet resolvedThreadId = isReplyInThread\n  ? (normId(wb.thread_id || wb.root_comment_id || rawParentCid || rawCid) || 'thread_unknown')\n  : (normId(rawCid || wb.thread_id || wb.root_comment_id) || 'thread_unknown');\n\nconst candidateIds = new Set([resolvedThreadId]);\nif (isReplyInThread) {\n  if (rawParentCid) candidateIds.add(normId(rawParentCid));\n  if (wb.root_comment_id) candidateIds.add(normId(wb.root_comment_id));\n  if (wb.thread_id) candidateIds.add(normId(wb.thread_id));\n  if (Array.isArray(wb.thread_comment_ids)) {\n    for (const tid of wb.thread_comment_ids) {\n      if (tid) candidateIds.add(normId(tid));\n    }\n  }\n}\n\nconst isOwn = Boolean(wb.is_own_comment || wb.is_own);\nconst pageName = String(wb.account_name || 'GlennBot Automations').trim();\nconst authorName = String(wb.author_name || 'Commenter').trim();\nconst speakerName = isOwn ? pageName : authorName;\nconst msgText = String(wb.message || '').replace(/\\r?\\n+/g, ' ').trim();\nconst parentMsgText = String(wb.parent_message || '').replace(/\\r?\\n+/g, ' ').trim();\nconst currentEntry = msgText ? `${speakerName}: ${msgText}` : '';\n\nlet foundRowIdx = null;\nlet existingColB = '';\n\nfor (const r of existingRows) {\n  if (!r) continue;\n  const rNum = Number(r._row_number || r.row_number || 0);\n  if (rNum < 2) continue;\n  const vals = r.values || r;\n  const colAVal = String(vals.A || vals['Thread ID'] || '').trim();\n  const colBVal = String(vals.B || vals['Conversations'] || '').trim();\n  if (!colAVal) continue;\n  const rowIds = extractIdsFromCellA(colAVal);\n  if (rowIds.some((id) => candidateIds.has(id)) || colAVal === resolvedThreadId) {\n    foundRowIdx = rNum;\n    existingColB = colBVal;\n    if (rowIds[0]) resolvedThreadId = rowIds[0];\n    break;\n  }\n}\n\nif (foundRowIdx === null) {\n  for (const [coord, cellVal] of Object.entries(cellsMap)) {\n    if (coord.length >= 2 && (coord[0] === 'A' || coord[0] === 'a')) {\n      const rNum = Number(coord.slice(1));\n      if (!Number.isNaN(rNum) && rNum >= 2) {\n        const colAVal = String(cellVal || '').trim();\n        const rowIds = extractIdsFromCellA(colAVal);\n        if (rowIds.some((id) => candidateIds.has(id)) || colAVal === resolvedThreadId) {\n          foundRowIdx = rNum;\n          existingColB = String(cellsMap['B' + rNum] || '').trim();\n          if (rowIds[0]) resolvedThreadId = rowIds[0];\n          break;\n        }\n      }\n    }\n  }\n}\n\nif (foundRowIdx === null && isReplyInThread && parentMsgText) {\n  for (const r of existingRows) {\n    if (!r) continue;\n    const rNum = Number(r._row_number || r.row_number || 0);\n    if (rNum < 2) continue;\n    const vals = r.values || r;\n    const colAVal = String(vals.A || vals['Thread ID'] || '').trim();\n    const colBVal = String(vals.B || vals['Conversations'] || '').trim();\n    if (colBVal && colBVal.toLowerCase().includes(parentMsgText.toLowerCase())) {\n      foundRowIdx = rNum;\n      existingColB = colBVal;\n      const rowIds = extractIdsFromCellA(colAVal);\n      if (rowIds[0]) resolvedThreadId = rowIds[0];\n      break;\n    }\n  }\n}\n\nlet nextRowIdx = Number(convResp.next_empty_row || 0);\nif (!nextRowIdx || nextRowIdx < 2) {\n  let maxR = 1;\n  for (const r of existingRows) {\n    const rn = Number(r._row_number || r.row_number || 0);\n    if (rn > maxR) maxR = rn;\n  }\n  nextRowIdx = maxR + 1;\n}\nconst sheetRowIdx = foundRowIdx !== null ? foundRowIdx : nextRowIdx;\n\nconst segments = [];\nconst stripSpeakerPrefix = (str) => {\n  const idx = str.indexOf(':');\n  return idx !== -1 ? str.slice(idx + 1).trim().toLowerCase() : str.trim().toLowerCase();\n};\n\nconst addSegment = (seg) => {\n  const clean = String(seg || '').replace(/\\r?\\n+/g, ' ').trim();\n  if (!clean) return;\n  const cleanLow = clean.toLowerCase();\n  const hasColon = clean.includes(':');\n  const msgOnlyLow = stripSpeakerPrefix(clean);\n\n  for (let i = 0; i < segments.length; i++) {\n    const ex = segments[i];\n    const exLow = ex.toLowerCase();\n    if (exLow === cleanLow) return;\n    if (!ex.includes(':') && hasColon && exLow === msgOnlyLow) {\n      segments[i] = clean;\n      return;\n    }\n    if (ex.includes(':') && !hasColon && stripSpeakerPrefix(ex) === cleanLow) {\n      return;\n    }\n  }\n  segments.push(clean);\n};\n\nif (existingColB) {\n  for (const part of existingColB.split('|')) {\n    for (const subLine of part.split(/\\r?\\n+/)) {\n      addSegment(subLine);\n    }\n  }\n}\n\nconst transcriptField = 'thread_' + 'transcript';\nconst rawBackendTranscript = String(wb[transcriptField] || '').trim();\nif (rawBackendTranscript) {\n  for (const line of rawBackendTranscript.split(/\\r?\\n+/)) {\n    for (const part of line.split('|')) {\n      const normalizedLine = part.trim().replace(/^(GlennBot Automations|Savvy Finds) \\(Page\\):/i, `${pageName}:`);\n      addSegment(normalizedLine);\n    }\n  }\n}\n\nif (isReplyInThread && parentMsgText && segments.length === 0) {\n  const pAuthor = String(wb.parent_author_name || 'Commenter').trim();\n  addSegment(`${pAuthor}: ${parentMsgText}`);\n}\n\naddSegment(currentEntry);\n\nconst colBConversation = segments.join(' | ');\nconst postCaption = String((wb.comment && wb.comment.post_caption) || wb.post_caption || '').trim();\n\n// --- PARSE SCRIPT.XLSX (SHEET1 COLUMN A = KEYWORDS/QUESTIONS, COLUMN B = GUIDE ANSWER) ---\nconst scriptEntries = [];\nconst scriptSeenRows = new Set();\nconst scriptWbTitle = String(scriptResp.workbook_title || scriptResp.title || 'Script.xlsx').toLowerCase();\nconst isValidScriptSheet = !scriptWbTitle.includes('conversation');\n\nconst isLikelyHeaderRow = (colA, colB, rNum) => {\n  if (rNum !== 1) return false;\n  const aLow = colA.toLowerCase().trim();\n  const bLow = colB.toLowerCase().trim();\n  const headerTokensA = ['keyword', 'keywords', 'key sentence', 'key sentences', 'question', 'questions', 'tanong', 'column a', 'trigger', 'topic'];\n  const headerTokensB = ['script', 'answer', 'answers', 'reply', 'replies', 'sagot', 'response', 'column b'];\n  return headerTokensA.includes(aLow) || headerTokensB.includes(bLow);\n};\n\nif (isValidScriptSheet) {\n  const sRows = Array.isArray(scriptResp.rows) ? scriptResp.rows : [];\n  const sCells = scriptResp.cells || {};\n\n  for (const sr of sRows) {\n    if (!sr) continue;\n    const rNum = Number(sr._row_number || sr.row_number || 0);\n    const vals = sr.values || sr;\n    const rawKeys = Object.keys(vals).filter((k) => !k.startsWith('_') && k !== 'row_number' && k !== 'values');\n    const colA = String(vals.A ?? (rawKeys[0] ? vals[rawKeys[0]] : '') ?? '').replace(/\\r?\\n+/g, ' ').trim();\n    const colB = String(vals.B ?? (rawKeys[1] ? vals[rawKeys[1]] : '') ?? '').replace(/\\r?\\n+/g, ' ').trim();\n    if (!colA && !colB) continue;\n    if (isLikelyHeaderRow(colA, colB, rNum)) {\n      scriptSeenRows.add(rNum);\n      continue;\n    }\n    if (colA && colB) {\n      scriptEntries.push({ rowNumber: rNum || (scriptEntries.length + 1), keywordsRaw: colA, answerGuide: colB });\n      if (rNum) scriptSeenRows.add(rNum);\n    }\n  }\n\n  const cellRowNums = new Set();\n  for (const coord of Object.keys(sCells)) {\n    const m = /^([A-Za-z]+)(\\d+)$/.exec(String(coord).trim());\n    if (m) cellRowNums.add(Number(m[2]));\n  }\n  for (const rNum of Array.from(cellRowNums).sort((a, b) => a - b)) {\n    if (scriptSeenRows.has(rNum)) continue;\n    const colA = String(sCells['A' + rNum] || sCells['a' + rNum] || '').replace(/\\r?\\n+/g, ' ').trim();\n    const colB = String(sCells['B' + rNum] || sCells['b' + rNum] || '').replace(/\\r?\\n+/g, ' ').trim();\n    if (!colA || !colB) continue;\n    if (isLikelyHeaderRow(colA, colB, rNum)) continue;\n    scriptEntries.push({ rowNumber: rNum, keywordsRaw: colA, answerGuide: colB });\n    scriptSeenRows.add(rNum);\n  }\n}\n\n// --- MATCH COMMENT AGAINST SCRIPT.XLSX COLUMN A ---\nconst stopWords = new Set([\n  'the', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'it',\n  'for', 'on', 'with', 'as', 'do', 'at', 'this', 'but', 'by', 'from', 'or', 'an', 'so', 'if',\n  'ang', 'ng', 'mga', 'sa', 'na', 'pa', 'po', 'opo', 'ba', 'kasi', 'naman', 'lang', 'din', 'rin',\n  'ito', 'iyan', 'iyon', 'ung', 'yung', 'yong', 'ko', 'mo', 'niya', 'natin', 'namin', 'nyo',\n  'at', 'ay', 'may', 'mga', 'para', 'kung', 'kapag', 'pag', 'nga', 'daw', 'raw', 'pala', 'muna'\n]);\n\nconst tokenizeText = (str) => {\n  return String(str || '')\n    .toLowerCase()\n    .replace(/[^a-z0-9\\u00c0-\\u024f]+/gi, ' ')\n    .trim()\n    .split(/\\s+/)\n    .filter((w) => w.length >= 2 && !stopWords.has(w));\n};\n\nconst msgLower = msgText.toLowerCase();\nconst msgClean = msgLower.replace(/[^a-z0-9\\u00c0-\\u024f\\s]+/gi, ' ').replace(/\\s+/g, ' ').trim();\nconst msgTokens = tokenizeText(msgText);\nconst threadContextTokens = tokenizeText(parentMsgText || colBConversation);\n\nconst scoredScripts = scriptEntries.map((entry) => {\n  const kwRaw = entry.keywordsRaw;\n  const kwLower = kwRaw.toLowerCase();\n  const kwClean = kwLower.replace(/[^a-z0-9\\u00c0-\\u024f\\s]+/gi, ' ').replace(/\\s+/g, ' ').trim();\n  const phrases = kwLower\n    .split(/[,;|\\/\\n]+/)\n    .map((p) => p.replace(/[^a-z0-9\\u00c0-\\u024f\\s]+/gi, ' ').replace(/\\s+/g, ' ').trim())\n    .filter(Boolean);\n  const kwTokens = tokenizeText(kwRaw);\n\n  let score = 0;\n  const matchedHints = [];\n\n  if (kwClean && msgClean && (msgClean.includes(kwClean) || kwClean.includes(msgClean))) {\n    score += 40;\n    matchedHints.push(kwRaw);\n  }\n\n  for (const ph of phrases) {\n    if (ph.length >= 3 && msgClean.includes(ph)) {\n      score += 25 + Math.min(ph.split(' ').length * 5, 20);\n      matchedHints.push(ph);\n    }\n  }\n\n  let tokenHits = 0;\n  for (const kt of kwTokens) {\n    if (msgTokens.some((mt) => mt === kt || (mt.length >= 4 && kt.length >= 4 && (mt.includes(kt) || kt.includes(mt))))) {\n      tokenHits++;\n      score += 10;\n    } else if (threadContextTokens.some((ct) => ct === kt)) {\n      score += 3;\n    }\n  }\n\n  if (kwTokens.length > 0 && tokenHits > 0) {\n    score += Math.round((tokenHits / kwTokens.length) * 15);\n  }\n\n  return {\n    ...entry,\n    score,\n    matchedHints\n  };\n}).sort((a, b) => b.score - a.score);\n\nconst topScriptMatches = scoredScripts.filter((s) => s.score > 0).slice(0, 3);\nconst bestScriptMatch = topScriptMatches.length > 0 ? topScriptMatches[0] : null;\n\nconst formattedAllScripts = scriptEntries.length > 0\n  ? scriptEntries.map((s, idx) => `Row ${s.rowNumber || (idx + 1)} | Column A (Keywords / Client Questions): \"${s.keywordsRaw}\" -> Column B (Reference Script / Answer): \"${s.answerGuide}\"`).join('\\n')\n  : '(No rows found in Script.xlsx Sheet1 yet)';\n\nconst formattedClosestMatches = topScriptMatches.length > 0\n  ? topScriptMatches.map((m, idx) => `#${idx + 1} Closest Match (Row ${m.rowNumber}, Score ${m.score}):\\n  - Column A (Matched Keywords/Question): \"${m.keywordsRaw}\"\\n  - Column B (Base Script Answer to Rephrase): \"${m.answerGuide}\"`).join('\\n\\n')\n  : 'No exact keyword overlap pre-scored; inspect the Complete Script.xlsx Sheet1 Reference Table below and pick the row whose Column A topic/intent is closest to the client comment.';\n\n// --- AUTOMATIC LANGUAGE DETECTION FOR INCOMING COMMENT ---\nconst detectCommentLanguage = (text) => {\n  const raw = String(text || '').trim();\n  if (!raw) return 'Auto-Detect (Match Commenter Language)';\n\n  if (/[\\u3040-\\u30ff]/.test(raw)) return 'Japanese (日本語)';\n  if (/[\\uac00-\\ud7af\\u1100-\\u11ff]/.test(raw)) return 'Korean (한국어)';\n  if (/[\\u4e00-\\u9fff]/.test(raw)) return 'Chinese (中文)';\n  if (/[\\u0600-\\u06ff]/.test(raw)) return 'Arabic (العربية)';\n  if (/[\\u0400-\\u04ff]/.test(raw)) return 'Russian / Cyrillic';\n  if (/[\\u0e00-\\u0e7f]/.test(raw)) return 'Thai (ภาษาไทย)';\n  if (/[\\u0900-\\u097f]/.test(raw)) return 'Hindi (हिन्दी)';\n\n  const lower = raw.toLowerCase();\n  const words = lower.replace(/[^a-z0-9\\u00c0-\\u024f'\\-]+/gi, ' ').trim().split(/\\s+/).filter(Boolean);\n\n  const tagalogSet = new Set([\n    'ang', 'ng', 'mga', 'sa', 'na', 'pa', 'po', 'opo', 'ba', 'kasi', 'naman', 'lang', 'din', 'rin',\n    'dito', 'diyan', 'doon', 'ito', 'iyan', 'iyon', 'itong', 'iyang', 'iyong', 'ako', 'ikaw', 'ka',\n    'siya', 'kami', 'tayo', 'kayo', 'sila', 'ko', 'mo', 'niya', 'namin', 'natin', 'nyo', 'ninyo',\n    'nila', 'akin', 'iyo', 'kaniya', 'kanya', 'atin', 'amin', 'inyo', 'kanila', 'ano', 'anong',\n    'sino', 'sinong', 'saan', 'san', 'nasaan', 'asan', 'kailan', 'kelan', 'bakit', 'paano', 'pano',\n    'magkano', 'ilan', 'alin', 'meron', 'mayroon', 'wala', 'walang', 'oo', 'hindi', 'di', 'huwag',\n    'wag', 'pwede', 'puwede', 'gusto', 'ayaw', 'kailangan', 'dapat', 'siguro', 'yata', 'parang',\n    'talaga', 'talagang', 'sobra', 'sobrang', 'grabe', 'grabeng', 'haysss', 'hayss', 'hays', 'naku',\n    'hala', 'uy', 'oy', 'astig', 'yamot', 'salamat', 'maraming', 'kamusta', 'kumusta', 'magandang',\n    'umaga', 'tanghali', 'hapon', 'gabi', 'araw', 'bukas', 'kahapon', 'ngayon', 'kanina', 'mamaya',\n    'lagi', 'minsan', 'ulit', 'muna', 'pala', 'nga', 'daw', 'raw', 'kaya', 'kaso', 'pero', 'at',\n    'kung', 'kapag', 'pag', 'upang', 'para', 'dahil', 'kuya', 'ate', 'idol', 'lodi', 'bes', 'mare',\n    'pare', 'tol', 'pre', 'chika', 'napasabak', 'paorder', 'pabili', 'ung', 'yung', 'yong', 'un',\n    'yun', 'yan', 'eto', 'heto', 'ganito', 'ganyan', 'ganoon', 'ganun', 'sakin', 'sayo', 'sakanya',\n    'samin', 'satin', 'senyo', 'sakanila', 'nakakainis', 'nakakatuwa', 'masaya', 'malungkot',\n    'mahal', 'mura', 'bili', 'tinda', 'larawan', 'litrato', 'pinost', 'sha', 'sya', 'nya', 'diba',\n    'charot', 'char', 'eme', 'sanaol', 'bongga', 'petmalu', 'werpa', 'awit', 'omsim', 'kingina',\n    'putangina', 'gago', 'ulol', 'tanga', 'bobo', 'bwisit', 'buwisit', 'lintik', 'kupal', 'epal',\n    'nasa', 'may', 'maging', 'naging', 'paki', 'pakisuyo', 'pasensya', 'paumanhin'\n  ]);\n\n  const bisayaSet = new Set([\n    'unsa', 'ngano', 'asa', 'kinsa', 'pila', 'tagpila', 'mao', 'lagi', 'bitaw', 'gyud', 'jud',\n    'kaayo', 'dili', 'naa', 'dira', 'diri', 'didto', 'kani', 'kana', 'kato', 'akoa', 'imoha',\n    'iyaha', 'amoa', 'atoa', 'inyoha', 'ilaha', 'ambot', 'baya', 'gani', 'karon', 'ugma',\n    'gahapon', 'palihug', 'daghang', 'maayong', 'buntag', 'udto', 'gabii', 'bai', 'gwapa',\n    'gwapo', 'nindot', 'lami', 'kapoy', 'ulaw', 'uyab'\n  ]);\n\n  const spanishSet = new Set([\n    'hola', 'gracias', 'favor', 'como', 'cómo', 'está', 'estás', 'qué', 'quién', 'dónde',\n    'cuándo', 'cuánto', 'cuesta', 'precio', 'buenos', 'días', 'buenas', 'tardes', 'noches',\n    'muy', 'bien', 'sí', 'claro', 'puedo', 'puede', 'quiero', 'necesito', 'tengo', 'tiene',\n    'este', 'esta', 'esto', 'eso', 'porque', 'también', 'siempre', 'nunca', 'todos', 'nada',\n    'amigo', 'hermoso', 'bonito', 'excelente'\n  ]);\n\n  const englishSet = new Set([\n    'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does',\n    'did', 'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might', 'must', 'i', 'you',\n    'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'its',\n    'our', 'their', 'mine', 'yours', 'ours', 'theirs', 'this', 'that', 'these', 'those', 'what',\n    'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how', 'much', 'many', 'some', 'any',\n    'no', 'not', 'never', 'always', 'often', 'sometimes', 'here', 'there', 'now', 'then', 'today',\n    'tomorrow', 'yesterday', 'please', 'thank', 'thanks', 'hello', 'hi', 'hey', 'good', 'great',\n    'awesome', 'nice', 'cool', 'love', 'like', 'want', 'need', 'buy', 'price', 'cost', 'available',\n    'order', 'shipping', 'delivery', 'comment', 'post', 'picture', 'photo', 'video', 'page',\n    'about', 'from', 'with', 'without', 'under', 'over', 'between', 'into', 'through', 'during',\n    'before', 'after', 'above', 'below', 'yes', 'yeah', 'yep', 'nope', 'okay', 'ok', 'wow',\n    'bullshit', 'shit', 'fuck', 'damn', 'wtf', 'omg', 'lol', 'lmao', 'bro', 'dude', 'guys',\n    'anyone', 'someone', 'everyone', 'nothing', 'something', 'everything', 'really', 'very',\n    'so', 'too', 'just', 'only', 'also', 'still', 'already', 'yet', 'again', 'more', 'most',\n    'less', 'least', 'better', 'best', 'worse', 'worst', 'right', 'wrong', 'true', 'false',\n    'sure', 'of', 'course', 'in', 'on', 'at', 'by', 'for', 'to', 'up', 'down', 'out', 'off'\n  ]);\n\n  let tlCount = 0;\n  let cebCount = 0;\n  let esCount = 0;\n  let enCount = 0;\n\n  for (const w of words) {\n    if (tagalogSet.has(w)) tlCount++;\n    if (bisayaSet.has(w)) cebCount++;\n    if (spanishSet.has(w)) esCount++;\n    if (englishSet.has(w)) enCount++;\n    if (/^(nag|mag|pag|nakaka|makaka|pinaka|pina|kina|uma|umi|ina|ini)[a-z]{3,}$/.test(w) && !englishSet.has(w)) {\n      tlCount++;\n    }\n  }\n\n  if (cebCount > 0 && cebCount >= tlCount) {\n    return enCount > 0 ? 'Bisaya-English Mix (Cebuano)' : 'Bisaya / Cebuano';\n  }\n  if (tlCount > 0 && enCount > 0) {\n    return 'Taglish (Filipino-English Mix)';\n  }\n  if (tlCount > 0) {\n    return 'Tagalog / Filipino';\n  }\n  if (esCount > 0 && esCount > enCount) {\n    return 'Spanish (Español)';\n  }\n  if (enCount > 0 && tlCount === 0 && cebCount === 0) {\n    return 'English (Pure English ONLY — Do NOT use Tagalog or Taglish words)';\n  }\n\n  return 'Auto-Detect (Strictly match the exact language of the latest comment; use Pure English if the comment is in English)';\n};\n\nconst detectedLanguage = detectCommentLanguage(msgText);\n\nconst aiContextPrompt = `You are replying directly as Glennard R. Tasico (speaking in FIRST-PERSON: \"I\", \"me\", \"my\" in English, or \"ako\", \"ko\", \"akin\" in Tagalog/Taglish) through your official Facebook Page \"${pageName}\". You must sound like Glennard himself personally talking to the client/commenter — warm, authentic, confident, helpful, and natural. Do NOT use hashtags.\\n\\nSCRIPT-BASED REPLY INSTRUCTIONS (FROM \"Script.xlsx\" Sheet1):\\n1. Match the client's Latest Comment (\"${msgText}\") against Column A (Keywords / Key Sentences / Possible Client Questions) of \"Script.xlsx\" (Sheet1).\\n2. Use the corresponding answer in Column B of the closest match as your core factual and strategic guide.\\n3. DO NOT copy-paste Column B verbatim! Construct your own natural, custom-tailored reply in first-person as Glennard based on the substance of Column B so it feels 100% human, personal, and directly responsive to ${authorName}'s exact comment and the ongoing conversation history.\\n4. If multiple keywords/questions are asked, smoothly combine the relevant Column B points into one cohesive, natural reply.\\n\\nCLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\\n${formattedClosestMatches}\\n\\nCOMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\\n${formattedAllScripts}\\n\\nCRITICAL LANGUAGE ADAPTATION REQUIREMENT:\\n- Detected Language of Latest Comment: ${detectedLanguage}\\n- Regardless of what language Column B in Script.xlsx is written in, you MUST adapt and write your final reply in the EXACT SAME LANGUAGE used by ${authorName} in their Latest Comment (\"${msgText}\").\\n- If the Latest Comment is in pure English, your reply MUST be in 100% pure, natural English (zero Tagalog/Taglish words).\\n- If the Latest Comment is in Tagalog or Taglish, reply in natural Tagalog/Taglish.\\n- If the Latest Comment is in Bisaya/Cebuano, Spanish, Japanese, Korean, Chinese, or any other language, naturally translate/adapt the Column B guide answer into that exact language.\\n\\nPost Caption: ${postCaption || 'Hello future clients! Feel free to leave a comment on this sample post, and this AI-powered chatbot (powered by Gemini) will instantly answer any questions you have about my background, skills, and services.'}\\nThread ID: ${resolvedThreadId}\\nFull Conversation History in Thread (separated by |):\\n${colBConversation}\\n\\nLatest Comment from ${authorName}: \"${msgText}\"\\n\\nWrite your custom first-person reply as Glennard (via ${pageName}) in ${detectedLanguage}:`;\n\nconst resolvedPostId = String(\n  wb.post_id ||\n  wb.zernio_post_id ||\n  wb.external_post_id ||\n  (wb.comment && (wb.comment.zernio_post_id || wb.comment.external_post_id)) ||\n  '1340688402467466_122118104811500702'\n).trim();\n\nconst resolvedRecordId = String(\n  wb.record_id ||\n  (wb.comment && wb.comment.record_id) ||\n  'post_ext_dc6a96869a'\n).trim();\n\nreturn [{\n  json: {\n    sheetRowIdx,\n    colAThreadId: resolvedThreadId,\n    colBConversation,\n    shouldAiReply: !isOwn,\n    detectedLanguage,\n    matchedScriptRow: bestScriptMatch ? bestScriptMatch.rowNumber : null,\n    matchedScriptKeywords: bestScriptMatch ? bestScriptMatch.keywordsRaw : '',\n    matchedScriptGuide: bestScriptMatch ? bestScriptMatch.answerGuide : '',\n    aiContextPrompt,\n    targetCommentId: rawCid,\n    recordId: resolvedRecordId,\n    postId: resolvedPostId,\n    platform: String(wb.platform || 'facebook')\n  }\n}];"
+      },
+      "id": "node-build-thread-pipe",
+      "name": "Build Thread ID & Pipe Conversation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://glennbotautomations.onrender.com/api/v1/spreadsheets/append-row",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gb_live_99b6d02bdd6093ac7d58fb09c034ee05b04b"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workbook_id: 'Conversations.xlsx', sheet_name: 'Sheet1', row_number: $json.sheetRowIdx || 2, row: { A: $json.colAThreadId || $('Webhook Trigger').item.json.body.thread_id || $('Webhook Trigger').item.json.body.comment_id, B: $json.colBConversation || $('Webhook Trigger').item.json.body.message } }) }}",
+        "options": {}
+      },
+      "id": "node-save-incoming-comment",
+      "name": "Save Comment to Conversations.xlsx",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1353,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ Boolean(!($('Webhook Trigger').item.json.body.is_own_comment)) }}",
+              "value2": true
+            }
+          ]
+        },
+        "combineOperation": "all"
+      },
+      "id": "node-check-if-commenter",
+      "name": "Check If Commenter (Prevent Self-Reply Loop)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        279
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations.onrender.com/api/v1/ai/ask",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gb_live_99b6d02bdd6093ac7d58fb09c034ee05b04b"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ topic: $('Build Thread ID & Pipe Conversation').item.json.aiContextPrompt || $('Build Thread ID & Pipe Conversation').item.json.colBConversation || $('Webhook Trigger').item.json.body.message, tone: 'Authentic first-person voice as Glennard himself — warm, helpful, conversational, and natural', language: $('Build Thread ID & Pipe Conversation').item.json.detectedLanguage || 'Auto-Detect (Match Commenter Language)', post_type: 'comment_reply', use_search: false }) }}",
+        "options": {}
+      },
+      "id": "node-ask-gemini-3-5-flash",
+      "name": "Ask Gemini 3.5 Flash AI Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        102
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://glennbotautomations.onrender.com/api/v1/comments/reply",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "gb_live_99b6d02bdd6093ac7d58fb09c034ee05b04b"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ record_id: $('Build Thread ID & Pipe Conversation').item.json.recordId || $('Webhook Trigger').item.json.body.record_id || 'post_ext_dc6a96869a', post_id: $('Build Thread ID & Pipe Conversation').item.json.postId || $('Webhook Trigger').item.json.body.post_id || '1340688402467466_122118104811500702', comment_id: $('Build Thread ID & Pipe Conversation').item.json.targetCommentId || $('Webhook Trigger').item.json.body.comment_id || $('Webhook Trigger').item.json.comment_id, message: $json.reply || $json.response || $json.text, send_dm: false }) }}",
+        "options": {}
+      },
+      "id": "node-reply-comment-thread",
+      "name": "Reply to Comment Thread as GlennBot Automations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2153,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter GlennBot Automations Comments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter GlennBot Automations Comments": {
+      "main": [
+        [
+          {
+            "node": "Read Conversations.xlsx Sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Conversations.xlsx Sheet1": {
+      "main": [
+        [
+          {
+            "node": "Read Script.xlsx Sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Script.xlsx Sheet1": {
+      "main": [
+        [
+          {
+            "node": "Build Thread ID & Pipe Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Thread ID & Pipe Conversation": {
+      "main": [
+        [
+          {
+            "node": "Save Comment to Conversations.xlsx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Comment to Conversations.xlsx": {
+      "main": [
+        [
+          {
+            "node": "Check If Commenter (Prevent Self-Reply Loop)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Commenter (Prevent Self-Reply Loop)": {
+      "main": [
+        [
+          {
+            "node": "Ask Gemini 3.5 Flash AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Gemini 3.5 Flash AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Reply to Comment Thread as GlennBot Automations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

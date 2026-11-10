@@ -604,7 +604,11 @@ def ensure_external_post_record_in_db(
         if not final_permalink:
             final_permalink = f"https://www.tiktok.com/@{final_uname or 'tiktok'}/video/{target_pid}"
     elif plat_clean == "facebook" and not final_permalink and target_pid:
-        final_permalink = f"https://www.facebook.com/{target_pid}"
+        if "_" in target_pid:
+            fb_page_part, fb_post_part = target_pid.split("_", 1)
+            final_permalink = f"https://www.facebook.com/{fb_page_part}/posts/{fb_post_part}"
+        else:
+            final_permalink = f"https://www.facebook.com/{target_pid}"
     elif plat_clean == "youtube" and target_pid:
         m_yt_pid = re.search(r"(?:watch\?v=|youtu\.be/|/shorts/|/live/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])", final_permalink or target_pid)
         yt_vid_clean = m_yt_pid.group(1) if m_yt_pid else (target_pid if re.match(r"^[A-Za-z0-9_-]{11}$", target_pid) else "")
@@ -683,6 +687,37 @@ def ensure_external_post_record_in_db(
                 if not final_preview and existing_prev:
                     final_preview = existing_prev
 
+            if (not final_caption or final_caption in ("Previous Post", "Social Media Post") or not final_preview or not final_permalink) and target_pid:
+                _z_commented_fn = _resolve_service_callable("get_zernio_commented_posts_list")
+                if _z_commented_fn:
+                    for _force_cp in (False, True):
+                        try:
+                            _cp_list = _z_commented_fn(force=_force_cp) or []
+                        except Exception:
+                            _cp_list = []
+                        _matched_cp = None
+                        for _cp in _cp_list:
+                            if not isinstance(_cp, dict):
+                                continue
+                            _cp_id = str(_cp.get("platformPostId") or _cp.get("id") or _cp.get("_id") or "").strip()
+                            _cp_suf = _cp_id.split("_")[-1].strip() if "_" in _cp_id else _cp_id
+                            if _cp_id and (_cp_id in cand_tokens or (_cp_suf and _cp_suf in cand_tokens)):
+                                _matched_cp = _cp
+                                break
+                        if _matched_cp:
+                            _cp_cap = str(_matched_cp.get("content") or _matched_cp.get("caption") or "").strip()
+                            _cp_plink = str(_matched_cp.get("permalink") or _matched_cp.get("platformPostUrl") or "").strip()
+                            _cp_pic = str(_matched_cp.get("picture") or _matched_cp.get("imageUrl") or _matched_cp.get("thumbnailUrl") or "").strip()
+                            if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and _cp_cap:
+                                final_caption = _cp_cap
+                            if not final_preview and _cp_pic:
+                                final_preview = _cp_pic
+                            if (not final_permalink or ("_" in final_permalink and "/posts/" not in final_permalink)) and _cp_plink:
+                                final_permalink = _cp_plink
+                            break
+                        if final_caption and final_caption not in ("Previous Post", "Social Media Post"):
+                            break
+
             if plat_clean == "tiktok" and target_pid.isdigit() and (not final_caption or final_caption == "Previous Post" or not final_preview):
                 _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
                 tk_meta = _tikwm_fn(target_pid, final_uname) if _tikwm_fn else {}
@@ -713,9 +748,9 @@ def ensure_external_post_record_in_db(
                         scheduled_time = CASE WHEN glennbot_scheduled_posts.id LIKE 'post_ext_%' THEN EXCLUDED.scheduled_time ELSE glennbot_scheduled_posts.scheduled_time END,
                         status_message = CASE WHEN EXCLUDED.status_message != '' THEN EXCLUDED.status_message ELSE glennbot_scheduled_posts.status_message END,
                         external_post_id = COALESCE(NULLIF(EXCLUDED.external_post_id, ''), glennbot_scheduled_posts.external_post_id),
-                        caption = CASE WHEN glennbot_scheduled_posts.caption = '' OR glennbot_scheduled_posts.caption IS NULL OR glennbot_scheduled_posts.caption = 'Previous Post' THEN EXCLUDED.caption ELSE glennbot_scheduled_posts.caption END,
+                        caption = CASE WHEN glennbot_scheduled_posts.caption = '' OR glennbot_scheduled_posts.caption IS NULL OR glennbot_scheduled_posts.caption IN ('Previous Post', 'Social Media Post') THEN EXCLUDED.caption ELSE glennbot_scheduled_posts.caption END,
                         media_preview_url = CASE WHEN glennbot_scheduled_posts.media_preview_url = '' OR glennbot_scheduled_posts.media_preview_url IS NULL THEN EXCLUDED.media_preview_url ELSE glennbot_scheduled_posts.media_preview_url END,
-                        permalink_url = COALESCE(EXCLUDED.permalink_url, glennbot_scheduled_posts.permalink_url)
+                        permalink_url = CASE WHEN EXCLUDED.permalink_url IS NOT NULL AND EXCLUDED.permalink_url != '' AND (glennbot_scheduled_posts.permalink_url IS NULL OR glennbot_scheduled_posts.permalink_url = '' OR (glennbot_scheduled_posts.permalink_url LIKE 'https://www.facebook.com/%_%' AND EXCLUDED.permalink_url LIKE '%/posts/%')) THEN EXCLUDED.permalink_url ELSE COALESCE(glennbot_scheduled_posts.permalink_url, EXCLUDED.permalink_url) END
                 """),
                 {
                     "id": rec_id,

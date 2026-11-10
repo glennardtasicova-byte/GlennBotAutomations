@@ -194,6 +194,54 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
             sched_dt = db_post.get("scheduled_time")
             is_ext_post = rec_id.startswith("post_ext_")
 
+            cur_db_cap = str(db_post.get("caption") or "").strip()
+            cur_store_cap = str(p_entry.get("post_caption") or "").strip()
+            if (not cur_db_cap or cur_db_cap in ("Previous Post", "Social Media Post")) and (not cur_store_cap or cur_store_cap in ("Previous Post", "Social Media Post")):
+                try:
+                    ext_pid_cand = extract_external_post_id(db_post) or next(
+                        (str(cv.get("zernio_post_id") or cv.get("external_post_id") or "").strip() for cv in c_map.values() if isinstance(cv, dict) and (cv.get("zernio_post_id") or cv.get("external_post_id"))),
+                        ""
+                    )
+                    ext_suf_cand = ext_pid_cand.split("_")[-1].strip() if "_" in ext_pid_cand else ext_pid_cand
+                    if ext_pid_cand:
+                        for cp_it in (get_zernio_commented_posts_list(force=(rec_id == active_record_id)) or []):
+                            if not isinstance(cp_it, dict):
+                                continue
+                            cp_cid = str(cp_it.get("platformPostId") or cp_it.get("id") or cp_it.get("_id") or "").strip()
+                            cp_csuf = cp_cid.split("_")[-1].strip() if "_" in cp_cid else cp_cid
+                            if cp_cid and (cp_cid == ext_pid_cand or (ext_suf_cand and cp_csuf == ext_suf_cand)):
+                                cp_ccap = str(cp_it.get("content") or cp_it.get("caption") or "").strip()
+                                cp_cplink = str(cp_it.get("permalink") or cp_it.get("platformPostUrl") or "").strip()
+                                cp_cpic = str(cp_it.get("picture") or cp_it.get("imageUrl") or cp_it.get("thumbnailUrl") or "").strip()
+                                if cp_ccap:
+                                    db_post["caption"] = cp_ccap
+                                    p_entry["post_caption"] = cp_ccap
+                                    store_cleaned = True
+                                if cp_cplink and not db_post.get("permalink_url"):
+                                    db_post["permalink_url"] = cp_cplink
+                                    p_entry["post_permalink"] = cp_cplink
+                                    store_cleaned = True
+                                if cp_ccap or cp_cplink or cp_cpic:
+                                    try:
+                                        with db_engine.begin() as conn_h:
+                                            conn_h.execute(
+                                                text("""
+                                                    UPDATE glennbot_scheduled_posts
+                                                    SET caption = CASE WHEN :cap != '' THEN :cap ELSE caption END,
+                                                        media_preview_url = CASE WHEN :prev != '' AND (media_preview_url IS NULL OR media_preview_url = '') THEN :prev ELSE media_preview_url END,
+                                                        permalink_url = CASE WHEN :plink != '' AND (permalink_url IS NULL OR permalink_url = '') THEN :plink ELSE permalink_url END
+                                                    WHERE id = :id
+                                                """),
+                                                {"id": rec_id, "cap": cp_ccap, "prev": cp_cpic, "plink": cp_cplink}
+                                            )
+                                        _invalidate_fast_db_cache(["published_posts"])
+                                        LIVE_DETAILS_CACHE.pop(rec_id, None)
+                                    except Exception:
+                                        pass
+                                break
+                except Exception:
+                    pass
+
             for cid, c_obj in list(c_map.items()):
                 obj_cid = str((c_obj or {}).get("comment_id") or cid).strip() if isinstance(c_obj, dict) else str(cid)
                 if (
@@ -221,8 +269,12 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
                     c_copy["page_id"] = str(db_post["page_id"])
                 if db_post.get("account_name"):
                     c_copy["account_name"] = db_post["account_name"]
-                if db_post.get("caption") and db_post["caption"] != "Previous Post":
-                    c_copy["post_caption"] = db_post["caption"]
+                eff_post_cap = db_post.get("caption") or p_entry.get("post_caption") or ""
+                if eff_post_cap and eff_post_cap not in ("Previous Post", "Social Media Post"):
+                    c_copy["post_caption"] = eff_post_cap
+                    if c_obj.get("post_caption") != eff_post_cap:
+                        c_obj["post_caption"] = eff_post_cap
+                        store_cleaned = True
                 if db_post.get("permalink_url"):
                     c_copy["post_permalink"] = db_post["permalink_url"]
                 enriched = enrich_comment_with_reply_notifications(c_copy, seen_ids, deleted_cids=del_cids)
@@ -257,8 +309,13 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
 @router.get("/api/posts/{record_id}/live_details")
 def get_live_post_details(record_id: str):
     now_ts = time.time()
-    if record_id in LIVE_DETAILS_CACHE and (now_ts - LIVE_DETAILS_CACHE[record_id]["ts"] < 1800):
-        return {"status": "success", "details": LIVE_DETAILS_CACHE[record_id]["details"]}
+    cached_entry = LIVE_DETAILS_CACHE.get(record_id)
+    if (
+        cached_entry
+        and (now_ts - cached_entry["ts"] < 1800)
+        and str((cached_entry.get("details") or {}).get("caption") or "").strip() not in ("", "Previous Post", "Social Media Post")
+    ):
+        return {"status": "success", "details": cached_entry["details"]}
 
     try:
         with db_engine.connect() as conn:
@@ -321,6 +378,52 @@ def get_live_post_details(record_id: str):
             if not result["permalink_url"] and z_post.get("platformPostUrl"):
                 result["permalink_url"] = z_post["platformPostUrl"]
 
+        if z_info.get("discovered_caption") and (not result["caption"] or result["caption"] in ("Previous Post", "Social Media Post")):
+            result["caption"] = z_info["discovered_caption"]
+        if z_info.get("discovered_preview_url") and not result["fallback_preview_url"]:
+            result["fallback_preview_url"] = z_info["discovered_preview_url"]
+            if not result["thumbnail_url"]:
+                result["thumbnail_url"] = z_info["discovered_preview_url"]
+
+        if not z_post or not result["caption"] or result["caption"] in ("Previous Post", "Social Media Post") or not result["permalink_url"]:
+            try:
+                ext_suffix = ext_id.split("_")[-1].strip() if "_" in str(ext_id or "") else str(ext_id or "").strip()
+                for force_cp in (False, True):
+                    matched_cp_flag = False
+                    for cp_item in (get_zernio_commented_posts_list(force=force_cp) or []):
+                        if not isinstance(cp_item, dict):
+                            continue
+                        cp_id = str(cp_item.get("platformPostId") or cp_item.get("id") or cp_item.get("_id") or "").strip()
+                        cp_suffix = cp_id.split("_")[-1].strip() if "_" in cp_id else cp_id
+                        if cp_id and (cp_id in (ext_id, z_info["zernio_post_id"], z_info["platform_post_id"]) or (ext_suffix and cp_suffix == ext_suffix)):
+                            matched_cp_flag = True
+                            cp_content = str(cp_item.get("content") or cp_item.get("caption") or "").strip()
+                            if cp_content and (not result["caption"] or result["caption"] in ("Previous Post", "Social Media Post")):
+                                result["caption"] = cp_content
+                            cp_plink = str(cp_item.get("permalink") or cp_item.get("platformPostUrl") or "").strip()
+                            if cp_plink and (not result["permalink_url"] or ("_" in result["permalink_url"] and "/posts/" not in result["permalink_url"])):
+                                result["permalink_url"] = cp_plink
+                            cp_pic = str(cp_item.get("picture") or cp_item.get("imageUrl") or cp_item.get("thumbnailUrl") or "").strip()
+                            if cp_pic:
+                                if not result["thumbnail_url"]:
+                                    result["thumbnail_url"] = cp_pic
+                                if not result["fallback_preview_url"]:
+                                    result["fallback_preview_url"] = cp_pic
+                                if platform == "instagram" and "/p/" in str(result["permalink_url"] or "") and not result["video_url"] and not result["images"]:
+                                    result["post_type"] = "image"
+                                    result["images"] = [cp_pic]
+                            elif not result["video_url"] and not result["images"]:
+                                result["post_type"] = "text"
+                            break
+                    if matched_cp_flag and result["caption"] and result["caption"] not in ("Previous Post", "Social Media Post"):
+                        break
+            except Exception:
+                pass
+
+        if platform == "facebook" and ext_id and "_" in ext_id and (not result["permalink_url"] or ("_" in result["permalink_url"] and "/posts/" not in result["permalink_url"])):
+            fb_p1, fb_p2 = ext_id.split("_", 1)
+            result["permalink_url"] = f"https://www.facebook.com/{fb_p1}/posts/{fb_p2}"
+
         if not result["permalink_url"] and z_info["permalink_url"]:
             result["permalink_url"] = z_info["permalink_url"]
 
@@ -330,19 +433,53 @@ def get_live_post_details(record_id: str):
                 result["video_url"] = tk_meta["video_url"]
             if tk_meta.get("cover_url"):
                 result["thumbnail_url"] = tk_meta["cover_url"]
-            if tk_meta.get("caption") and (not result["caption"] or result["caption"] == "Previous Post"):
+            if tk_meta.get("caption") and (not result["caption"] or result["caption"] in ("Previous Post", "Social Media Post")):
                 result["caption"] = tk_meta["caption"]
             if tk_meta.get("permalink") and not result["permalink_url"]:
                 result["permalink_url"] = tk_meta["permalink"]
 
-        if result["permalink_url"] and not r_dict.get("permalink_url"):
-            update_post_status(
-                record_id,
-                r_dict["status"],
-                status_msg,
-                external_post_id=ext_id or None,
-                permalink_url=result["permalink_url"]
-            )
+        healed_cap = str(result.get("caption") or "").strip()
+        healed_plink = str(result.get("permalink_url") or "").strip()
+        healed_prev = str(result.get("fallback_preview_url") or result.get("thumbnail_url") or "").strip()
+        if (
+            (healed_cap and healed_cap not in ("Previous Post", "Social Media Post") and r_dict.get("caption") in ("", "Previous Post", "Social Media Post", None))
+            or (healed_plink and not r_dict.get("permalink_url"))
+            or (healed_prev and not r_dict.get("media_preview_url"))
+        ):
+            try:
+                with db_engine.begin() as conn_u:
+                    conn_u.execute(
+                        text("""
+                            UPDATE glennbot_scheduled_posts
+                            SET caption = CASE WHEN :cap != '' THEN :cap ELSE caption END,
+                                media_preview_url = CASE WHEN :prev != '' AND (media_preview_url IS NULL OR media_preview_url = '') THEN :prev ELSE media_preview_url END,
+                                permalink_url = CASE WHEN :plink != '' THEN :plink ELSE permalink_url END
+                            WHERE id = :id
+                        """),
+                        {
+                            "id": record_id,
+                            "cap": healed_cap if healed_cap not in ("Previous Post", "Social Media Post") else "",
+                            "prev": healed_prev,
+                            "plink": healed_plink
+                        }
+                    )
+                _invalidate_fast_db_cache(["published_posts"])
+                posts_store_u = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+                p_ent_u = posts_store_u.get(record_id)
+                if isinstance(p_ent_u, dict):
+                    if healed_cap and healed_cap not in ("Previous Post", "Social Media Post"):
+                        p_ent_u["post_caption"] = healed_cap
+                        for c_u in (p_ent_u.get("comments") or {}).values():
+                            if isinstance(c_u, dict):
+                                c_u["post_caption"] = healed_cap
+                    if healed_plink:
+                        p_ent_u["post_permalink"] = healed_plink
+                        for c_u in (p_ent_u.get("comments") or {}).values():
+                            if isinstance(c_u, dict):
+                                c_u["post_permalink"] = healed_plink
+                    save_comments_store_async()
+            except Exception:
+                pass
 
         LIVE_DETAILS_CACHE[record_id] = {"ts": now_ts, "details": result}
         return {"status": "success", "details": result}

@@ -316,6 +316,11 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
     if m_json:
         return _deep_get_path(current_json, m_json.group(1).strip())
 
+    # Safeguard against inline IIFE `(() => { ... })()` inside JSON.stringify object literals
+    if t.startswith("(() =>") or "const rawReply" in t:
+        raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
+        return raw_rep
+
     return t
 
 
