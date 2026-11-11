@@ -2537,10 +2537,10 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_r
     now_sync_ts = time.time()
 
     # Fast single-record path when caller specifies active_record_id (e.g., Portfolio 5s/8s showcase sync or popout thread)
-    # Prevents spawning a 60-post ThreadPoolExecutor storm 3x every 8 seconds on 512MB Render containers.
-    if clean_target_rec and (now_sync_ts - float(_FULL_COMMENTS_SYNC_STATE.get("last_full_sync_ts") or 0.0)) < 60.0:
+    # Strictly syncs ONLY the requested post instead of spawning a multi-post ThreadPoolExecutor storm on Render.
+    if clean_target_rec:
         last_rec_ts = float((_FULL_COMMENTS_SYNC_STATE.get("per_record_ts") or {}).get(clean_target_rec) or 0.0)
-        if (now_sync_ts - last_rec_ts) < 3.5:
+        if (now_sync_ts - last_rec_ts) < 4.5:
             return True
         _FULL_COMMENTS_SYNC_STATE.setdefault("per_record_ts", {})[clean_target_rec] = now_sync_ts
         try:
@@ -2559,7 +2559,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_r
                 ).mappings().first()
             if t_row:
                 sync_single_post_to_cloudinary(dict(t_row), force_unhide=bool(force_refresh))
-                return True
+            return True
         except Exception as e:
             print(f"[⚠️ TARGETED POST SYNC WARNING]: {e}")
             return False

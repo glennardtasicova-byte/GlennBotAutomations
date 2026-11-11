@@ -317,7 +317,14 @@
         }
 
         async function fetchComments(showFeedback = false) {
-            if (!showFeedback && window._gbInFlightPolls && window._gbInFlightPolls.comments) {
+            const isCommentThreadPopout = (window.gbActivePopoutMode === 'comment_thread');
+            const nowMs = Date.now();
+            const allowForceSync = showFeedback && (!isCommentThreadPopout || (nowMs - (window._gbLastPopoutForceSyncMs || 0) >= 15000));
+            if (allowForceSync && isCommentThreadPopout) {
+                window._gbLastPopoutForceSyncMs = nowMs;
+            }
+
+            if (!allowForceSync && window._gbInFlightPolls && window._gbInFlightPolls.comments) {
                 return;
             }
             if (window._gbInFlightPolls) window._gbInFlightPolls.comments = true;
@@ -326,11 +333,12 @@
             if (syncIcon && showFeedback) syncIcon.classList.add('fa-spin');
 
             try {
-                const activeParam = selectedRecordId ? `active_record_id=${encodeURIComponent(selectedRecordId)}` : '';
-                const url = showFeedback
+                const activeRec = selectedRecordId || (window.gbActivePopoutParams && window.gbActivePopoutParams.record_id) || '';
+                const activeParam = activeRec ? `active_record_id=${encodeURIComponent(activeRec)}` : '';
+                const url = allowForceSync
                     ? `/api/comments?force=true${activeParam ? '&' + activeParam : ''}`
                     : `/api/comments${activeParam ? '?' + activeParam : ''}`;
-                let res = await _gbFetchWithTimeout(url, {}, showFeedback ? 20000 : 8000);
+                let res = await _gbFetchWithTimeout(url, {}, allowForceSync ? 20000 : 8000);
                 let data = await res.json();
                 if (data.status === 'success') {
                     const incoming = (data.comments || []).filter(c => !_isCommentIdDeletedLocally(c.comment_id));
@@ -411,7 +419,7 @@
                         }
                     }
 
-                    if (showFeedback) {
+                    if (showFeedback && !isCommentThreadPopout) {
                         showToast(`🔔 Synced ${commentsList.length} comment thread(s)!`);
                     } else if (newlyArrived.length > 0) {
                         const latestNew = newlyArrived[0];
