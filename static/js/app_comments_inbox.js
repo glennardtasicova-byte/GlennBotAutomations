@@ -1696,9 +1696,14 @@
                 const platFilter = document.getElementById('messages-filter-platform')?.value || 'all';
                 const pageFilter = document.getElementById('messages-filter-page')?.value || 'all';
                 const pageLimitsJson = encodeURIComponent(JSON.stringify(messagesPageLimits));
+                const isLivePopoutPoll = Boolean(window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled);
+                if (isLivePopoutPoll) {
+                    window._gbPopoutPollCounter = (window._gbPopoutPollCounter || 0) + 1;
+                }
+                const shouldForceZernio = showFeedback || (isLivePopoutPoll && (window._gbPopoutPollCounter % 2 === 1));
 
-                const url = `/api/messages/conversations?force=${showFeedback ? 'true' : 'false'}&platform=${encodeURIComponent(platFilter)}&account_id=${encodeURIComponent(pageFilter)}&limit_per_page=10&page_limits=${pageLimitsJson}`;
-                const res = await _gbFetchWithTimeout(url, {}, showFeedback ? 20000 : 8000);
+                const url = `/api/messages/conversations?force=${shouldForceZernio ? 'true' : 'false'}&platform=${encodeURIComponent(platFilter)}&account_id=${encodeURIComponent(pageFilter)}&limit_per_page=10&page_limits=${pageLimitsJson}`;
+                const res = await _gbFetchWithTimeout(url, {}, shouldForceZernio ? 15000 : 8000);
                 const data = await res.json();
 
                 if (data.status === 'success') {
@@ -1739,7 +1744,59 @@
                             if (cfg.account_name && cAccName.includes(cfg.account_name)) return true;
                             return !cfg.account_id && !cfg.account_name;
                         });
-                        if (matchingConvs.length > 0) {
+
+                        if (cfg.wait_for_new) {
+                            if (!cfg.baseline_captured) {
+                                cfg.baseline_map = {};
+                                matchingConvs.forEach(c => {
+                                    cfg.baseline_map[c.conv_key] = {
+                                        updated_iso: String(c.updated_iso || ''),
+                                        last_message_text: String(c.last_message_text || '').trim()
+                                    };
+                                });
+                                cfg.baseline_captured = true;
+                            }
+
+                            const sessionStartMs = Number(cfg.session_start_ts || Date.now());
+                            const activeNewConv = matchingConvs.find(c => {
+                                if (cfg.locked_conv_key && c.conv_key === cfg.locked_conv_key) return true;
+                                const base = cfg.baseline_map ? cfg.baseline_map[c.conv_key] : null;
+                                const curIso = String(c.updated_iso || '');
+                                const curText = String(c.last_message_text || '').trim();
+                                const curMs = curIso ? new Date(curIso).getTime() : 0;
+
+                                // 1. Brand-new conversation thread created after modal opened
+                                if (!base) return true;
+                                // 2. Conversation updated_iso or last_message_text changed since modal opened
+                                if (curIso && curIso > base.updated_iso) return true;
+                                if (curText && curText !== base.last_message_text) return true;
+                                // 3. Message timestamp is at or after session_start_ts (with 8s clock skew tolerance)
+                                if (curMs && !Number.isNaN(curMs) && curMs >= (sessionStartMs - 8000)) return true;
+                                return false;
+                            });
+
+                            if (activeNewConv) {
+                                cfg.locked_conv_key = activeNewConv.conv_key;
+                                cfg.locked_conv_id = activeNewConv.conversation_id;
+                                cfg.locked_account_id = activeNewConv.account_id;
+                                if (selectedConversationKey !== activeNewConv.conv_key) {
+                                    await selectMessageConversation(activeNewConv.conv_key, activeNewConv.conversation_id, activeNewConv.account_id);
+                                    if (typeof setGlennBotPopoutBarHeader === 'function') {
+                                        setGlennBotPopoutBarHeader(
+                                            `Chat with ${activeNewConv.participant_name || 'Live Visitor'} — Live Messenger Session`,
+                                            'Focused Conversation Window • Real-Time Direct Messaging & AI Replies',
+                                            'fa-comments'
+                                        );
+                                    }
+                                } else if (activeTab === 'messages') {
+                                    await refreshOpenConversationSilently(activeNewConv.conversation_id, activeNewConv.account_id);
+                                }
+                            } else if (!cfg.locked_conv_key) {
+                                if (typeof renderBlankWaitingConversationStandby === 'function') {
+                                    renderBlankWaitingConversationStandby(cfg.display_account_name || 'GlennBot Automations', cfg.platform || 'facebook');
+                                }
+                            }
+                        } else if (matchingConvs.length > 0) {
                             const newestConv = matchingConvs[0];
                             if (selectedConversationKey !== newestConv.conv_key) {
                                 await selectMessageConversation(newestConv.conv_key, newestConv.conversation_id, newestConv.account_id);
@@ -1754,10 +1811,12 @@
                                 await refreshOpenConversationSilently(newestConv.conversation_id, newestConv.account_id);
                             }
                         }
-                    } else if (selectedConversationKey) {
+                    } else if (selectedConversationKey || selectedConversationId) {
                         const stillExists = messagesConversationsList.find(c => c.conv_key === selectedConversationKey);
                         if (stillExists && activeTab === 'messages') {
                             await refreshOpenConversationSilently(stillExists.conversation_id, stillExists.account_id);
+                        } else if (selectedConversationId && (activeTab === 'messages' || window.gbActivePopoutMode === 'message_thread')) {
+                            await refreshOpenConversationSilently(selectedConversationId, selectedConversationAccountId || '6af0b109818eb5c88d1e87a6');
                         }
                     }
 
@@ -1974,7 +2033,9 @@
                 const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(accountId)}&force=false`);
                 const data = await res.json();
                 if (data.status === 'success') {
+                    const prevName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
                     activeConversationObj = data.conversation || activeConversationObj;
+                    const nextName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
                     const incomingMsgs = data.messages || [];
                     const pendingList = pendingOptimisticMessages[selectedConversationKey] || [];
 
@@ -1987,9 +2048,16 @@
 
                     const prevSig = (activeConversationMessages || []).map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
                     const nextSig = incomingMsgs.map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
-                    if (incomingMsgs.length !== activeConversationMessages.length || prevSig !== nextSig) {
+                    if (incomingMsgs.length !== activeConversationMessages.length || prevSig !== nextSig || prevName !== nextName) {
                         activeConversationMessages = incomingMsgs;
                         renderActiveConversationThread(true);
+                        if (window.gbActivePopoutMode === 'message_thread' && nextName && typeof setGlennBotPopoutBarHeader === 'function') {
+                            setGlennBotPopoutBarHeader(
+                                `Chat with ${nextName} — Expanded View`,
+                                'Focused Conversation Window • Real-Time Direct Messaging & Replies',
+                                'fa-comments'
+                            );
+                        }
                     }
                 }
             } catch (e) {
@@ -1997,13 +2065,101 @@
             }
         }
 
+        function renderBlankWaitingConversationStandby(accountName = 'GlennBot Automations', platform = 'facebook') {
+            const panel = document.getElementById('message-detail-panel');
+            if (!panel) return;
+            const cleanAccName = escapeHTML(accountName || 'GlennBot Automations');
+            const platBadge = typeof getPlatformBadge === 'function' ? getPlatformBadge(platform || 'facebook') : '';
+
+            panel.innerHTML = `
+                <div class="flex flex-col h-full justify-between overflow-hidden">
+                    <!-- TOP: BLANK CONVERSATION HEADER -->
+                    <div class="flex-none px-4 py-3 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="relative shrink-0">
+                                <div class="w-10 h-10 rounded-full bg-slate-800 border border-gb-cyan/60 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0 shadow-[0_0_12px_rgba(0,240,255,0.2)]">
+                                    <i class="fas fa-robot text-sm"></i>
+                                </div>
+                                <span class="absolute -bottom-1 -right-1">${platBadge}</span>
+                            </div>
+                            <div class="min-w-0">
+                                <h3 class="text-xs sm:text-sm font-bold text-white truncate">${cleanAccName} — Live Messenger Session</h3>
+                                <p class="text-[11px] text-emerald-400 truncate flex items-center gap-1.5">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block"></span>
+                                    <span>Waiting for your first message on Facebook Messenger...</span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button type="button" onclick="fetchConversations(true)"
+                                class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-semibold inline-flex items-center gap-1.5 transition-all"
+                                title="Check for new incoming Messenger DMs">
+                                <i class="fas fa-sync-alt text-[10px]"></i> <span>Refresh Chat</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- MIDDLE: EMPTY / BLANK CONVERSATION STANDBY -->
+                    <div id="conversation-messages-scroll-box" class="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center text-center bg-slate-950/40">
+                        <div class="max-w-md mx-auto p-6 rounded-2xl bg-slate-900/70 border border-slate-800/90 shadow-lg">
+                            <div class="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gb-cyan/10 border border-gb-cyan/40 flex items-center justify-center text-gb-cyan shadow-[0_0_20px_rgba(0,240,255,0.15)]">
+                                <i class="fab fa-facebook-messenger text-2xl"></i>
+                            </div>
+                            <h4 class="text-sm sm:text-base font-bold text-white mb-1.5">Blank Conversation Ready</h4>
+                            <p class="text-xs text-slate-300 leading-relaxed mb-3">
+                                Click <span class="text-gb-cyan font-semibold">"Open Facebook Messenger"</span> on the left and send any message to <span class="text-white font-semibold">${cleanAccName}</span>.
+                            </p>
+                            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[11px] text-emerald-300 font-medium">
+                                <i class="fas fa-circle-notch fa-spin text-[10px]"></i>
+                                <span>Listening for your live DM & Gemini 3.5 Flash reply...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- BOTTOM: STANDBY FOOTER -->
+                    <div class="flex-none px-4 py-3 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                        <span><i class="fas fa-shield-alt text-gb-cyan mr-1.5"></i>Previous conversations are hidden for privacy — only your new live session messages will appear here.</span>
+                        <span class="text-gb-cyan font-semibold shrink-0 hidden sm:inline">24h Meta Window Ready</span>
+                    </div>
+                </div>
+            `;
+        }
+
         function buildConversationMessagesBubblesHTML(messagesArr, participantName, accountName) {
-            const validMessages = (Array.isArray(messagesArr) ? messagesArr : []).filter(m => {
+            const isFreshSessionWait = Boolean(window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled && window._gbPopoutAutoLatestConfig.wait_for_new);
+            const sessionStartMs = isFreshSessionWait ? Number(window._gbPopoutAutoLatestConfig.session_start_ts || 0) : 0;
+
+            let validMessages = (Array.isArray(messagesArr) ? messagesArr : []).filter(m => {
                 if (!m || typeof m !== 'object') return false;
                 const hasText = Boolean((m.message || '').trim());
                 const hasAtts = Array.isArray(m.attachments) && m.attachments.length > 0;
                 return hasText || hasAtts;
             });
+
+            if (isFreshSessionWait && sessionStartMs > 0 && validMessages.length > 0) {
+                // Filter out old history from prior days/sessions (allow 90s tolerance for clock drift)
+                const freshCutoffMs = sessionStartMs - 90000;
+                const sessionFiltered = validMessages.filter(m => {
+                    if (m.pending) return true;
+                    const iso = String(m.created_iso || m.timestamp || '').trim();
+                    if (!iso) return false;
+                    const ts = new Date(iso).getTime();
+                    return !Number.isNaN(ts) && ts >= freshCutoffMs;
+                });
+                if (sessionFiltered.length > 0) {
+                    validMessages = sessionFiltered;
+                } else {
+                    // Fallback if provider timestamps had clock skew: show only the last incoming message and any reply after it
+                    let lastIncomingIdx = -1;
+                    for (let i = validMessages.length - 1; i >= 0; i--) {
+                        if (!validMessages[i].is_own) {
+                            lastIncomingIdx = i;
+                            break;
+                        }
+                    }
+                    validMessages = lastIncomingIdx !== -1 ? validMessages.slice(lastIncomingIdx) : validMessages.slice(-2);
+                }
+            }
 
             if (validMessages.length === 0) {
                 return `
@@ -2036,7 +2192,11 @@
                     : '';
 
                 const msgIdSafe = escapeHTML(m.id || '');
-                const deleteMsgBtnHTML = msgIdSafe
+                const isPortfolioThread = Boolean(
+                    (window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled)
+                    || (activeConversationObj && (activeConversationObj.is_portfolio_live_dm || /^(fb_live_|ig_live_|portfolio_)/.test(String(activeConversationObj.conversation_id || ''))))
+                );
+                const deleteMsgBtnHTML = (msgIdSafe && !isPortfolioThread)
                     ? `<button type="button" onclick="promptDeleteSingleChatMessage('${msgIdSafe}', event)" class="px-1.5 py-0.5 rounded bg-rose-950/60 hover:bg-rose-600 border border-rose-500/40 text-rose-300 hover:text-white text-[9px] font-semibold transition-all inline-flex items-center gap-1" title="Delete this message"><i class="fas fa-trash-alt text-[8px]"></i></button>`
                     : '';
 
@@ -2072,6 +2232,11 @@
             if (!panel || !activeConversationObj) return;
 
             const c = activeConversationObj;
+            const hideShowcaseAdminBtns = Boolean(
+                (window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled)
+                || c.is_portfolio_live_dm
+                || /^(fb_live_|ig_live_|portfolio_)/.test(String(c.conversation_id || ''))
+            );
             const avatarHTML = c.participant_avatar
                 ? `<img src="${c.participant_avatar}" class="w-10 h-10 rounded-full object-cover border border-gb-cyan/50 shrink-0" onerror="this.outerHTML='<div class=\\'w-10 h-10 rounded-full bg-slate-800 border border-gb-cyan/50 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0\\'><i class=\\'fas fa-user\\'></i></div>'">`
                 : `<div class="w-10 h-10 rounded-full bg-slate-800 border border-gb-cyan/50 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0"><i class="fas fa-user"></i></div>`;
@@ -2108,16 +2273,18 @@
                                     <i class="fas fa-external-link-square-alt text-[10px]"></i> <span>Expanded View</span>
                                 </button>
                             ` : ''}
-                            <button type="button" onclick="openAddToContactsFromMessage('${escapeHTML(c.conv_key)}', event)"
-                                class="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-300 hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)]"
-                                title="Add ${escapeHTML(c.participant_name)} to CRM Contacts with Auto-Fill">
-                                <i class="fas fa-user-plus text-[10px]"></i> <span>Add to Contacts</span>
-                            </button>
-                            <button type="button" onclick="promptDeleteMessageConversation('${escapeHTML(c.conv_key)}', '${escapeHTML(c.conversation_id)}', '${escapeHTML(c.participant_name || 'Conversation')}', event)"
-                                class="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-600 border border-rose-500/60 text-rose-300 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all"
-                                title="Delete this entire conversation">
-                                <i class="fas fa-trash-alt text-[10px]"></i> <span>Delete Chat</span>
-                            </button>
+                            ${!hideShowcaseAdminBtns ? `
+                                <button type="button" onclick="openAddToContactsFromMessage('${escapeHTML(c.conv_key)}', event)"
+                                    class="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-300 hover:text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                                    title="Add ${escapeHTML(c.participant_name)} to CRM Contacts with Auto-Fill">
+                                    <i class="fas fa-user-plus text-[10px]"></i> <span>Add to Contacts</span>
+                                </button>
+                                <button type="button" onclick="promptDeleteMessageConversation('${escapeHTML(c.conv_key)}', '${escapeHTML(c.conversation_id)}', '${escapeHTML(c.participant_name || 'Conversation')}', event)"
+                                    class="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-600 border border-rose-500/60 text-rose-300 hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all"
+                                    title="Delete this entire conversation">
+                                    <i class="fas fa-trash-alt text-[10px]"></i> <span>Delete Chat</span>
+                                </button>
+                            ` : ''}
                             <button type="button" onclick="selectMessageConversation('${escapeHTML(c.conv_key)}', '${escapeHTML(c.conversation_id)}', '${escapeHTML(c.account_id)}')"
                                 class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-xs font-semibold inline-flex items-center gap-1.5 transition-all"
                                 title="Refresh this chat thread">

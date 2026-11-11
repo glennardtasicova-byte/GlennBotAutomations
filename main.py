@@ -192,7 +192,17 @@ os.makedirs(os.path.join(STATIC_DIR, "css"), exist_ok=True)
 os.makedirs(os.path.join(STATIC_DIR, "js"), exist_ok=True)
 os.makedirs(os.path.join(TEMPLATES_DIR, "partials"), exist_ok=True)
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mount /static and initialize Jinja2Templates
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

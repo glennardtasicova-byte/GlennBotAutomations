@@ -1578,6 +1578,45 @@ def get_conversation_messages_thread(
                         target_conv = c_obj
                         break
 
+        if not target_conv and str(conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_")):
+            clean_cid = str(conversation_id).strip()
+            eff_acc_id = str(account_id or "6af0b109818eb5c88d1e87a6").strip()
+            eff_plat = "instagram" if clean_cid.startswith("ig_live_") else "facebook"
+            eff_acc_name = "GlennBot Automations"
+            now_dt = datetime.now(pytz.timezone("Asia/Manila"))
+            target_key = f"{eff_acc_id}_{clean_cid}"
+            target_conv = {
+                "conv_key": target_key,
+                "conversation_id": clean_cid,
+                "platform_conversation_id": clean_cid,
+                "zernio_conversation_id": clean_cid,
+                "alternate_conversation_ids": [clean_cid],
+                "platform": eff_plat,
+                "account_id": eff_acc_id,
+                "zernio_account_id": eff_acc_id,
+                "account_name": eff_acc_name,
+                "account_avatar": "",
+                "participant_id": f"visitor_{clean_cid}",
+                "participant_name": "Portfolio Client",
+                "participant_handle": "",
+                "participant_phone": "",
+                "participant_email": "",
+                "participant_avatar": "",
+                "last_message_text": "Start a conversation",
+                "last_message_is_own": False,
+                "updated_iso": now_dt.isoformat(),
+                "display_time": now_dt.strftime("%b %d, %Y • %I:%M %p"),
+                "relative_time": "Just now",
+                "has_authoritative_ts": True,
+                "unread_count": 0,
+                "is_read": True,
+                "hidden": False,
+                "opened_from_crm": True,
+                "is_portfolio_live_dm": True,
+                "messages": []
+            }
+            convs_store[target_key] = target_conv
+
         if not target_conv:
             return {"status": "error", "message": "Conversation not found."}
 
@@ -1589,10 +1628,14 @@ def get_conversation_messages_thread(
         real_conv_id = str(target_conv.get("conversation_id") or conversation_id)
         participant_id = str(target_conv.get("participant_id") or "").strip()
         participant_name = str(target_conv.get("participant_name") or "").strip()
+        is_portfolio_dm = bool(
+            target_conv.get("is_portfolio_live_dm")
+            or real_conv_id.startswith(("fb_live_", "ig_live_", "portfolio_"))
+        )
 
         verified_pairs = (
             []
-            if (platform == "sms" or acc_id == TEXTBEE_ACCOUNT_ID)
+            if (platform == "sms" or acc_id == TEXTBEE_ACCOUNT_ID or is_portfolio_dm)
             else resolve_live_zernio_account_and_key_pairs(platform, acc_id, acc_name, stored_z_acc_id, pref_key)
         )
 
@@ -2127,6 +2170,38 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
                 }
             return {"status": "error", "message": sms_res.get("message") or "Failed to send SMS via TextBee.dev."}
 
+        # If this conversation belongs to Portfolio Live Showcase (Idea B: fb_live_, ig_live_, portfolio_), record outbound reply directly
+        if (
+            bool((target_conv or {}).get("is_portfolio_live_dm"))
+            or str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
+            or real_conv_id.startswith(("fb_live_", "ig_live_", "portfolio_"))
+        ):
+            now_dt = datetime.now(pytz.timezone("Asia/Manila"))
+            new_msg_id = f"msg_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+            sent_msg_obj = {
+                "id": new_msg_id,
+                "platform_message_id": new_msg_id,
+                "sender_id": str(payload.account_id),
+                "sender_name": acc_name or "GlennBot Automations",
+                "sender_avatar": (target_conv or {}).get("account_avatar") or "",
+                "is_own": True,
+                "message": msg_text,
+                "attachments": [],
+                "created_iso": now_dt.isoformat(),
+                "display_time": now_dt.strftime("%b %d, %Y • %I:%M %p")
+            }
+            if target_conv is not None:
+                msgs = list(target_conv.get("messages") or [])
+                target_conv["messages"] = _deduplicate_messages_list(msgs + [sent_msg_obj])
+                target_conv["last_message_text"] = msg_text
+                target_conv["last_message_is_own"] = True
+                target_conv["updated_iso"] = sent_msg_obj["created_iso"]
+                target_conv["display_time"] = sent_msg_obj["display_time"]
+                target_conv["is_read"] = True
+                target_conv["unread_count"] = 0
+                save_messages_store_async()
+            return {"status": "success", "message_id": new_msg_id, "message": sent_msg_obj}
+
         # Validate Telegram Social Username / Handle BEFORE attempting to send
         tg_handle_raw = str(
             (target_conv or {}).get("participant_handle")
@@ -2641,6 +2716,131 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
             save_messages_store_async()
 
         return {"status": "success", "message_id": new_msg_id, "message": sent_msg_obj}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+class PortfolioLiveDmPayload(BaseModel):
+    conversation_id: str
+    account_id: Optional[str] = "6af0b109818eb5c88d1e87a6"
+    account_name: Optional[str] = "GlennBot Automations"
+    platform: Optional[str] = "facebook"
+    participant_name: Optional[str] = "Portfolio Client"
+    participant_id: Optional[str] = ""
+    message: str
+
+
+@router.post("/api/messages/portfolio_live_dm")
+@router.post("/api/v1/messages/portfolio_live_dm")
+def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
+    """
+    Idea B Live Showcase Endpoint:
+    Receives an incoming Direct Message directly from the Portfolio's Left Panel
+    ("Client Messenger Simulator"), saves it into the visitor's isolated conversation
+    thread in GlennBot's Unified Inbox (`CLOUDINARY_MESSAGES_STORE`), and fires the
+    `message.received` n8n webhook so `Auto reply to DM (GlennBot Automations)`
+    processes it via `Script.xlsx` (Sheet1) + `Conversations.xlsx` (Sheet2) + Gemini 3.5 Flash!
+    """
+    msg_text = str(payload.message or "").strip()
+    if not msg_text:
+        return {"status": "error", "message": "Message text is required."}
+
+    try:
+        if not CLOUDINARY_MESSAGES_STORE.get("loaded"):
+            load_messages_store_from_cloudinary()
+
+        convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
+        clean_cid = str(payload.conversation_id or "").strip() or f"fb_live_{uuid.uuid4().hex[:10]}"
+        eff_acc_id = str(payload.account_id or "6af0b109818eb5c88d1e87a6").strip()
+        eff_plat = str(payload.platform or ("instagram" if clean_cid.startswith("ig_live_") else "facebook")).strip().lower()
+        eff_acc_name = str(payload.account_name or "GlennBot Automations").strip() or "GlennBot Automations"
+        eff_part_name = str(payload.participant_name or "Portfolio Client").strip() or "Portfolio Client"
+        eff_part_id = str(payload.participant_id or f"visitor_{clean_cid}").strip()
+
+        conv_key = f"{eff_acc_id}_{clean_cid}"
+        now_dt = datetime.now(pytz.timezone("Asia/Manila"))
+        now_iso = now_dt.isoformat()
+        now_disp = now_dt.strftime("%b %d, %Y • %I:%M %p")
+        msg_id = f"msg_in_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
+        incoming_msg_obj = {
+            "id": msg_id,
+            "platform_message_id": msg_id,
+            "sender_id": eff_part_id,
+            "sender_name": eff_part_name,
+            "sender_avatar": "",
+            "is_own": False,
+            "message": msg_text,
+            "attachments": [],
+            "created_iso": now_iso,
+            "display_time": now_disp
+        }
+
+        target_conv = convs_store.get(conv_key)
+        if not isinstance(target_conv, dict):
+            target_conv = {
+                "conv_key": conv_key,
+                "conversation_id": clean_cid,
+                "platform_conversation_id": clean_cid,
+                "zernio_conversation_id": clean_cid,
+                "alternate_conversation_ids": [clean_cid],
+                "platform": eff_plat,
+                "account_id": eff_acc_id,
+                "zernio_account_id": eff_acc_id,
+                "account_name": eff_acc_name,
+                "account_avatar": "",
+                "participant_id": eff_part_id,
+                "participant_name": eff_part_name,
+                "participant_handle": "",
+                "participant_phone": "",
+                "participant_email": "",
+                "participant_avatar": "",
+                "last_message_text": msg_text,
+                "last_message_is_own": False,
+                "updated_iso": now_iso,
+                "display_time": now_disp,
+                "relative_time": "Just now",
+                "has_authoritative_ts": True,
+                "unread_count": 1,
+                "is_read": False,
+                "hidden": False,
+                "opened_from_crm": True,
+                "is_portfolio_live_dm": True,
+                "messages": [incoming_msg_obj]
+            }
+            convs_store[conv_key] = target_conv
+        else:
+            target_conv["participant_name"] = eff_part_name
+            target_conv["participant_id"] = eff_part_id
+            target_conv["is_portfolio_live_dm"] = True
+            target_conv["opened_from_crm"] = True
+            target_conv["hidden"] = False
+            msgs = list(target_conv.get("messages") or [])
+            target_conv["messages"] = _deduplicate_messages_list(msgs + [incoming_msg_obj])
+            target_conv["last_message_text"] = msg_text
+            target_conv["last_message_is_own"] = False
+            target_conv["updated_iso"] = now_iso
+            target_conv["display_time"] = now_disp
+            target_conv["is_read"] = False
+            target_conv["unread_count"] = int(target_conv.get("unread_count") or 0) + 1
+
+        save_messages_store_async()
+
+        try:
+            from routers.internal_api_routes import _notify_n8n_new_message
+            _notify_n8n_new_message(target_conv, incoming_msg_obj, is_background_sync=False)
+        except Exception as wh_err:
+            print(f"[⚠️ PORTFOLIO LIVE DM WEBHOOK DISPATCH WARNING]: {wh_err}")
+
+        return {
+            "status": "success",
+            "conversation_key": conv_key,
+            "conversation_id": clean_cid,
+            "account_id": eff_acc_id,
+            "message": incoming_msg_obj,
+            "conversation": {k: v for k, v in target_conv.items() if k != "messages"},
+            "messages": target_conv.get("messages") or []
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

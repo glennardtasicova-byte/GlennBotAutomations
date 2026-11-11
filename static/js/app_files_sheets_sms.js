@@ -3839,7 +3839,7 @@
                 ? await applyGlennBotPopoutModeIfPresent()
                 : false;
 
-            if (window.gbActivePopoutMode === 'comment_thread') {
+            if (window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') {
                 return;
             }
 
@@ -3865,22 +3865,43 @@
         }
 
         window.onload = async () => {
+            const popoutParamsOnLoad = typeof getUrlPopoutParams === 'function' ? getUrlPopoutParams() : null;
+            const isHeadlessPopout = Boolean(popoutParamsOnLoad && popoutParamsOnLoad.mode);
+
             try {
                 const sessRes = await fetch('/api/auth/session');
                 const sessData = await sessRes.json();
                 if (sessData && sessData.authenticated && sessData.user) {
                     await unlockGlennBotDashboardWithSession(null, sessData.user, sessData.user_settings || null, sessData.settings_profile || null);
+                } else if (isHeadlessPopout) {
+                    await unlockGlennBotDashboardWithSession(null, {
+                        role: 'client',
+                        is_admin: false,
+                        can_access_internal_api: false,
+                        user_id: 'portfolio_live_view',
+                        display_name: 'Portfolio Live View'
+                    });
                 } else {
                     const gate = document.getElementById('glennbot-login-gate-overlay');
                     if (gate) gate.classList.remove('hidden');
                 }
             } catch (_) {
-                const gate = document.getElementById('glennbot-login-gate-overlay');
-                if (gate) gate.classList.remove('hidden');
+                if (isHeadlessPopout) {
+                    await unlockGlennBotDashboardWithSession(null, {
+                        role: 'client',
+                        is_admin: false,
+                        can_access_internal_api: false,
+                        user_id: 'portfolio_live_view',
+                        display_name: 'Portfolio Live View'
+                    });
+                } else {
+                    const gate = document.getElementById('glennbot-login-gate-overlay');
+                    if (gate) gate.classList.remove('hidden');
+                }
             }
 
             setInterval(() => {
-                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') return;
                 if (activeTab === 'calendar' || activeTab === 'queue') {
                     fetchScheduledPosts();
                 } else if (activeTab === 'analytics') {
@@ -3890,7 +3911,7 @@
 
             // Quota-Safe Background Email Inbox Sync (every 15s) + Fast Webhook Event Queue Listener (every 3s)
             setInterval(async () => {
-                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') return;
                 if (!activeEmailAccountId && Array.isArray(emailAccountsList) && emailAccountsList.length > 0) {
                     activeEmailAccountId = emailAccountsList[0].id;
                 }
@@ -3900,7 +3921,7 @@
             }, 15000);
 
             setInterval(async () => {
-                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') return;
                 await pollRealtimeEmailWebhookEvents();
             }, 3000);
 
@@ -3912,7 +3933,9 @@
                 const intervalMs = 2000;
                 if (now - lastActivityPollTs >= intervalMs) {
                     lastActivityPollTs = now;
-                    fetchComments(false);
+                    if (window.gbActivePopoutMode !== 'message_thread') {
+                        fetchComments(false);
+                    }
                     if (window.gbActivePopoutMode !== 'comment_thread') {
                         fetchConversations(false);
                     }
@@ -3923,13 +3946,17 @@
                 if (!window.gbCurrentAuthUser) return;
                 if (document.visibilityState === 'visible') {
                     lastActivityPollTs = Date.now();
-                    fetchComments(false);
+                    if (window.gbActivePopoutMode !== 'message_thread') {
+                        fetchComments(false);
+                    }
                     if (window.gbActivePopoutMode !== 'comment_thread') {
                         fetchConversations(false);
-                        if (activeEmailAccountId) {
-                            refreshActiveEmailInbox(false, true);
+                        if (window.gbActivePopoutMode !== 'message_thread') {
+                            if (activeEmailAccountId) {
+                                refreshActiveEmailInbox(false, true);
+                            }
+                            pollRealtimeEmailWebhookEvents();
                         }
-                        pollRealtimeEmailWebhookEvents();
                     }
                 }
             });

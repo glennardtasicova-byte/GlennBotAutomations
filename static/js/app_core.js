@@ -2845,14 +2845,30 @@
                 const targetPlat = String(params.platform || '').trim().toLowerCase();
                 const targetAccName = String(params.account_name || '').trim().toLowerCase();
                 const autoLatest = ['1', 'true', 'yes'].includes(String(params.auto_latest || '').trim().toLowerCase()) || Boolean((targetPlat || targetAccName) && !cId);
+                const waitForNewParam = String(params.wait_for_new ?? params.fresh_session ?? '').trim().toLowerCase();
+                const waitForNew = autoLatest && !['0', 'false', 'no'].includes(waitForNewParam);
+                const rawSinceTs = Number(params.since_ts || params._ts || 0);
+                const sessionStartTs = (rawSinceTs && !Number.isNaN(rawSinceTs) && rawSinceTs > 1000000000000)
+                    ? rawSinceTs
+                    : Date.now();
 
                 if (autoLatest) {
-                    window._gbPopoutAutoLatestConfig = {
-                        enabled: true,
-                        platform: targetPlat || 'facebook',
-                        account_id: aId,
-                        account_name: targetAccName || 'glennbot automations'
-                    };
+                    if (!window._gbPopoutAutoLatestConfig || !window._gbPopoutAutoLatestConfig.enabled) {
+                        window._gbPopoutAutoLatestConfig = {
+                            enabled: true,
+                            wait_for_new: waitForNew,
+                            session_start_ts: sessionStartTs,
+                            platform: targetPlat || 'facebook',
+                            account_id: aId || '6af0b109818eb5c88d1e87a6',
+                            account_name: targetAccName || 'glennbot automations',
+                            display_account_name: String(params.account_name || 'GlennBot Automations').trim() || 'GlennBot Automations',
+                            baseline_captured: false,
+                            baseline_map: {},
+                            locked_conv_key: '',
+                            locked_conv_id: '',
+                            locked_account_id: ''
+                        };
+                    }
                 }
 
                 let cachedDraft = '';
@@ -2873,6 +2889,29 @@
                             }
                         }
                     } catch (_) {}
+                }
+
+                if (autoLatest && waitForNew) {
+                    const cfg = window._gbPopoutAutoLatestConfig;
+                    if (!cfg.locked_conv_key) {
+                        selectedConversationKey = null;
+                        selectedConversationId = null;
+                        selectedConversationAccountId = null;
+                        activeConversationObj = null;
+                        activeConversationMessages = [];
+                        if (typeof renderBlankWaitingConversationStandby === 'function') {
+                            renderBlankWaitingConversationStandby(cfg.display_account_name, cfg.platform);
+                        }
+                        setGlennBotPopoutBarHeader(
+                            `Chat with ${cfg.display_account_name} — Live Messenger Session`,
+                            'Blank Session Ready • Send a message on Facebook Messenger to start chatting live',
+                            'fa-comments'
+                        );
+                    }
+                    if (typeof fetchConversations === 'function') {
+                        await fetchConversations(false);
+                    }
+                    return;
                 }
 
                 if (autoLatest && typeof fetchConversations === 'function') {
