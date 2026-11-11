@@ -123,8 +123,7 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
         if force:
             sync_all_connected_posts_to_cloudinary(force_refresh=True, target_record_id=clean_active_rec)
         else:
-            existing_target_comms = (((CLOUDINARY_COMMENTS_STORE.get("posts") or {}).get(clean_active_rec) or {}).get("comments") or {}) if clean_active_rec else {}
-            if clean_active_rec and not existing_target_comms:
+            if clean_active_rec:
                 sync_all_connected_posts_to_cloudinary(force_refresh=False, target_record_id=clean_active_rec)
             trigger_auto_youtube_and_active_sync(active_record_id=clean_active_rec, min_interval=2.5)
 
@@ -783,6 +782,11 @@ def reply_to_comment(payload: CommentReplyPayload):
                     own_fallback_cids_raw.append(c_clean)
             elif c_clean not in commenter_cids_raw:
                 commenter_cids_raw.append(c_clean)
+
+        if platform == "instagram":
+            # Instagram Graph API only supports 1 level of comment nesting under the root top-level parent comment!
+            # Always put parent_cid FIRST so Instagram never flattens a reply into a stray top-level comment.
+            _add_commenter_cand(parent_cid)
 
         if target_sub_reply is not None or (raw_target_cid and raw_target_cid != parent_cid):
             _add_commenter_cand(raw_target_cid)
@@ -2074,15 +2078,20 @@ def _perform_comment_moderation(
         is_ext_post = rec_id_str.startswith("post_ext_")
         platform = (r_dict.get("platform") or "").strip().lower()
 
-        if action_type == "like" and platform not in ("facebook", "instagram"):
+        if action_type == "like" and platform != "facebook":
             return {
                 "status": "error",
-                "message": "Comment Like via External API is only supported on Facebook and Instagram."
+                "message": f"Like Comment is not supported on {platform.upper()} via Zernio API (only supported on Facebook)."
             }
         if action_type == "hide" and platform not in ("facebook", "instagram", "tiktok"):
             return {
                 "status": "error",
-                "message": "Comment Hide via External API is only supported on Facebook, Instagram, and TikTok."
+                "message": f"Hide Comment is not supported on {platform.upper()} via Zernio API (only supported on Facebook, Instagram, and TikTok)."
+            }
+        if action_type == "delete" and platform == "tiktok":
+            return {
+                "status": "error",
+                "message": "Delete Comment is not supported on TikTok via Zernio API — please use the 'Hide' button instead!"
             }
 
         page_id = str(r_dict.get("page_id") or "").strip()
@@ -2104,8 +2113,23 @@ def _perform_comment_moderation(
         if is_ext_post and not z_info.get("inbox_post_id"):
             z_info = resolve_zernio_post_identifiers(r_dict, force=True)
 
-        z_acc_id = str((cached_comm or {}).get("zernio_account_id") or z_info.get("zernio_account_id") or page_id).strip()
-        pref_key = str((cached_comm or {}).get("zernio_api_key") or z_info.get("zernio_api_key") or "").strip()
+        valid_page_ids = _collect_valid_account_ids_for_page(
+            platform,
+            page_id,
+            acc_name,
+            z_info.get("zernio_account_id", "")
+        )
+        cached_z_acc = str((cached_comm or {}).get("zernio_account_id") or "").strip()
+        if cached_z_acc and (not valid_page_ids or cached_z_acc in valid_page_ids):
+            z_acc_id = cached_z_acc
+        else:
+            z_acc_id = str(z_info.get("zernio_account_id") or page_id).strip()
+        pref_key = str(
+            z_info.get("zernio_api_key")
+            or get_zernio_key_for_account(z_acc_id or page_id, account_name=acc_name, platform=platform)
+            or (cached_comm or {}).get("zernio_api_key")
+            or ""
+        ).strip()
 
         raw_target_cid = str(comment_id or "").strip()
         explicit_parent_cid = str(
@@ -2438,11 +2462,10 @@ def _perform_comment_moderation(
         if action_type == "delete" and (had_any_live_200 or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))):
             return _finalize_moderation_success(zernio_synced=True, already_deleted_on_platform=True)
 
-        # For Instagram comment/reply likes, local/optimistic replies, or nested replies in CLOUDINARY_COMMENTS_STORE
-        # where the platform Graph API restricts direct nested-reply moderation, persist the state in GlennBot's store.
+        # For local/optimistic replies not yet assigned a platform ID, persist state in GlennBot's store.
         if (
-            (action_type == "like" and platform in ("facebook", "instagram") and (platform == "instagram" or target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
-            or (action_type == "hide" and platform in ("facebook", "instagram", "tiktok") and (target_sub_reply is not None or raw_target_cid.startswith(("local_", "opt_", "z_rep_"))))
+            (action_type == "like" and platform == "facebook" and raw_target_cid.startswith(("local_", "opt_", "z_rep_")))
+            or (action_type == "hide" and platform in ("facebook", "instagram", "tiktok") and raw_target_cid.startswith(("local_", "opt_", "z_rep_")))
         ):
             return _finalize_moderation_success(zernio_synced=False)
 
@@ -2486,7 +2509,7 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         if not rep_id:
             return {"status": "error", "message": "Missing reply_id."}
 
-        # 1. Snapshot the parent comment & reply metadata BEFORE removing from CLOUDINARY_COMMENTS_STORE
+        # 1. Snapshot the parent comment & reply metadata BEFORE modifying CLOUDINARY_COMMENTS_STORE
         posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
         post_entry = posts_store.get(rec_id) or {}
         parent_comm_obj, matched_sub_rep = find_parent_and_target_comment(post_entry, rep_id)
@@ -2495,8 +2518,37 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
         parent_comm_snapshot = dict(parent_comm_obj) if isinstance(parent_comm_obj, dict) else None
         rep_msg_hint = str((matched_sub_rep or {}).get("message") or "").strip()
 
-        # 2. IMMEDIATELY remove from GlennBot's Cloudinary Store & mark deleted_comment_ids
-        # so no background poll can bring the reply back while Zernio is called!
+        plat_check = str(
+            (parent_comm_snapshot or {}).get("platform")
+            or post_entry.get("platform")
+            or ""
+        ).strip().lower()
+        if plat_check == "tiktok" and not rep_id.startswith(("local_", "opt_", "z_rep_")):
+            return {
+                "status": "error",
+                "message": "Delete Reply is not supported on TikTok via Zernio API — please use the 'Hide' button instead!"
+            }
+
+        # 2. Call Zernio API FIRST (DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId})
+        mod_res: Dict[str, Any] = {}
+        is_local_rep = rep_id.startswith(("local_", "opt_", "z_rep_"))
+        if rec_id and not is_local_rep:
+            mod_res = _perform_comment_moderation(
+                record_id=rec_id,
+                comment_id=rep_id,
+                action_type="delete",
+                enable=True,
+                parent_comment_id_hint=parent_cid,
+                reply_message_hint=rep_msg_hint,
+                cached_comm_override=parent_comm_snapshot
+            )
+            if mod_res.get("status") != "success":
+                return {
+                    "status": "error",
+                    "message": str(mod_res.get("message") or "Failed to delete reply on social media platform.")
+                }
+
+        # 3. Once confirmed deleted on platform (or local placeholder), remove from GlennBot's Cloudinary Store
         from routers.comments_routes import DismissCommentsPayload, dismiss_or_clear_comment_notifications
         dismiss_or_clear_comment_notifications(
             DismissCommentsPayload(
@@ -2510,26 +2562,13 @@ def delete_comment_reply_endpoint(payload: CommentDeleteReplyPayload):
             )
         )
 
-        # 3. Simultaneously call Zernio API (DELETE /v1/inbox/comments/{postId}?accountId={accountId}&commentId={commentId})
-        mod_res: Dict[str, Any] = {}
-        if rec_id:
-            mod_res = _perform_comment_moderation(
-                record_id=rec_id,
-                comment_id=rep_id,
-                action_type="delete",
-                enable=True,
-                parent_comment_id_hint=parent_cid,
-                reply_message_hint=rep_msg_hint,
-                cached_comm_override=parent_comm_snapshot
-            )
-
         return {
             "status": "success",
             "record_id": rec_id,
             "parent_comment_id": parent_cid,
             "reply_id": rep_id,
             "cloudinary_deleted": True,
-            "zernio_deleted": bool(mod_res.get("status") == "success" and mod_res.get("zernio_synced"))
+            "zernio_deleted": True if is_local_rep else bool(mod_res.get("status") == "success" and mod_res.get("zernio_synced"))
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

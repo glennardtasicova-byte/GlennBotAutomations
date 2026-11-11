@@ -160,7 +160,17 @@
             if (event) event.stopPropagation();
             const postComms = commentsList.filter(c => c.record_id === recordId);
             const cids = postComms.map(c => c.comment_id);
-            const platName = (postComms[0]?.platform || 'social media').toUpperCase();
+            const platLower = (postComms[0]?.platform || '').toLowerCase();
+            const platName = (platLower || 'social media').toUpperCase();
+
+            if (platLower === 'tiktok') {
+                return showToast("⚠️ Delete Comment is not supported on TikTok via Zernio API — please use the 'Hide' button instead!");
+            }
+
+            const prevCommentsSnapshot = [...commentsList];
+            const prevSelectedRec = selectedRecordId;
+            const prevSelectedCid = selectedCommentId;
+
             postComms.forEach(c => {
                 _markCommentIdDeletedLocally(c.comment_id);
                 (c.replies || []).forEach(r => _markCommentIdDeletedLocally(r.id));
@@ -185,6 +195,22 @@
                 const data = await res.json();
                 if (data && data.status === 'success') {
                     showToast(`🗑️ Comment thread deleted from Cloudinary & ${platName}!`);
+                } else {
+                    postComms.forEach(c => {
+                        deletedCommentIdsLocal.delete(String(c.comment_id));
+                        if (String(c.comment_id).includes('_')) deletedCommentIdsLocal.delete(String(c.comment_id).split('_').pop());
+                        (c.replies || []).forEach(r => {
+                            deletedCommentIdsLocal.delete(String(r.id));
+                            if (String(r.id).includes('_')) deletedCommentIdsLocal.delete(String(r.id).split('_').pop());
+                        });
+                    });
+                    commentsList = prevCommentsSnapshot;
+                    selectedRecordId = prevSelectedRec;
+                    selectedCommentId = prevSelectedCid;
+                    updateCommentsBadges();
+                    renderCommentsList();
+                    if (selectedRecordId) renderSelectedCommentDetail(selectedRecordId, false);
+                    showToast(`⚠️ ${data?.message || 'Failed to delete comment thread on ' + platName}`);
                 }
             } catch (e) {
                 console.error("Delete notification error:", e);
@@ -194,7 +220,17 @@
         async function deleteSingleCommentNotification(recordId, commentId, event) {
             if (event) event.stopPropagation();
             const targetComm = commentsList.find(c => String(c.comment_id) === String(commentId));
-            const platName = (targetComm?.platform || 'social media').toUpperCase();
+            const platLower = (targetComm?.platform || '').toLowerCase();
+            const platName = (platLower || 'social media').toUpperCase();
+
+            if (platLower === 'tiktok') {
+                return showToast("⚠️ Delete Comment is not supported on TikTok via Zernio API — please use the 'Hide' button instead!");
+            }
+
+            const prevCommentsSnapshot = [...commentsList];
+            const prevSelectedRec = selectedRecordId;
+            const prevSelectedCid = selectedCommentId;
+
             _markCommentIdDeletedLocally(commentId);
             if (targetComm && Array.isArray(targetComm.replies)) {
                 targetComm.replies.forEach(r => _markCommentIdDeletedLocally(r.id));
@@ -226,6 +262,22 @@
                 const data = await res.json();
                 if (data && data.status === 'success') {
                     showToast(`🗑️ Comment deleted from Cloudinary & ${platName}!`);
+                } else {
+                    deletedCommentIdsLocal.delete(String(commentId));
+                    if (String(commentId).includes('_')) deletedCommentIdsLocal.delete(String(commentId).split('_').pop());
+                    if (targetComm && Array.isArray(targetComm.replies)) {
+                        targetComm.replies.forEach(r => {
+                            deletedCommentIdsLocal.delete(String(r.id));
+                            if (String(r.id).includes('_')) deletedCommentIdsLocal.delete(String(r.id).split('_').pop());
+                        });
+                    }
+                    commentsList = prevCommentsSnapshot;
+                    selectedRecordId = prevSelectedRec;
+                    selectedCommentId = prevSelectedCid;
+                    updateCommentsBadges();
+                    renderCommentsList();
+                    if (selectedRecordId === recordId) syncOpenPostThreadLive(recordId);
+                    showToast(`⚠️ ${data?.message || 'Failed to delete comment on ' + platName}`);
                 }
             } catch (e) {
                 console.error("Delete single comment error:", e);
@@ -236,7 +288,16 @@
             if (event) event.stopPropagation();
             const cleanParentId = String(parentCommentId || '');
             const cleanReplyId = String(replyId || '');
-            let platName = 'SOCIAL MEDIA';
+            const parentCommObj = commentsList.find(c => c.record_id === recordId && (String(c.comment_id) === cleanParentId || (c.replies || []).some(r => String(r.id) === cleanReplyId)));
+            const platLower = (parentCommObj?.platform || '').toLowerCase();
+            let platName = (platLower || 'social media').toUpperCase();
+
+            const isLocalPlaceholder = cleanReplyId.startsWith('local_') || cleanReplyId.startsWith('opt_') || cleanReplyId.startsWith('z_rep_');
+            if (platLower === 'tiktok' && !isLocalPlaceholder) {
+                return showToast("⚠️ Delete Reply is not supported on TikTok via Zernio API — please use the 'Hide' button instead!");
+            }
+
+            const prevRepliesSnapshot = parentCommObj && Array.isArray(parentCommObj.replies) ? [...parentCommObj.replies] : [];
             _markCommentIdDeletedLocally(cleanReplyId);
 
             if (pendingOptimisticReplies[cleanParentId]) {
@@ -284,6 +345,16 @@
                 const data = await res.json();
                 if (data && data.status === 'success') {
                     showToast(`🗑️ Reply deleted from Cloudinary & ${platName}!`);
+                } else {
+                    deletedCommentIdsLocal.delete(cleanReplyId);
+                    if (cleanReplyId.includes('_')) deletedCommentIdsLocal.delete(cleanReplyId.split('_').pop());
+                    if (parentCommObj) {
+                        parentCommObj.replies = prevRepliesSnapshot;
+                    }
+                    updateCommentsBadges();
+                    renderCommentsList();
+                    if (selectedRecordId === recordId) syncOpenPostThreadLive(recordId);
+                    showToast(`⚠️ ${data?.message || 'Failed to delete reply on ' + platName}`);
                 }
             } catch (e) {
                 console.error("Delete single comment reply error:", e);
@@ -645,9 +716,9 @@
                 const hasReplies = repliesList.length > 0;
                 const isParentTargetForReply = (!hasReplies && String(c.comment_id) === String(activeCommentId));
                 const platLower = (c.platform || '').toLowerCase();
-                const platLabel = platLower === 'facebook' ? 'Facebook' : (platLower === 'instagram' ? 'Instagram' : platLower.toUpperCase());
+                const platLabel = platLower === 'facebook' ? 'Facebook' : (platLower === 'instagram' ? 'Instagram' : (platLower === 'tiktok' ? 'TikTok' : (platLower === 'youtube' ? 'YouTube' : platLower.toUpperCase())));
                 const canSendDm = (platLower === 'facebook' || platLower === 'instagram');
-                const canLikeComment = (platLower === 'facebook' || platLower === 'instagram');
+                const canLikeComment = (platLower === 'facebook');
                 const canHideComment = (platLower === 'facebook' || platLower === 'instagram' || platLower === 'tiktok');
 
                 const repliesHTML = hasReplies
@@ -656,27 +727,21 @@
                         const dmTargetCommentId = rep.is_own ? c.comment_id : rep.id;
                         const dmTargetAuthorName = rep.is_own ? (c.author_name || 'Commenter') : (rep.author_name || c.author_name || 'Commenter');
                         const isDmSentOnReply = Boolean(rep.dm_sent || (rep.is_own && c.dm_sent));
-                        const repLikeBtn = canLikeComment
-                            ? `<button type="button" id="btn-like-comment-${rep.id}" onclick="toggleLikeComment('${recordId}', '${rep.id}', event)"
-                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${rep.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_8px_rgba(37,99,235,0.4)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200'}"
-                                    title="${rep.is_liked ? 'Unlike this reply on ' + platLabel : 'Like this reply on ' + platLabel}">
+                        const repLikeBtn = `<button type="button" id="btn-like-comment-${rep.id}" onclick="toggleLikeComment('${recordId}', '${rep.id}', event)"
+                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canLikeComment ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : (rep.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_8px_rgba(37,99,235,0.4)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200')}"
+                                    title="${!canLikeComment ? 'Like is not supported on ' + platLabel + ' via Zernio API' : (rep.is_liked ? 'Unlike this reply on ' + platLabel : 'Like this reply on ' + platLabel)}">
                                     <i class="${rep.is_liked ? 'fas' : 'far'} fa-thumbs-up text-[9px]"></i> <span>${rep.is_liked ? 'Liked' : 'Like'}</span>
-                               </button>`
-                            : '';
-                        const repHideBtn = canHideComment
-                            ? `<button type="button" id="btn-hide-comment-${rep.id}" onclick="toggleHideComment('${recordId}', '${rep.id}', event)"
-                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${rep.is_hidden ? 'bg-amber-500/30 hover:bg-amber-500/45 border border-amber-400 text-amber-200' : 'bg-slate-900/90 hover:bg-amber-500/25 border border-slate-700 hover:border-amber-400/50 text-slate-300 hover:text-amber-200'}"
-                                    title="${rep.is_hidden ? 'Unhide this reply on the actual ' + platLower.toUpperCase() + ' post' : 'Hide this reply on the actual ' + platLower.toUpperCase() + ' post'}">
+                               </button>`;
+                        const repHideBtn = `<button type="button" id="btn-hide-comment-${rep.id}" onclick="toggleHideComment('${recordId}', '${rep.id}', event)"
+                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canHideComment ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : (rep.is_hidden ? 'bg-amber-500/30 hover:bg-amber-500/45 border border-amber-400 text-amber-200' : 'bg-slate-900/90 hover:bg-amber-500/25 border border-slate-700 hover:border-amber-400/50 text-slate-300 hover:text-amber-200')}"
+                                    title="${!canHideComment ? 'Hide is not supported on ' + platLabel + ' via Zernio API' : (rep.is_hidden ? 'Unhide this reply on the actual ' + platLabel + ' post' : 'Hide this reply on the actual ' + platLabel + ' post')}">
                                     <i class="fas ${rep.is_hidden ? 'fa-eye' : 'fa-eye-slash'} text-[9px]"></i> <span>${rep.is_hidden ? 'Unhide' : 'Hide'}</span>
-                               </button>`
-                            : '';
-                        const repSendDmBtn = canSendDm
-                            ? `<button type="button" onclick="openCommentDmModal('${recordId}', '${dmTargetCommentId}', event)"
-                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/50 text-indigo-300 hover:text-white"
-                                    title="Send a Direct Message (Private Reply) to ${escapeHTML(dmTargetAuthorName)} on ${platLabel}">
+                               </button>`;
+                        const repSendDmBtn = `<button type="button" onclick="openCommentDmModal('${recordId}', '${dmTargetCommentId}', event)"
+                                    class="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canSendDm ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : 'bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/50 text-indigo-300 hover:text-white'}"
+                                    title="${!canSendDm ? 'Send a DM from comments is not supported on ' + platLabel + ' via Zernio API' : 'Send a Direct Message (Private Reply) to ' + escapeHTML(dmTargetAuthorName) + ' on ' + platLabel}">
                                     <i class="fas fa-paper-plane text-[9px]"></i> <span>Send a DM</span>
-                               </button>`
-                            : '';
+                               </button>`;
                         const repSavedContact = !rep.is_own ? findExistingCrmContact(rep.author_name, platLower) : null;
                         const repAddContactBtn = !rep.is_own
                             ? `<button type="button" onclick="openAddToContactsFromComment('${recordId}', '${rep.id}', event)"
@@ -706,8 +771,8 @@
                                 <div class="flex items-center gap-1.5 shrink-0">
                                     <span class="text-[10px] text-slate-400">${rep.display_time}</span>
                                     <button type="button" onclick="deleteSingleCommentReply('${recordId}', '${c.comment_id}', '${rep.id}', event)"
-                                        class="w-6 h-6 rounded-lg bg-slate-900/90 hover:bg-rose-600 border border-slate-700 hover:border-rose-400 text-slate-400 hover:text-white flex items-center justify-center text-[10px] transition-all"
-                                        title="Delete this reply"
+                                        class="w-6 h-6 rounded-lg ${platLower === 'tiktok' ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300' : 'bg-slate-900/90 hover:bg-rose-600 border border-slate-700 hover:border-rose-400 text-slate-400 hover:text-white'} flex items-center justify-center text-[10px] transition-all"
+                                        title="${platLower === 'tiktok' ? 'Delete is not supported on TikTok (use Hide button instead)' : 'Delete this reply'}"
                                         aria-label="Delete reply from ${escapeHTML(rep.author_name)}">
                                         <i class="fas fa-trash-alt"></i>
                                     </button>
@@ -734,29 +799,23 @@
                         <i class="fas fa-reply text-[10px]"></i> <span>Reply</span>
                    </button>`;
 
-                const parentLikeButtonHTML = canLikeComment
-                    ? `<button type="button" id="btn-like-comment-${c.comment_id}" onclick="toggleLikeComment('${recordId}', '${c.comment_id}', event)"
-                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${c.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_10px_rgba(37,99,235,0.45)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200'}"
-                            title="${c.is_liked ? 'Unlike this comment on ' + platLabel : 'Like this comment on ' + platLabel}">
+                const parentLikeButtonHTML = `<button type="button" id="btn-like-comment-${c.comment_id}" onclick="toggleLikeComment('${recordId}', '${c.comment_id}', event)"
+                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canLikeComment ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : (c.is_liked ? 'bg-blue-600 text-white border border-blue-400 shadow-[0_0_10px_rgba(37,99,235,0.45)]' : 'bg-slate-900/90 hover:bg-blue-500/25 border border-slate-700 hover:border-blue-400/50 text-slate-300 hover:text-blue-200')}"
+                            title="${!canLikeComment ? 'Like is not supported on ' + platLabel + ' via Zernio API' : (c.is_liked ? 'Unlike this comment on ' + platLabel : 'Like this comment on ' + platLabel)}">
                             <i class="${c.is_liked ? 'fas' : 'far'} fa-thumbs-up text-[10px]"></i> <span>${c.is_liked ? 'Liked' : 'Like'}</span>
-                       </button>`
-                    : '';
+                       </button>`;
 
-                const parentHideButtonHTML = canHideComment
-                    ? `<button type="button" id="btn-hide-comment-${c.comment_id}" onclick="toggleHideComment('${recordId}', '${c.comment_id}', event)"
-                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${c.is_hidden ? 'bg-amber-500/30 hover:bg-amber-500/45 border border-amber-400 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.25)]' : 'bg-slate-900/90 hover:bg-amber-500/25 border border-slate-700 hover:border-amber-400/50 text-slate-300 hover:text-amber-200'}"
-                            title="${c.is_hidden ? 'Unhide this comment on the actual ' + platLower.toUpperCase() + ' post' : 'Hide this comment on the actual ' + platLower.toUpperCase() + ' post'}">
+                const parentHideButtonHTML = `<button type="button" id="btn-hide-comment-${c.comment_id}" onclick="toggleHideComment('${recordId}', '${c.comment_id}', event)"
+                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canHideComment ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : (c.is_hidden ? 'bg-amber-500/30 hover:bg-amber-500/45 border border-amber-400 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.25)]' : 'bg-slate-900/90 hover:bg-amber-500/25 border border-slate-700 hover:border-amber-400/50 text-slate-300 hover:text-amber-200')}"
+                            title="${!canHideComment ? 'Hide is not supported on ' + platLabel + ' via Zernio API' : (c.is_hidden ? 'Unhide this comment on the actual ' + platLabel + ' post' : 'Hide this comment on the actual ' + platLabel + ' post')}">
                             <i class="fas ${c.is_hidden ? 'fa-eye' : 'fa-eye-slash'} text-[10px]"></i> <span>${c.is_hidden ? 'Unhide' : 'Hide'}</span>
-                       </button>`
-                    : '';
+                       </button>`;
 
-                const parentSendDmButtonHTML = canSendDm
-                    ? `<button type="button" onclick="openCommentDmModal('${recordId}', '${c.comment_id}', event)"
-                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/55 text-indigo-300 hover:text-white"
-                            title="Send a Direct Message (Private Reply) to ${escapeHTML(c.author_name)} on ${platLabel}">
+                const parentSendDmButtonHTML = `<button type="button" onclick="openCommentDmModal('${recordId}', '${c.comment_id}', event)"
+                            class="px-3 py-1 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1.5 ${!canSendDm ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300 hover:border-amber-500/40' : 'bg-slate-900/90 hover:bg-indigo-500/30 border border-slate-700 hover:border-indigo-400/55 text-indigo-300 hover:text-white'}"
+                            title="${!canSendDm ? 'Send a DM from comments is not supported on ' + platLabel + ' via Zernio API' : 'Send a Direct Message (Private Reply) to ' + escapeHTML(c.author_name) + ' on ' + platLabel}">
                             <i class="fas fa-paper-plane text-[10px]"></i> <span>Send a DM</span>
-                       </button>`
-                    : '';
+                       </button>`;
 
                 const parentSavedContact = findExistingCrmContact(c.author_name, platLower);
                 const parentAddContactButtonHTML = `<button type="button" onclick="openAddToContactsFromComment('${recordId}', '${c.comment_id}', event)"
@@ -793,8 +852,8 @@
                                         </a>
                                     ` : ''}
                                     <button type="button" onclick="deleteSingleCommentNotification('${recordId}', '${c.comment_id}', event)"
-                                        class="w-7 h-7 rounded-lg bg-slate-900/90 hover:bg-rose-600 border border-slate-700 hover:border-rose-400 text-slate-400 hover:text-white flex items-center justify-center text-[11px] transition-all"
-                                        title="Delete this comment notification">
+                                        class="w-7 h-7 rounded-lg ${platLower === 'tiktok' ? 'bg-slate-900/60 border border-slate-800 text-slate-500 hover:text-amber-300' : 'bg-slate-900/90 hover:bg-rose-600 border border-slate-700 hover:border-rose-400 text-slate-400 hover:text-white'} flex items-center justify-center text-[11px] transition-all"
+                                        title="${platLower === 'tiktok' ? 'Delete is not supported on TikTok (use Hide button instead)' : 'Delete this comment on ' + platLabel}">
                                         <i class="fas fa-trash-alt"></i>
                                     </button>
                                 </div>
@@ -1154,7 +1213,8 @@
 
             const plat = (parentComm.platform || '').toLowerCase();
             if (plat !== 'facebook' && plat !== 'instagram') {
-                return showToast("⚠️ Send a DM from comments is only supported on Facebook and Instagram.");
+                const platLabelUnsupported = plat === 'tiktok' ? 'TikTok' : (plat === 'youtube' ? 'YouTube' : plat.toUpperCase());
+                return showToast(`⚠️ Send a DM from comments is not supported on ${platLabelUnsupported} via Zernio API (only supported on Facebook and Instagram).`);
             }
 
             const targetReply = targetMatch ? targetMatch.targetReply : null;
@@ -1323,10 +1383,11 @@
             if (!parentComm) return;
 
             const plat = (parentComm.platform || '').toLowerCase();
-            if (plat !== 'facebook' && plat !== 'instagram') {
-                return showToast("⚠️ Comment Like is only supported on Facebook and Instagram.");
+            if (plat !== 'facebook') {
+                const platLabelUnsupported = plat === 'instagram' ? 'Instagram' : (plat === 'tiktok' ? 'TikTok' : (plat === 'youtube' ? 'YouTube' : plat.toUpperCase()));
+                return showToast(`⚠️ Like Comment is not supported on ${platLabelUnsupported} via Zernio API (only supported on Facebook).`);
             }
-            const platLabel = plat === 'facebook' ? 'Facebook' : 'Instagram';
+            const platLabel = 'Facebook';
 
             const targetObj = (targetMatch && targetMatch.targetReply) ? targetMatch.targetReply : parentComm;
             const isReplyItem = Boolean(targetMatch && targetMatch.targetReply);
@@ -1364,7 +1425,7 @@
                         btn.innerHTML = origBtnHTML;
                         btn.disabled = false;
                     }
-                    alert("❌ Failed to like/unlike comment:\n" + (data.message || "Unknown error"));
+                    showToast(`⚠️ ${data.message || 'Failed to like/unlike comment.'}`);
                 }
             } catch (e) {
                 console.error("Toggle like comment error:", e);
@@ -1372,7 +1433,7 @@
                     btn.innerHTML = origBtnHTML;
                     btn.disabled = false;
                 }
-                alert("❌ Network error while liking comment.");
+                showToast("❌ Network error while liking comment.");
             }
         }
 
@@ -1388,7 +1449,8 @@
 
             const plat = (parentComm.platform || '').toLowerCase();
             if (plat !== 'facebook' && plat !== 'instagram' && plat !== 'tiktok') {
-                return showToast("⚠️ Comment Hide is only supported on Facebook, Instagram, and TikTok.");
+                const platLabelUnsupported = plat === 'youtube' ? 'YouTube' : plat.toUpperCase();
+                return showToast(`⚠️ Hide Comment is not supported on ${platLabelUnsupported} via Zernio API (only supported on Facebook, Instagram, and TikTok).`);
             }
 
             const targetObj = (targetMatch && targetMatch.targetReply) ? targetMatch.targetReply : parentComm;

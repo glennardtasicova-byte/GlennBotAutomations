@@ -2691,16 +2691,10 @@
                     if (raw) {
                         const parsed = JSON.parse(raw);
                         if (!targetRecordId && parsed.record_id) targetRecordId = String(parsed.record_id);
-                        if (parsed.comment_id && typeof selectedCommentId !== 'undefined') {
+                        if (!params.comment_id && parsed.comment_id && typeof selectedCommentId !== 'undefined') {
                             selectedCommentId = String(parsed.comment_id);
                         }
                         if (parsed.draft_reply) cachedDraft = String(parsed.draft_reply);
-                        if (Array.isArray(parsed.items) && parsed.items.length > 0 && typeof commentsList !== 'undefined') {
-                            const existingIds = new Set(commentsList.map(c => c.comment_id));
-                            parsed.items.forEach(item => {
-                                if (!existingIds.has(item.comment_id)) commentsList.push(item);
-                            });
-                        }
                     }
                 } catch (_) {}
 
@@ -2711,18 +2705,16 @@
                     selectedCommentId = String(params.comment_id);
                 }
 
+                // Fetch live Zernio-reconciled comments for this post first so stale/deleted comments never flash from cache
+                if (typeof fetchComments === 'function') {
+                    await fetchComments(false);
+                }
+
                 if (targetRecordId && typeof renderSelectedCommentDetail === 'function') {
                     await renderSelectedCommentDetail(targetRecordId, true);
                     if (cachedDraft) {
                         const inputEl = document.getElementById('comment-reply-input');
                         if (inputEl && !inputEl.value) inputEl.value = cachedDraft;
-                    }
-                }
-                // Also refresh comments in background to ensure latest replies are present
-                if (typeof fetchComments === 'function') {
-                    await fetchComments(false);
-                    if (targetRecordId && typeof renderSelectedCommentDetail === 'function') {
-                        await renderSelectedCommentDetail(targetRecordId, false);
                     }
                 }
                 return;

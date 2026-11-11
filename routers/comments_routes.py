@@ -1460,8 +1460,54 @@ def fetch_zernio_comments_for_post(
                                 u_avatar = known["avatar"]
 
                     if not is_reply_flag and is_own:
-                        # Top-level comment by the Page on its own post (NOT a reply to a comment) -> skip
-                        continue
+                        raw_own_msg = str(c.get("Text") or c.get("text") or c.get("message") or c.get("content") or "").strip()
+                        if platform == "instagram" and raw_own_msg.startswith("@"):
+                            m_ment = re.match(r"^@([A-Za-z0-9._]+)", raw_own_msg)
+                            ment_user = m_ment.group(1).strip().lower() if m_ment else ""
+                            matched_parent_for_ig = ""
+                            if ment_user:
+                                for c_other in raw_list:
+                                    if not isinstance(c_other, dict):
+                                        continue
+                                    other_cid = str(c_other.get("ID") or c_other.get("id") or c_other.get("commentId") or c_other.get("_id") or "").strip()
+                                    if not other_cid or other_cid == cid or other_cid in deleted_comment_ids:
+                                        continue
+                                    other_auth = c_other.get("Author") or c_other.get("author") or c_other.get("from") or c_other.get("user") or {}
+                                    if not isinstance(other_auth, dict):
+                                        other_auth = {}
+                                    other_is_own = bool(
+                                        c_other.get("IsOwner") or c_other.get("isOwner") or c_other.get("isOwnAccount")
+                                        or other_auth.get("IsOwner") or other_auth.get("isOwner") or other_auth.get("isOwnAccount")
+                                    )
+                                    if other_is_own:
+                                        continue
+                                    other_uname = str(
+                                        c_other.get("author_username") or c_other.get("username")
+                                        or other_auth.get("Username") or other_auth.get("username") or ""
+                                    ).strip().lstrip("@").lower()
+                                    if other_uname and other_uname == ment_user:
+                                        matched_parent_for_ig = other_cid
+                                        break
+                            if matched_parent_for_ig:
+                                is_reply_flag = True
+                                parent_id = matched_parent_for_ig
+                                explicit_parent_id = matched_parent_for_ig
+                            else:
+                                # Orphaned @mention own-reply on Instagram whose parent comment was already deleted -> delete it on Zernio too!
+                                try:
+                                    HTTP_SESSION.delete(
+                                        f"{ZERNIO_BASE_URL}/inbox/comments/{post_id}",
+                                        params={"accountId": account_id, "commentId": cid},
+                                        headers=headers,
+                                        timeout=6
+                                    )
+                                    print(f"[🧹 IG ORPHAN REPLY CLEANUP] Deleted stranded @mention own-reply {cid} on Instagram post {post_id}.")
+                                except Exception:
+                                    pass
+                                continue
+                        else:
+                            # Top-level comment by the Page on its own post (NOT a reply to a comment) -> skip
+                            continue
 
                     if is_reply_flag:
                         rep_obj = _parse_single_zernio_reply(
@@ -2177,10 +2223,10 @@ def update_cloudinary_store_for_post(
 
             # If Zernio returned a confirmed 200 OK live comments list for this post (reconcile_remote_deletions=True)
             # and this comment is no longer on the post (e.g. deleted by the commenter on Facebook/Instagram/YouTube/TikTok),
-            # automatically remove it from Cloudinary too (unless it was just saved by webhook < 15s ago and not a forced sync).
+            # automatically remove it from Cloudinary too (unless it was saved by webhook < 120s ago while Zernio's GET inbox cache is still indexing).
             if reconcile_remote_deletions:
                 wh_saved_ts = float(old_c.get("_webhook_saved_ts") or 0.0)
-                recently_saved_via_wh = (now_sync_ts - wh_saved_ts) < 15.0 and not force_unhide
+                recently_saved_via_wh = (now_sync_ts - wh_saved_ts) < 120.0
                 if (
                     not recently_saved_via_wh
                     and old_cid not in live_cids
@@ -2269,7 +2315,7 @@ def update_cloudinary_store_for_post(
                     if reconcile_remote_deletions:
                         is_local_placeholder = r_id_str.startswith(("local_", "opt_", "z_rep_"))
                         r_wh_ts = float(r.get("_webhook_saved_ts") or 0.0)
-                        recently_wh_reply = (now_sync_ts - r_wh_ts) < 15.0 and not force_unhide
+                        recently_wh_reply = (now_sync_ts - r_wh_ts) < 120.0
                         if (
                             not is_local_placeholder
                             and not recently_wh_reply
@@ -2361,6 +2407,8 @@ def update_cloudinary_store_for_post(
                     fc["is_liked"] = prev_c["is_liked"]
                 if "is_hidden" in prev_c and not fc.get("is_hidden"):
                     fc["is_hidden"] = prev_c["is_hidden"]
+                if prev_c.get("_webhook_saved_ts"):
+                    fc["_webhook_saved_ts"] = prev_c["_webhook_saved_ts"]
                 fc["replies"] = merged_reps
                 existing_comments_map[cid] = fc
 
@@ -2782,7 +2830,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_r
                                 r_dict,
                                 p_comms,
                                 unhide_if_new=True,
-                                force_unhide=bool(force_refresh),
+                                force_unhide=False,
                                 reconcile_remote_deletions=True
                             ):
                                 any_store_change = True
@@ -2830,12 +2878,83 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
         is_reply_only = bool(payload.is_reply)
         skip_zernio = bool(payload.skip_zernio_delete)
 
-        zernio_targets_to_delete: List[Tuple[str, str, Dict[str, Any]]] = []
+        zernio_targets_to_delete: List[Tuple[str, str, Dict[str, Any], bool, str]] = []
         zernio_deleted_any = False
 
-        # STEP 1: IMMEDIATELY remove from CLOUDINARY_COMMENTS_STORE under lock and save to Cloudinary!
-        # This guarantees the comment/reply disappears from the dashboard and Cloudinary immediately,
-        # even if the commenter already deleted their own comment on Facebook/Instagram!
+        # STEP 0: Inspect targets before modifying CLOUDINARY_COMMENTS_STORE
+        if not payload.clear_all:
+            with COMMENTS_STORE_LOCK:
+                posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
+                if rec_id and not payload.single_comment and not ids_to_mark_seen:
+                    p_entry_for_rec = posts_store.get(rec_id) or {}
+                    for c_k in (p_entry_for_rec.get("comments") or {}).keys():
+                        ids_to_mark_seen.add(str(c_k))
+
+                norm_targets_pre = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
+
+                for p_key, p_entry in posts_store.items():
+                    if not isinstance(p_entry, dict):
+                        continue
+                    if rec_id and p_key != rec_id:
+                        continue
+                    plat_check = str(p_entry.get("platform") or "").strip().lower()
+                    c_map = p_entry.get("comments") or {}
+                    for c_k, c_obj in list(c_map.items()):
+                        if not isinstance(c_obj, dict):
+                            continue
+                        obj_cid = str(c_obj.get("comment_id") or c_k).strip()
+                        c_plat = str(c_obj.get("platform") or plat_check or "").strip().lower()
+                        if not is_reply_only and (
+                            c_k in ids_to_mark_seen
+                            or _normalize_comment_key(c_k) in norm_targets_pre
+                            or obj_cid in ids_to_mark_seen
+                            or _normalize_comment_key(obj_cid) in norm_targets_pre
+                        ):
+                            if c_plat == "tiktok" and not skip_zernio:
+                                return {
+                                    "status": "error",
+                                    "message": "Delete Comment is not supported on TikTok via Zernio API — please use the 'Hide' button instead!"
+                                }
+                            if not skip_zernio:
+                                zernio_targets_to_delete.append((str(p_key), obj_cid or str(c_k), dict(c_obj), False, ""))
+                                # Also queue any real platform reply IDs under this parent comment so no child replies are left stranded on Instagram/Facebook!
+                                for sub_r in (c_obj.get("replies") or []):
+                                    if isinstance(sub_r, dict):
+                                        sr_id = str(sub_r.get("id") or "").strip()
+                                        if sr_id and not sr_id.startswith(("local_", "opt_", "z_rep_")):
+                                            zernio_targets_to_delete.append((str(p_key), sr_id, dict(c_obj), True, obj_cid or str(c_k)))
+                                            ids_to_mark_seen.add(sr_id)
+
+            # STEP 1: Execute real social media deletion via Zernio API FIRST (for parent comments & their replies)
+            if zernio_targets_to_delete and not is_reply_only and not skip_zernio:
+                from routers.comment_actions_routes import _perform_comment_moderation
+                parent_delete_errors: List[str] = []
+                for target_rec_id, target_cid, comm_snapshot, is_sub_rep, parent_cid_for_sub in zernio_targets_to_delete:
+                    try:
+                        mod_res = _perform_comment_moderation(
+                            record_id=target_rec_id or rec_id,
+                            comment_id=target_cid,
+                            action_type="delete",
+                            enable=True,
+                            parent_comment_id_hint=parent_cid_for_sub if is_sub_rep else "",
+                            cached_comm_override=comm_snapshot
+                        )
+                        if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
+                            zernio_deleted_any = True
+                        elif not is_sub_rep:
+                            parent_delete_errors.append(str(mod_res.get("message") or "Failed to delete comment on social media platform."))
+                    except Exception as del_err:
+                        print(f"[⚠️ ZERNIO COMMENT DELETE WARNING]: {del_err}")
+                        if not is_sub_rep:
+                            parent_delete_errors.append(str(del_err))
+
+                if parent_delete_errors and not zernio_deleted_any:
+                    return {
+                        "status": "error",
+                        "message": parent_delete_errors[0]
+                    }
+
+        # STEP 2: Remove confirmed-deleted comments from CLOUDINARY_COMMENTS_STORE under lock and save to Cloudinary
         with COMMENTS_STORE_LOCK:
             posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
 
@@ -2848,31 +2967,7 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                             if rep.get("id"):
                                 ids_to_mark_seen.add(str(rep["id"]))
             else:
-                # If deleting a post notification card (rec_id provided without single_comment), also collect all comment IDs on that post
-                if rec_id and not payload.single_comment and not ids_to_mark_seen:
-                    p_entry_for_rec = posts_store.get(rec_id) or {}
-                    for c_k in (p_entry_for_rec.get("comments") or {}).keys():
-                        ids_to_mark_seen.add(str(c_k))
-
                 norm_targets = {_normalize_comment_key(tc) for tc in ids_to_mark_seen if tc}
-
-                # Snapshot metadata for Zernio API deletion BEFORE popping from c_map
-                if not is_reply_only and not skip_zernio and ids_to_mark_seen:
-                    for p_key, p_entry in posts_store.items():
-                        if rec_id and p_key != rec_id:
-                            continue
-                        c_map = p_entry.get("comments") or {}
-                        for c_k, c_obj in list(c_map.items()):
-                            if not isinstance(c_obj, dict):
-                                continue
-                            obj_cid = str(c_obj.get("comment_id") or c_k).strip()
-                            if (
-                                c_k in ids_to_mark_seen
-                                or _normalize_comment_key(c_k) in norm_targets
-                                or obj_cid in ids_to_mark_seen
-                                or _normalize_comment_key(obj_cid) in norm_targets
-                            ):
-                                zernio_targets_to_delete.append((str(p_key), obj_cid or str(c_k), dict(c_obj)))
 
                 # Purge any buffered own replies matching deleted IDs
                 for buf_key in list(RECENT_OWN_REPLIES_BUFFER.keys()):
@@ -2930,41 +3025,25 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                         if not payload.single_comment and p_key == rec_id and not c_map:
                             p_entry["notification_hidden"] = True
 
-        # Save updated CLOUDINARY_COMMENTS_STORE immediately so no poll can bring the deleted comment back
         save_comments_store_async()
 
-        # STEP 2: Mark as seen in database
+        # STEP 3: Batch-mark as seen in database in a single fast query (never 200+ individual round-trips!)
         if ids_to_mark_seen:
             try:
-                with db_engine.begin() as conn:
-                    for cid in ids_to_mark_seen:
+                batch_params = [{"cid": str(cid), "rid": rec_id} for cid in ids_to_mark_seen if cid]
+                if batch_params:
+                    with db_engine.begin() as conn:
                         conn.execute(
                             text("""
                                 INSERT INTO glennbot_seen_comments (comment_id, record_id, platform)
                                 VALUES (:cid, :rid, 'zernio')
                                 ON CONFLICT (comment_id) DO NOTHING
                             """),
-                            {"cid": cid, "rid": rec_id}
+                            batch_params
                         )
+                    _invalidate_fast_db_cache(["seen_comments"])
             except Exception:
                 pass
-
-        # STEP 3: Simultaneously delete the comment(s) on Facebook/Instagram/YouTube/TikTok via Zernio API
-        if zernio_targets_to_delete and not is_reply_only and not skip_zernio:
-            try:
-                from routers.comment_actions_routes import _perform_comment_moderation
-                for target_rec_id, target_cid, comm_snapshot in zernio_targets_to_delete:
-                    mod_res = _perform_comment_moderation(
-                        record_id=target_rec_id or rec_id,
-                        comment_id=target_cid,
-                        action_type="delete",
-                        enable=True,
-                        cached_comm_override=comm_snapshot
-                    )
-                    if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
-                        zernio_deleted_any = True
-            except Exception as del_err:
-                print(f"[⚠️ ZERNIO COMMENT DELETE WARNING]: {del_err}")
 
         return {
             "status": "success",

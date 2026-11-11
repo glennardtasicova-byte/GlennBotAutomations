@@ -1016,6 +1016,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                             if target_parent is None and not is_own:
                                 is_reply_flag = False
 
+                        webhook_saved_comment_or_reply = False
                         if is_reply_flag:
                             resolved_parent_cid = str((target_parent or {}).get("comment_id") or parent_id or cid).strip()
                             parent_author_id_val = str((target_parent or {}).get("author_id") or "").strip()
@@ -1052,6 +1053,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                                 if not is_own and p_entry:
                                     p_entry["notification_hidden"] = False
                                 save_comments_store_async()
+                                webhook_saved_comment_or_reply = True
                                 print(f"[🚀 WEBHOOK REPLY SAVED TO CLOUDINARY] Reply by {commenter_name} (is_own={is_own}): '{msg_text}'")
 
                             # Notify n8n for BOTH user replies AND Page replies to a comment (is_reply_flag=True)!
@@ -1126,13 +1128,15 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                             }
                             update_cloudinary_store_for_post(matched_row, [instant_comment], unhide_if_new=True, force_unhide=True, reconcile_remote_deletions=False)
                             save_comments_store_async()
+                            webhook_saved_comment_or_reply = True
                             print(f"[🚀 WEBHOOK COMMENT SAVED & UNHIDDEN IN CLOUDINARY] {commenter_name} on '{matched_row.get('account_name')}': '{msg_text}'")
                             if "_notify_n8n_new_comment" in globals():
                                 _notify_n8n_new_comment(matched_row, instant_comment, is_background_sync=False)
     except Exception as e:
         print(f"[⚠️ WEBHOOK PARSE WARNING]: {e}")
+        webhook_saved_comment_or_reply = False
 
-    if matched_row:
+    if matched_row and not locals().get("webhook_saved_comment_or_reply", False):
         rec_sync_key = str(matched_row.get("id") or "")
         now_wh_ts = time.time()
         # Debounce background post sync per post (2.0s) so 10 simultaneous comments on the same post don't spawn 10 redundant Zernio syncs
