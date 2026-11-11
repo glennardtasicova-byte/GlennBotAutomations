@@ -619,6 +619,50 @@ def ensure_external_post_record_in_db(
             if not final_preview:
                 final_preview = f"https://i.ytimg.com/vi/{yt_vid_clean}/hqdefault.jpg"
 
+    cand_tokens = {
+        str(t).strip()
+        for t in (target_pid, target_pid_suffix, z_post_id)
+        if t and len(str(t).strip()) >= 6 and str(t).strip() != "OK"
+    }
+
+    if (not final_caption or final_caption in ("Previous Post", "Social Media Post") or not final_preview or not final_permalink) and target_pid:
+        try:
+            from services import zernio_service as _zs_mod
+            _cp_cache_dict = getattr(_zs_mod, "ZERNIO_COMMENTED_POSTS_CACHE", None)
+        except Exception:
+            _cp_cache_dict = None
+        if not isinstance(_cp_cache_dict, dict):
+            _main_mod = sys.modules.get("main")
+            _cp_cache_dict = getattr(_main_mod, "ZERNIO_COMMENTED_POSTS_CACHE", None) if _main_mod else None
+        _cp_list = list((_cp_cache_dict.get("items") if isinstance(_cp_cache_dict, dict) else None) or [])
+        for _cp in _cp_list:
+            if not isinstance(_cp, dict):
+                continue
+            _cp_id = str(_cp.get("platformPostId") or _cp.get("id") or _cp.get("_id") or "").strip()
+            _cp_suf = _cp_id.split("_")[-1].strip() if "_" in _cp_id else _cp_id
+            if _cp_id and (_cp_id in cand_tokens or (_cp_suf and _cp_suf in cand_tokens)):
+                _cp_cap = str(_cp.get("content") or _cp.get("caption") or "").strip()
+                _cp_plink = str(_cp.get("permalink") or _cp.get("platformPostUrl") or "").strip()
+                _cp_pic = str(_cp.get("picture") or _cp.get("imageUrl") or _cp.get("thumbnailUrl") or "").strip()
+                if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and _cp_cap:
+                    final_caption = _cp_cap
+                if not final_preview and _cp_pic:
+                    final_preview = _cp_pic
+                if (not final_permalink or ("_" in final_permalink and "/posts/" not in final_permalink)) and _cp_plink:
+                    final_permalink = _cp_plink
+                break
+
+    if plat_clean == "tiktok" and target_pid.isdigit() and (not final_caption or final_caption == "Previous Post" or not final_preview):
+        try:
+            _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
+            tk_meta = _tikwm_fn(target_pid, final_uname) if _tikwm_fn else {}
+            if (not final_caption or final_caption == "Previous Post") and tk_meta.get("caption"):
+                final_caption = tk_meta["caption"]
+            if not final_preview and (tk_meta.get("video_url") or tk_meta.get("cover_url")):
+                final_preview = tk_meta.get("video_url") or tk_meta.get("cover_url") or ""
+        except Exception:
+            pass
+
     manila_tz = pytz.timezone("Asia/Manila")
     now_m = datetime.now(manila_tz)
     status_msg = f"External Post | Platform ID: {target_pid}"
@@ -640,11 +684,6 @@ def ensure_external_post_record_in_db(
                 {"plat": plat_clean}
             ).mappings().all()
 
-            cand_tokens = {
-                str(t).strip()
-                for t in (target_pid, target_pid_suffix, z_post_id)
-                if t and len(str(t).strip()) >= 6 and str(t).strip() != "OK"
-            }
             clean_target_cap = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", final_caption).strip().lower() if final_caption and final_caption != "Previous Post" else ""
             canonical_matched_id = ""
             matched_er_dict: Optional[Dict[str, Any]] = None
@@ -682,37 +721,10 @@ def ensure_external_post_record_in_db(
             if matched_er_dict:
                 existing_cap = str(matched_er_dict.get("caption") or "").strip()
                 existing_prev = str(matched_er_dict.get("media_preview_url") or "").strip()
-                if (not final_caption or final_caption == "Previous Post") and existing_cap and existing_cap != "Previous Post":
+                if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and existing_cap and existing_cap not in ("Previous Post", "Social Media Post"):
                     final_caption = existing_cap
                 if not final_preview and existing_prev:
                     final_preview = existing_prev
-
-            if (not final_caption or final_caption in ("Previous Post", "Social Media Post") or not final_preview or not final_permalink) and target_pid:
-                _cp_list = list(ZERNIO_COMMENTED_POSTS_CACHE.get("items") or [])
-                for _cp in _cp_list:
-                    if not isinstance(_cp, dict):
-                        continue
-                    _cp_id = str(_cp.get("platformPostId") or _cp.get("id") or _cp.get("_id") or "").strip()
-                    _cp_suf = _cp_id.split("_")[-1].strip() if "_" in _cp_id else _cp_id
-                    if _cp_id and (_cp_id in cand_tokens or (_cp_suf and _cp_suf in cand_tokens)):
-                        _cp_cap = str(_cp.get("content") or _cp.get("caption") or "").strip()
-                        _cp_plink = str(_cp.get("permalink") or _cp.get("platformPostUrl") or "").strip()
-                        _cp_pic = str(_cp.get("picture") or _cp.get("imageUrl") or _cp.get("thumbnailUrl") or "").strip()
-                        if (not final_caption or final_caption in ("Previous Post", "Social Media Post")) and _cp_cap:
-                            final_caption = _cp_cap
-                        if not final_preview and _cp_pic:
-                            final_preview = _cp_pic
-                        if (not final_permalink or ("_" in final_permalink and "/posts/" not in final_permalink)) and _cp_plink:
-                            final_permalink = _cp_plink
-                        break
-
-            if plat_clean == "tiktok" and target_pid.isdigit() and (not final_caption or final_caption == "Previous Post" or not final_preview):
-                _tikwm_fn = _resolve_service_callable("fetch_tikwm_video_metadata")
-                tk_meta = _tikwm_fn(target_pid, final_uname) if _tikwm_fn else {}
-                if (not final_caption or final_caption == "Previous Post") and tk_meta.get("caption"):
-                    final_caption = tk_meta["caption"]
-                if not final_preview and (tk_meta.get("video_url") or tk_meta.get("cover_url")):
-                    final_preview = tk_meta.get("video_url") or tk_meta.get("cover_url") or ""
 
             if canonical_matched_id:
                 rec_id = canonical_matched_id
