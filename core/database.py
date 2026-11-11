@@ -427,7 +427,7 @@ def extract_all_known_ids_for_row(row_dict: Dict[str, Any]) -> List[str]:
             ids.append(val)
     permalink = (row_dict.get("permalink_url") or "").strip()
     if permalink:
-        m_link = re.search(r"(?:/videos/|/reel/|/posts/|/video/|story_fbid=|fbid=)(\d+)", permalink)
+        m_link = re.search(r"(?:/videos/|/reel/|/posts/|/video/|/photo/|story_fbid=|fbid=)(\d+)", permalink)
         if m_link and m_link.group(1) not in ids:
             ids.append(m_link.group(1))
         m_yt = re.search(r"(?:watch\?v=|youtu\.be/|/shorts/|/live/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])", permalink)
