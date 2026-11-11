@@ -2704,6 +2704,9 @@
                     }
                 } catch (_) {}
 
+                if (targetRecordId && typeof selectedRecordId !== 'undefined') {
+                    selectedRecordId = targetRecordId;
+                }
                 if (params.comment_id && typeof selectedCommentId !== 'undefined') {
                     selectedCommentId = String(params.comment_id);
                 }

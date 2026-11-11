@@ -408,10 +408,17 @@
                         warnBanner.classList.add('hidden');
                     }
 
-                    if (selectedRecordId) {
-                        const postStillHasComments = commentsList.some(c => c.record_id === selectedRecordId);
+                    const targetSyncRec = selectedRecordId || (isCommentThreadPopout && window.gbActivePopoutParams ? String(window.gbActivePopoutParams.record_id || '').trim() : '');
+                    if (targetSyncRec) {
+                        selectedRecordId = targetSyncRec;
+                        const postStillHasComments = commentsList.some(c => c.record_id === targetSyncRec);
                         if (postStillHasComments) {
-                            syncOpenPostThreadLive(selectedRecordId);
+                            syncOpenPostThreadLive(targetSyncRec);
+                        } else if (isCommentThreadPopout) {
+                            const panel = document.getElementById('comment-detail-panel');
+                            if (!panel || panel.dataset.recordId !== String(targetSyncRec)) {
+                                renderSelectedCommentDetail(targetSyncRec, false);
+                            }
                         } else {
                             selectedRecordId = null;
                             selectedCommentId = null;
@@ -898,23 +905,21 @@
             const recordId = typeof recordIdOrCommentObj === 'string'
                 ? recordIdOrCommentObj
                 : (recordIdOrCommentObj?.record_id || selectedRecordId);
+            if (!recordId) return;
+            selectedRecordId = recordId;
 
+            const isCommentThreadPopout = (window.gbActivePopoutMode === 'comment_thread');
             const postComments = commentsList.filter(c => c.record_id === recordId);
-            if (postComments.length === 0) return;
+            if (postComments.length === 0 && !isCommentThreadPopout) return;
             postComments.sort((a, b) => (b.latest_activity_iso || b.created_iso || '').localeCompare(a.latest_activity_iso || a.created_iso || ''));
-
-            const targetMatch = findTargetItemInPostComments(postComments, selectedCommentId);
-            const activeComment = targetMatch ? targetMatch.parentComment : postComments[0];
-            const activeTargetId = targetMatch ? targetMatch.targetId : activeComment.comment_id;
-            const activeTargetAuthor = targetMatch ? targetMatch.authorName : activeComment.author_name;
-            selectedCommentId = activeTargetId;
 
             let postDetails = livePostDetailsCache[recordId];
             if (!postDetails || fetchFreshMedia) {
+                const loadingPlatLabel = (postComments[0]?.platform || postDetails?.platform || 'social media').toUpperCase();
                 panel.innerHTML = `
                     <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
                         <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
-                        <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${activeComment.platform.toUpperCase()}...</p>
+                        <p class="text-xs sm:text-sm font-medium text-white">Fetching live post media from ${loadingPlatLabel}...</p>
                     </div>
                 `;
                 try {
@@ -928,6 +933,23 @@
                     console.error("Live post details error:", e);
                 }
             }
+
+            const targetMatch = postComments.length > 0 ? findTargetItemInPostComments(postComments, selectedCommentId) : null;
+            const activeComment = targetMatch
+                ? targetMatch.parentComment
+                : (postComments[0] || {
+                    record_id: recordId,
+                    comment_id: selectedCommentId || '',
+                    platform: postDetails?.platform || 'facebook',
+                    account_name: postDetails?.account_name || 'GlennBot Automations',
+                    author_name: 'Commenter',
+                    post_caption: postDetails?.caption || '',
+                    post_permalink: postDetails?.permalink_url || '',
+                    post_type: postDetails?.post_type || 'image'
+                });
+            const activeTargetId = targetMatch ? targetMatch.targetId : (activeComment.comment_id || '');
+            const activeTargetAuthor = targetMatch ? targetMatch.authorName : (activeComment.author_name || 'Commenter');
+            if (activeTargetId) selectedCommentId = activeTargetId;
 
             if (postDetails?.caption && postDetails.caption !== 'Previous Post' && postDetails.caption !== 'Social Media Post') {
                 activeComment.post_caption = postDetails.caption;
@@ -997,7 +1019,12 @@
                 `;
             }
 
-            const allPostCommentsHTML = buildPostCommentsThreadHTML(recordId, postComments, activeTargetId);
+            const allPostCommentsHTML = postComments.length > 0
+                ? buildPostCommentsThreadHTML(recordId, postComments, activeTargetId)
+                : `<div class="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-center text-xs text-slate-400">
+                       <i class="fas fa-sync fa-spin text-gb-cyan mr-1.5"></i>
+                       <span>Live Comment Sync Active — Post a comment on <strong>${escapeHTML((activeComment.platform || 'social media').toUpperCase())}</strong> and it will appear here automatically!</span>
+                   </div>`;
             panel.dataset.recordId = String(recordId);
 
             const methodBadge = `<span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/40 font-semibold"><i class="fas fa-bolt mr-1"></i>External API Reply</span>`;

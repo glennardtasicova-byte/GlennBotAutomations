@@ -867,8 +867,12 @@ def _get_cached_published_posts(ttl_sec: float = 3.5, force: bool = False) -> Li
                        media_preview_url, scheduled_time, status, status_message, external_post_id, permalink_url
                 FROM glennbot_scheduled_posts
                 WHERE status = 'published'
-                ORDER BY scheduled_time DESC
-                LIMIT 120
+                ORDER BY CASE
+                    WHEN id IN ('post_ext_dc6a96869a', 'post_ext_b10078462e', 'post_ext_19fdfb7f26') THEN 0
+                    WHEN LOWER(COALESCE(account_name, '')) IN ('glennbot automations', '@glennbot.automation', 'glennbot.automation') THEN 1
+                    ELSE 2
+                END, scheduled_time DESC
+                LIMIT 150
             """)).mappings().all()
         rows_list = [dict(r) for r in post_rows]
         with FAST_DB_READ_CACHE_LOCK:

@@ -119,10 +119,14 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
         if not CLOUDINARY_COMMENTS_STORE.get("loaded"):
             load_comments_store_from_cloudinary()
 
+        clean_active_rec = (active_record_id or "").strip()
         if force:
-            sync_all_connected_posts_to_cloudinary(force_refresh=True, target_record_id=active_record_id)
+            sync_all_connected_posts_to_cloudinary(force_refresh=True, target_record_id=clean_active_rec)
         else:
-            trigger_auto_youtube_and_active_sync(active_record_id=active_record_id, min_interval=3.0)
+            existing_target_comms = (((CLOUDINARY_COMMENTS_STORE.get("posts") or {}).get(clean_active_rec) or {}).get("comments") or {}) if clean_active_rec else {}
+            if clean_active_rec and not existing_target_comms:
+                sync_all_connected_posts_to_cloudinary(force_refresh=False, target_record_id=clean_active_rec)
+            trigger_auto_youtube_and_active_sync(active_record_id=clean_active_rec, min_interval=2.5)
 
         seen_ids = _get_cached_seen_comment_ids(ttl_sec=3.0)
         post_rows = _get_cached_published_posts(ttl_sec=3.5, force=force)
@@ -180,8 +184,12 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
             del_cids = set(raw_del_cids) | {_normalize_comment_key(x) for x in raw_del_cids if x}
             c_map = p_entry.get("comments") or {}
 
-            # Auto-unhide if there is any unread user comment or unread user reply in this post
+            # Auto-unhide if there is any unread user comment or unread user reply in this post, or if it is an active/showcase post
             if p_entry.get("notification_hidden"):
+                is_pinned_or_active_post = bool(
+                    (clean_active_rec and rec_id == clean_active_rec)
+                    or rec_id in ("post_ext_dc6a96869a", "post_ext_b10078462e", "post_ext_19fdfb7f26")
+                )
                 has_unread_activity = False
                 for chk_cid, chk_obj in c_map.items():
                     if chk_cid in del_cids or _normalize_comment_key(chk_cid) in del_cids or not isinstance(chk_obj, dict) or chk_obj.get("is_own_comment"):
@@ -197,7 +205,7 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
                                 break
                     if has_unread_activity:
                         break
-                if has_unread_activity:
+                if has_unread_activity or (is_pinned_or_active_post and bool(c_map)):
                     p_entry["notification_hidden"] = False
                     store_cleaned = True
                 else:

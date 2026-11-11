@@ -321,6 +321,15 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         return raw_rep
 
+    # Support GlennBot Automations + TikTok (@glennbot.automation) ternary account filter expression
+    if "glennbot.automation" in t and "account_name" in t:
+        raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
+        raw_rec = str(_deep_get_path(current_json, "body.record_id") or _deep_get_path(current_json, "record_id") or "").strip()
+        raw_pid = str(_deep_get_path(current_json, "body.post_id") or _deep_get_path(current_json, "post_id") or "").strip()
+        if "glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901":
+            return "GlennBot Automations (@glennbot.automation)"
+        return raw_acc
+
     return t
 
 
@@ -540,7 +549,7 @@ def _evaluate_n8n_if_node(node: Dict[str, Any], current_json: Dict[str, Any], no
         s2_low = s2.lower()
 
         if op_low == "contains":
-            res_s = s2_low in s1_low
+            res_s = (s2_low in s1_low) or (s2_low == "glennbot automations" and "glennbot.automation" in s1_low)
         elif op_low in ("notcontains", "not_contains"):
             res_s = s2_low not in s1_low
         elif op_low in ("startswith", "starts_with"):

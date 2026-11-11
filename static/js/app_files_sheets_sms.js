@@ -3839,6 +3839,10 @@
                 ? await applyGlennBotPopoutModeIfPresent()
                 : false;
 
+            if (window.gbActivePopoutMode === 'comment_thread') {
+                return;
+            }
+
             // Initialize real-time email webhook sequence baseline
             await pollRealtimeEmailWebhookEvents();
             // Load initial dashboard data in parallel so Analytics, Comments, Messages, Email, Contacts, Files, and Spread Sheet never block each other
@@ -3876,7 +3880,7 @@
             }
 
             setInterval(() => {
-                if (!window.gbCurrentAuthUser) return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
                 if (activeTab === 'calendar' || activeTab === 'queue') {
                     fetchScheduledPosts();
                 } else if (activeTab === 'analytics') {
@@ -3886,7 +3890,7 @@
 
             // Quota-Safe Background Email Inbox Sync (every 15s) + Fast Webhook Event Queue Listener (every 3s)
             setInterval(async () => {
-                if (!window.gbCurrentAuthUser) return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
                 if (!activeEmailAccountId && Array.isArray(emailAccountsList) && emailAccountsList.length > 0) {
                     activeEmailAccountId = emailAccountsList[0].id;
                 }
@@ -3896,7 +3900,7 @@
             }, 15000);
 
             setInterval(async () => {
-                if (!window.gbCurrentAuthUser) return;
+                if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread') return;
                 await pollRealtimeEmailWebhookEvents();
             }, 3000);
 
@@ -3909,7 +3913,9 @@
                 if (now - lastActivityPollTs >= intervalMs) {
                     lastActivityPollTs = now;
                     fetchComments(false);
-                    fetchConversations(false);
+                    if (window.gbActivePopoutMode !== 'comment_thread') {
+                        fetchConversations(false);
+                    }
                 }
             }, 650);
 
@@ -3918,11 +3924,13 @@
                 if (document.visibilityState === 'visible') {
                     lastActivityPollTs = Date.now();
                     fetchComments(false);
-                    fetchConversations(false);
-                    if (activeEmailAccountId) {
-                        refreshActiveEmailInbox(false, true);
+                    if (window.gbActivePopoutMode !== 'comment_thread') {
+                        fetchConversations(false);
+                        if (activeEmailAccountId) {
+                            refreshActiveEmailInbox(false, true);
+                        }
+                        pollRealtimeEmailWebhookEvents();
                     }
-                    pollRealtimeEmailWebhookEvents();
                 }
             });
         }
