@@ -1645,9 +1645,10 @@ def get_conversation_messages_thread(
 
         if not target_conv and is_req_portfolio_dm:
             clean_cid = str(conversation_id).strip()
-            eff_acc_id = str(account_id or "6af0b109818eb5c88d1e87a6").strip()
             eff_plat = "instagram" if clean_cid.startswith("ig_live_") else "facebook"
-            eff_acc_name = "GlennBot Automations"
+            default_acc_id = "6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6"
+            eff_acc_id = str(account_id or default_acc_id).strip()
+            eff_acc_name = "GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations"
             now_dt = datetime.now(pytz.timezone("Asia/Manila"))
             target_key = f"{eff_acc_id}_{clean_cid}"
             target_conv = {
@@ -1660,6 +1661,7 @@ def get_conversation_messages_thread(
                 "account_id": eff_acc_id,
                 "zernio_account_id": eff_acc_id,
                 "account_name": eff_acc_name,
+                "username": "glennard.tasico.va" if eff_plat == "instagram" else "GlennBot Automations",
                 "account_avatar": "",
                 "participant_id": f"visitor_{clean_cid}",
                 "participant_name": "Portfolio Client",
@@ -2824,9 +2826,15 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
 
         convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
         clean_cid = str(payload.conversation_id or "").strip() or f"fb_live_{uuid.uuid4().hex[:10]}"
-        eff_acc_id = str(payload.account_id or "6af0b109818eb5c88d1e87a6").strip()
         eff_plat = str(payload.platform or ("instagram" if clean_cid.startswith("ig_live_") else "facebook")).strip().lower()
-        eff_acc_name = str(payload.account_name or "GlennBot Automations").strip() or "GlennBot Automations"
+        default_acc_id = "6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6"
+        raw_req_acc_id = str(payload.account_id or "").strip()
+        if eff_plat == "instagram" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6"):
+            eff_acc_id = "6ad9e9b2e5d470e468e58d87"
+        else:
+            eff_acc_id = raw_req_acc_id or default_acc_id
+        default_acc_name = "GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations"
+        eff_acc_name = str(payload.account_name or default_acc_name).strip() or default_acc_name
         eff_part_name = str(payload.participant_name or "Portfolio Client").strip() or "Portfolio Client"
         eff_part_id = str(payload.participant_id or f"visitor_{clean_cid}").strip()
 
