@@ -120,7 +120,7 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
             load_comments_store_from_cloudinary()
 
         if force:
-            sync_all_connected_posts_to_cloudinary(force_refresh=True)
+            sync_all_connected_posts_to_cloudinary(force_refresh=True, target_record_id=active_record_id)
         else:
             trigger_auto_youtube_and_active_sync(active_record_id=active_record_id, min_interval=3.0)
 

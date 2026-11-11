@@ -202,14 +202,14 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 @app.on_event("startup")
 async def _configure_high_concurrency_threadpool_limiter():
     """
-    Expands the default AnyIO/Starlette threadpool capacity from 40 to 128 concurrent worker threads
-    so simultaneous n8n workflows, Gemini AI calls, Google Drive/Sheets syncs, and dashboard polling
-    never queue-block or freeze the Python server.
+    Configures the AnyIO/Starlette threadpool capacity to 48 concurrent worker threads
+    so simultaneous n8n workflows, Gemini AI calls, and dashboard polling never block
+    while staying safely within Render's 512MB RAM container limit.
     """
     try:
         import anyio
         limiter = anyio.to_thread.current_default_thread_limiter()
-        limiter.total_tokens = 128
+        limiter.total_tokens = 48
     except Exception:
         pass
 

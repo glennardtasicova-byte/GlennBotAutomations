@@ -32,8 +32,8 @@ else:
         connect_args=_DB_CONNECT_ARGS,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=20,
-        max_overflow=40,
+        pool_size=8,
+        max_overflow=12,
         pool_timeout=30
     )
 
@@ -266,7 +266,7 @@ jobstores = {
 }
 scheduler = BackgroundScheduler(
     jobstores=jobstores,
-    executors={"default": {"type": "threadpool", "max_workers": 30}},
+    executors={"default": {"type": "threadpool", "max_workers": 10}},
     job_defaults={"coalesce": True, "max_instances": 4, "misfire_grace_time": 120},
     timezone="Asia/Manila"
 )

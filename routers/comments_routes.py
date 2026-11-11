@@ -2522,11 +2522,57 @@ def _ensure_recent_youtube_channel_videos_registered(connected_items: List[Dict[
         print(f"[⚠️ YOUTUBE CHANNEL VIDEO AUTO-REGISTER WARNING]: {e}")
 
 
-def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
+_FULL_COMMENTS_SYNC_LOCK = threading.Lock()
+_FULL_COMMENTS_SYNC_STATE: Dict[str, Any] = {
+    "last_full_sync_ts": 0.0,
+    "per_record_ts": {}
+}
+
+
+def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_record_id: str = "") -> bool:
     if not get_all_zernio_keys():
         return False
 
+    clean_target_rec = (target_record_id or "").strip()
+    now_sync_ts = time.time()
+
+    # Fast single-record path when caller specifies active_record_id (e.g., Portfolio 5s/8s showcase sync or popout thread)
+    # Prevents spawning a 60-post ThreadPoolExecutor storm 3x every 8 seconds on 512MB Render containers.
+    if clean_target_rec and (now_sync_ts - float(_FULL_COMMENTS_SYNC_STATE.get("last_full_sync_ts") or 0.0)) < 60.0:
+        last_rec_ts = float((_FULL_COMMENTS_SYNC_STATE.get("per_record_ts") or {}).get(clean_target_rec) or 0.0)
+        if (now_sync_ts - last_rec_ts) < 3.5:
+            return True
+        _FULL_COMMENTS_SYNC_STATE.setdefault("per_record_ts", {})[clean_target_rec] = now_sync_ts
+        try:
+            get_zernio_commented_posts_list(force=False)
+            with db_engine.connect() as conn:
+                t_row = conn.execute(
+                    text("""
+                        SELECT id, platform, page_id, account_name, post_type, caption,
+                               media_preview_url, scheduled_time, status, status_message,
+                               external_post_id, permalink_url
+                        FROM glennbot_scheduled_posts
+                        WHERE id = :rid
+                        LIMIT 1
+                    """),
+                    {"rid": clean_target_rec}
+                ).mappings().first()
+            if t_row:
+                sync_single_post_to_cloudinary(dict(t_row), force_unhide=bool(force_refresh))
+                return True
+        except Exception as e:
+            print(f"[⚠️ TARGETED POST SYNC WARNING]: {e}")
+            return False
+
+    # Non-blocking lock & cooldown so overlapping force=true calls never stack multiple ThreadPoolExecutors in RAM
+    if not _FULL_COMMENTS_SYNC_LOCK.acquire(blocking=False):
+        return True
+
     try:
+        if (time.time() - float(_FULL_COMMENTS_SYNC_STATE.get("last_full_sync_ts") or 0.0)) < 8.0:
+            return True
+        _FULL_COMMENTS_SYNC_STATE["last_full_sync_ts"] = time.time()
+
         connected_items = refresh_connected_accounts_cache(force=force_refresh)
         fetch_zernio_connected_accounts(force=force_refresh)
         get_zernio_posts_map(force=force_refresh)
@@ -2576,7 +2622,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
                 WHERE status = 'published'
                   AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube')
                 ORDER BY CASE WHEN id NOT LIKE 'post_ext_%' THEN 0 ELSE 1 END, scheduled_time DESC
-                LIMIT 60
+                LIMIT 40
             """)).mappings().all()
 
         valid_post_dicts = [dict(r) for r in post_rows if is_post_account_connected(dict(r), connected_items)]
@@ -2665,7 +2711,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
             return r_dict, comms
 
         if resolved_plans:
-            max_workers = min(6, len(resolved_plans))
+            max_workers = min(4, len(resolved_plans))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(_fetch_for_plan, plan) for plan in resolved_plans]
                 for fut in as_completed(futures):
@@ -2685,10 +2731,21 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False) -> bool:
 
         if any_store_change or force_refresh:
             save_comments_store_async()
+        _FULL_COMMENTS_SYNC_STATE["last_full_sync_ts"] = time.time()
         return True
     except Exception as e:
         print(f"[❌ SYNC TO CLOUDINARY ERROR]: {e}")
         return False
+    finally:
+        try:
+            _FULL_COMMENTS_SYNC_LOCK.release()
+        except Exception:
+            pass
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
 
 
 # ==============================================================================
