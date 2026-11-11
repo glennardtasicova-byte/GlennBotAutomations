@@ -1205,20 +1205,33 @@ def sync_youtube_and_active_posts_background(active_record_id: str = ""):
             except Exception as disc_err:
                 print(f"[⚠️ AUTO INBOX COMMENT DISCOVERY WARNING]: {disc_err}")
 
-        # 2) Fetch published YouTube, Facebook, Instagram, and TikTok posts (plus active_record_id if any) and sync their comments/replies
+        # 2) Always sync active_record_id + live Portfolio showcase posts on every tick (real-time 5s sync),
+        # while sweeping all 40+ older published posts once every 20 seconds to keep RAM & CPU low on Render.
+        priority_ids = [
+            rid for rid in (
+                (active_record_id or "").strip(),
+                "post_ext_dc6a96869a",
+                "post_ext_b10078462e",
+                "post_ext_19fdfb7f26",
+            ) if rid
+        ]
+        do_full_sweep = (now_ts - float(YOUTUBE_AUTO_SYNC_STATE.get("last_full_sweep_ts") or 0.0)) >= 20.0
+        if do_full_sweep:
+            YOUTUBE_AUTO_SYNC_STATE["last_full_sweep_ts"] = now_ts
+
         with db_engine.connect() as conn:
-            if active_record_id:
+            if do_full_sweep:
                 rows = conn.execute(
                     text("""
                         SELECT id, platform, page_id, account_name, post_type, caption,
                                scheduled_time, status, status_message, external_post_id, permalink_url
                         FROM glennbot_scheduled_posts
                         WHERE status = 'published'
-                          AND (LOWER(platform) IN ('youtube', 'facebook', 'instagram', 'tiktok') OR id = :act_id)
-                        ORDER BY scheduled_time DESC
-                        LIMIT 45
+                          AND (LOWER(platform) IN ('youtube', 'facebook', 'instagram', 'tiktok') OR id = ANY(:prio_ids))
+                        ORDER BY CASE WHEN id = ANY(:prio_ids) THEN 0 ELSE 1 END, scheduled_time DESC
+                        LIMIT 30
                     """),
-                    {"act_id": active_record_id}
+                    {"prio_ids": priority_ids}
                 ).mappings().all()
             else:
                 rows = conn.execute(
@@ -1227,10 +1240,11 @@ def sync_youtube_and_active_posts_background(active_record_id: str = ""):
                                scheduled_time, status, status_message, external_post_id, permalink_url
                         FROM glennbot_scheduled_posts
                         WHERE status = 'published'
-                          AND LOWER(platform) IN ('youtube', 'facebook', 'instagram', 'tiktok')
-                        ORDER BY scheduled_time DESC
-                        LIMIT 45
-                    """)
+                          AND (id = ANY(:prio_ids) OR LOWER(platform) = 'youtube')
+                        ORDER BY CASE WHEN id = ANY(:prio_ids) THEN 0 ELSE 1 END, scheduled_time DESC
+                        LIMIT 10
+                    """),
+                    {"prio_ids": priority_ids}
                 ).mappings().all()
 
         if not rows:
@@ -1239,35 +1253,36 @@ def sync_youtube_and_active_posts_background(active_record_id: str = ""):
         connected_items = refresh_connected_accounts_cache(force=False)
         target_posts = [dict(r) for r in rows if is_post_account_connected(dict(r), connected_items)]
         seen_target_ids = {str(tp.get("id") or "") for tp in target_posts}
-        posts_store_bg = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
-        extra_active_ids = [
-            str(s_rid)
-            for s_rid, s_entry in list(posts_store_bg.items())
-            if str(s_rid) not in seen_target_ids and isinstance(s_entry, dict) and bool(s_entry.get("comments"))
-        ]
-        if extra_active_ids:
-            try:
-                with db_engine.connect() as conn:
-                    extra_bg_rows = conn.execute(
-                        text("""
-                            SELECT id, platform, page_id, account_name, post_type, caption,
-                                   scheduled_time, status, status_message, external_post_id, permalink_url
-                            FROM glennbot_scheduled_posts
-                            WHERE id = ANY(:ids)
-                        """),
-                        {"ids": extra_active_ids}
-                    ).mappings().all()
-                for ebr in extra_bg_rows:
-                    ebrd = dict(ebr)
-                    if is_post_account_connected(ebrd, connected_items):
-                        target_posts.append(ebrd)
-                        seen_target_ids.add(str(ebrd["id"]))
-            except Exception:
-                pass
+        if do_full_sweep:
+            posts_store_bg = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+            extra_active_ids = [
+                str(s_rid)
+                for s_rid, s_entry in list(posts_store_bg.items())
+                if str(s_rid) not in seen_target_ids and isinstance(s_entry, dict) and bool(s_entry.get("comments"))
+            ][:15]
+            if extra_active_ids:
+                try:
+                    with db_engine.connect() as conn:
+                        extra_bg_rows = conn.execute(
+                            text("""
+                                SELECT id, platform, page_id, account_name, post_type, caption,
+                                       scheduled_time, status, status_message, external_post_id, permalink_url
+                                FROM glennbot_scheduled_posts
+                                WHERE id = ANY(:ids)
+                            """),
+                            {"ids": extra_active_ids}
+                        ).mappings().all()
+                    for ebr in extra_bg_rows:
+                        ebrd = dict(ebr)
+                        if is_post_account_connected(ebrd, connected_items):
+                            target_posts.append(ebrd)
+                            seen_target_ids.add(str(ebrd["id"]))
+                except Exception:
+                    pass
         if not target_posts:
             return
 
-        max_workers = min(4, len(target_posts))
+        max_workers = min(3, len(target_posts))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(sync_single_post_to_cloudinary, p_dict, False)

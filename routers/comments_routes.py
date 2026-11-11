@@ -2397,9 +2397,7 @@ def _heal_external_post_metadata_from_z_info(r_dict: Dict[str, Any], z_info: Dic
 
 def sync_single_post_to_cloudinary(r_dict: Dict[str, Any], force_unhide: bool = False):
     try:
-        with db_engine.connect() as conn:
-            seen_rows = conn.execute(text("SELECT comment_id FROM glennbot_seen_comments")).mappings().all()
-            seen_ids = {str(r["comment_id"]) for r in seen_rows}
+        seen_ids = _get_cached_seen_comment_ids(ttl_sec=3.0)
 
         rec_id = str(r_dict["id"])
         posts_store = CLOUDINARY_COMMENTS_STORE.setdefault("posts", {})
