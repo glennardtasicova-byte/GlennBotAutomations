@@ -1728,7 +1728,33 @@
                     updateMessagesBadges(data.total_unread, data.total_displayed);
                     renderMessagesConversationsList();
 
-                    if (selectedConversationKey) {
+                    if (window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled) {
+                        const cfg = window._gbPopoutAutoLatestConfig;
+                        const matchingConvs = messagesConversationsList.filter(c => {
+                            const cPlat = String(c.platform || '').trim().toLowerCase();
+                            const cAccId = String(c.account_id || '').trim();
+                            const cAccName = String(c.account_name || '').trim().toLowerCase();
+                            if (cfg.platform && cPlat !== cfg.platform) return false;
+                            if (cfg.account_id && cAccId === cfg.account_id) return true;
+                            if (cfg.account_name && cAccName.includes(cfg.account_name)) return true;
+                            return !cfg.account_id && !cfg.account_name;
+                        });
+                        if (matchingConvs.length > 0) {
+                            const newestConv = matchingConvs[0];
+                            if (selectedConversationKey !== newestConv.conv_key) {
+                                await selectMessageConversation(newestConv.conv_key, newestConv.conversation_id, newestConv.account_id);
+                                if (typeof setGlennBotPopoutBarHeader === 'function') {
+                                    setGlennBotPopoutBarHeader(
+                                        `Chat with ${newestConv.participant_name || 'Direct Message Thread'} — Expanded View`,
+                                        'Focused Conversation Window • Real-Time Direct Messaging & Replies',
+                                        'fa-comments'
+                                    );
+                                }
+                            } else if (activeTab === 'messages') {
+                                await refreshOpenConversationSilently(newestConv.conversation_id, newestConv.account_id);
+                            }
+                        }
+                    } else if (selectedConversationKey) {
                         const stillExists = messagesConversationsList.find(c => c.conv_key === selectedConversationKey);
                         if (stillExists && activeTab === 'messages') {
                             await refreshOpenConversationSilently(stillExists.conversation_id, stillExists.account_id);
@@ -1959,7 +1985,9 @@
                         if (!exists) incomingMsgs.push(optM);
                     });
 
-                    if (incomingMsgs.length !== activeConversationMessages.length) {
+                    const prevSig = (activeConversationMessages || []).map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
+                    const nextSig = incomingMsgs.map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
+                    if (incomingMsgs.length !== activeConversationMessages.length || prevSig !== nextSig) {
                         activeConversationMessages = incomingMsgs;
                         renderActiveConversationThread(true);
                     }

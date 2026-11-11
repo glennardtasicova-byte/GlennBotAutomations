@@ -1972,6 +1972,23 @@ def _notify_n8n_new_message(conv_obj: Dict[str, Any], msg_obj: Dict[str, Any], i
     conv_id = str(conv_obj.get("conversation_id") or conv_obj.get("platform_conversation_id") or "").strip()
     part_id = str(conv_obj.get("participant_id") or msg_obj.get("sender_id") or "").strip()
     part_name = str(conv_obj.get("participant_name") or msg_obj.get("sender_name") or "User").strip()
+    msg_text_str = str(msg_obj.get("message") or msg_obj.get("text") or "").strip()
+    is_own_flag = bool(msg_obj.get("is_own"))
+
+    transcript_lines: List[str] = []
+    for m_hist in (conv_obj.get("messages") or []):
+        if not isinstance(m_hist, dict):
+            continue
+        m_txt = str(m_hist.get("message") or m_hist.get("text") or "").strip()
+        if not m_txt:
+            continue
+        sp_name = acc_name if m_hist.get("is_own") else str(m_hist.get("sender_name") or part_name or "User").strip()
+        transcript_lines.append(f"{sp_name}: {m_txt}")
+    dm_transcript_str = " | ".join(transcript_lines)
+
+    msg_dict = dict(msg_obj)
+    if "text" not in msg_dict and msg_text_str:
+        msg_dict["text"] = msg_text_str
 
     _dispatch_outbound_n8n_webhook_async("message.received", {
         "platform": plat,
@@ -1980,7 +1997,12 @@ def _notify_n8n_new_message(conv_obj: Dict[str, Any], msg_obj: Dict[str, Any], i
         "conversation_id": conv_id,
         "participant_id": part_id,
         "participant_name": part_name,
-        "message": dict(msg_obj)
+        "text": msg_text_str,
+        "message_text": msg_text_str,
+        "is_own": is_own_flag,
+        "is_own_message": is_own_flag,
+        "dm_transcript": dm_transcript_str,
+        "message": msg_dict
     })
 
 

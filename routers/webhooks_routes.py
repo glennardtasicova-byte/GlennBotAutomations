@@ -529,6 +529,8 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                 deduplicate_and_merge_conversations_store(connected_items)
                 save_messages_store_async()
                 print(f"[💬 WEBHOOK DM SAVED TO CLOUDINARY] {parsed_msg['sender_name']} -> '{acc_name}': '{parsed_msg['message']}'")
+                active_conv_ref = existing_conv or convs_store.get(f"{db_acc_id}_{conv_id}") or {}
+                conv_msgs_list = list(active_conv_ref.get("messages") or [parsed_msg])
                 if "_notify_n8n_new_message" in globals() and not parsed_msg.get("is_own"):
                     _notify_n8n_new_message({
                         "platform": plat,
@@ -536,7 +538,8 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         "account_name": acc_name,
                         "conversation_id": conv_id,
                         "participant_id": part_id,
-                        "participant_name": part_name
+                        "participant_name": part_name,
+                        "messages": conv_msgs_list
                     }, parsed_msg, is_background_sync=False)
                 elif "_dispatch_outbound_n8n_webhook_async" in globals() and not parsed_msg.get("is_own"):
                     _dispatch_outbound_n8n_webhook_async("message.received", {
@@ -546,6 +549,10 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         "conversation_id": conv_id,
                         "participant_id": part_id,
                         "participant_name": part_name,
+                        "text": str(parsed_msg.get("message") or "").strip(),
+                        "message_text": str(parsed_msg.get("message") or "").strip(),
+                        "is_own": bool(parsed_msg.get("is_own")),
+                        "is_own_message": bool(parsed_msg.get("is_own")),
                         "message": parsed_msg
                     })
         except Exception as e:

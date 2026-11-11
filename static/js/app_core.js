@@ -2842,26 +2842,59 @@
                 let cKey = String(params.conv_key || '').trim();
                 let cId = String(params.conv_id || '').trim();
                 let aId = String(params.account_id || '').trim();
+                const targetPlat = String(params.platform || '').trim().toLowerCase();
+                const targetAccName = String(params.account_name || '').trim().toLowerCase();
+                const autoLatest = ['1', 'true', 'yes'].includes(String(params.auto_latest || '').trim().toLowerCase()) || Boolean((targetPlat || targetAccName) && !cId);
+
+                if (autoLatest) {
+                    window._gbPopoutAutoLatestConfig = {
+                        enabled: true,
+                        platform: targetPlat || 'facebook',
+                        account_id: aId,
+                        account_name: targetAccName || 'glennbot automations'
+                    };
+                }
+
                 let cachedDraft = '';
-                try {
-                    const raw = localStorage.getItem('gb_popout_message_thread_cache');
-                    if (raw) {
-                        const parsed = JSON.parse(raw);
-                        if (!cKey && parsed.conv_key) cKey = String(parsed.conv_key);
-                        if (!cId && parsed.conv_id) cId = String(parsed.conv_id);
-                        if (!aId && parsed.account_id) aId = String(parsed.account_id);
-                        if (parsed.draft_message) cachedDraft = String(parsed.draft_message);
-                        if (parsed.conversation && typeof activeConversationObj !== 'undefined') {
-                            activeConversationObj = parsed.conversation;
-                            if (Array.isArray(conversationsList) && !conversationsList.some(x => x.conv_key === parsed.conversation.conv_key)) {
-                                conversationsList.unshift(parsed.conversation);
+                if (!autoLatest) {
+                    try {
+                        const raw = localStorage.getItem('gb_popout_message_thread_cache');
+                        if (raw) {
+                            const parsed = JSON.parse(raw);
+                            if (!cKey && parsed.conv_key) cKey = String(parsed.conv_key);
+                            if (!cId && parsed.conv_id) cId = String(parsed.conv_id);
+                            if (!aId && parsed.account_id) aId = String(parsed.account_id);
+                            if (parsed.draft_message) cachedDraft = String(parsed.draft_message);
+                            if (parsed.conversation && typeof activeConversationObj !== 'undefined') {
+                                activeConversationObj = parsed.conversation;
+                            }
+                            if (Array.isArray(parsed.messages) && typeof activeConversationMessages !== 'undefined') {
+                                activeConversationMessages = parsed.messages;
                             }
                         }
-                        if (Array.isArray(parsed.messages) && typeof activeConversationMessages !== 'undefined') {
-                            activeConversationMessages = parsed.messages;
+                    } catch (_) {}
+                }
+
+                if (autoLatest && typeof fetchConversations === 'function') {
+                    await fetchConversations(false);
+                    if (Array.isArray(messagesConversationsList) && messagesConversationsList.length > 0) {
+                        const matchingConvs = messagesConversationsList.filter(c => {
+                            const cPlat = String(c.platform || '').trim().toLowerCase();
+                            const cAccId = String(c.account_id || '').trim();
+                            const cAccName = String(c.account_name || '').trim().toLowerCase();
+                            if (targetPlat && cPlat !== targetPlat) return false;
+                            if (aId && cAccId === aId) return true;
+                            if (targetAccName && cAccName.includes(targetAccName)) return true;
+                            return !aId && !targetAccName;
+                        });
+                        if (matchingConvs.length > 0) {
+                            const latestConv = matchingConvs[0];
+                            cKey = String(latestConv.conv_key || '');
+                            cId = String(latestConv.conversation_id || '');
+                            aId = String(latestConv.account_id || aId);
                         }
                     }
-                } catch (_) {}
+                }
 
                 if (typeof activeConversationObj !== 'undefined' && activeConversationObj && typeof renderActiveConversationThread === 'function') {
                     renderActiveConversationThread(true);

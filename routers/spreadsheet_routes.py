@@ -3658,8 +3658,28 @@ async def api_v1_read_spreadsheet_cells(
 
     target_sheet = next(
         (s for s in sheets_list if q_sheet and (str(s.get("name") or "").lower() == q_sheet.lower() or str(s.get("id") or "") == q_sheet)),
-        sheets_list[0]
+        None
     )
+    if not target_sheet:
+        if q_sheet and q_sheet.lower() not in ("sheet1", "sheet_1", "default"):
+            new_sheet_idx = len(sheets_list) + 1
+            default_cells: Dict[str, str] = {}
+            if "conversation" in str(target_wb.get("title") or "").lower():
+                default_cells = {"A1": "Thread ID", "B1": "Conversations"}
+            target_sheet = {
+                "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
+                "name": q_sheet,
+                "row_count": 25,
+                "col_count": 10,
+                "cells": default_cells
+            }
+            sheets_list.append(target_sheet)
+            target_wb["sheets"] = sheets_list
+            with SPREADSHEETS_LOCK:
+                SPREADSHEETS_STORE["workbooks"] = workbooks
+            save_spreadsheets_store_async()
+        else:
+            target_sheet = sheets_list[0]
 
     headers_by_col, structured_rows, evaluated_cells = _build_sheet_structured_rows(target_sheet)
     _, next_empty_row = _extract_sheet_headers_and_next_row(target_sheet)
@@ -3766,7 +3786,22 @@ async def api_v1_append_spreadsheet_row(request: Request):
             None
         )
     if not target_sheet:
-        target_sheet = sheets_list[0]
+        if sheet_query and sheet_query.lower() not in ("sheet1", "sheet_1", "default"):
+            new_sheet_idx = len(sheets_list) + 1
+            default_cells = {}
+            if "conversation" in str(target_wb.get("title") or "").lower():
+                default_cells = {"A1": "Thread ID", "B1": "Conversations"}
+            target_sheet = {
+                "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
+                "name": sheet_query,
+                "row_count": 25,
+                "col_count": 10,
+                "cells": default_cells
+            }
+            sheets_list.append(target_sheet)
+            target_wb["sheets"] = sheets_list
+        else:
+            target_sheet = sheets_list[0]
 
     cells_map: Dict[str, str] = target_sheet.setdefault("cells", {})
     headers_by_col, target_row = _extract_sheet_headers_and_next_row(target_sheet)
