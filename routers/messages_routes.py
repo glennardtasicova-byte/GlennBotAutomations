@@ -337,7 +337,19 @@ def _normalize_participant_name_key(name: str) -> str:
         return ""
     cleaned = re.sub(r"\s*\(@[^)]+\)\s*$", "", str(name)).strip().lstrip("@").lower()
     cleaned = re.sub(r"\s+", " ", cleaned)
-    if cleaned in ("", "user", "facebook user", "instagram user", "tiktok user", "youtube user", "unknown", "customer"):
+    if cleaned in (
+        "",
+        "user",
+        "facebook user",
+        "instagram user",
+        "tiktok user",
+        "youtube user",
+        "unknown",
+        "customer",
+        "portfolio client",
+        "website visitor",
+        "visitor",
+    ):
         return ""
     return cleaned
 
@@ -1032,9 +1044,50 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
                 changed = True
 
     # Step 2: Group conversations by (page, person) and merge duplicates
+    # IMPORTANT: Never merge isolated Portfolio Live DM showcase sessions (`fb_live_`, `ig_live_`, `portfolio_`)
+    # across different visitors, even if both visitors use the same display name (e.g. "Portfolio Client" or "Alex").
     person_groups: Dict[str, List[str]] = {}
     for ckey, c_obj in list(convs_store.items()):
         if not isinstance(c_obj, dict) or c_obj.get("hidden"):
+            continue
+        c_cid = str(c_obj.get("conversation_id") or "").strip()
+        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "portfolio_")):
+            # Self-heal if a previous run merged other fb_live_ sessions into this one
+            cur_alts = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
+            if len(cur_alts) > 1 and c_cid:
+                c_obj["alternate_conversation_ids"] = [c_cid]
+                expected_sender = f"visitor_{c_cid}"
+                raw_m_list = list(c_obj.get("messages") or [])
+                has_foreign_visitor = any(
+                    not bool(m.get("is_own"))
+                    and str(m.get("sender_id") or "").startswith("visitor_")
+                    and str(m.get("sender_id") or "") != expected_sender
+                    for m in raw_m_list if isinstance(m, dict)
+                )
+                if has_foreign_visitor:
+                    cleaned_session_msgs: List[Dict[str, Any]] = []
+                    keep_own_replies = False
+                    for m in raw_m_list:
+                        if not isinstance(m, dict):
+                            continue
+                        if not bool(m.get("is_own")):
+                            sid = str(m.get("sender_id") or "")
+                            if sid == expected_sender or not sid.startswith("visitor_"):
+                                cleaned_session_msgs.append(m)
+                                keep_own_replies = True
+                            else:
+                                keep_own_replies = False
+                        else:
+                            if keep_own_replies:
+                                cleaned_session_msgs.append(m)
+                    c_obj["messages"] = cleaned_session_msgs
+                    if cleaned_session_msgs:
+                        c_obj["last_message_text"] = str(cleaned_session_msgs[-1].get("message") or "Start a conversation")
+                        c_obj["last_message_is_own"] = bool(cleaned_session_msgs[-1].get("is_own"))
+                    else:
+                        c_obj["last_message_text"] = "Start a conversation"
+                        c_obj["last_message_is_own"] = False
+                changed = True
             continue
         c_plat = (c_obj.get("platform") or "").strip().lower()
         c_acc_id = str(c_obj.get("account_id") or "").strip()
@@ -1174,9 +1227,12 @@ def _find_existing_conversation_in_store(
         if cand_id_set & stored_ids:
             return c_obj
 
-    # 3. Match by participant_id or participant_name on the same account/page
+    # 3. Match by participant_id or participant_name on the same account/page (skip isolated Portfolio Live DM threads)
     for k, c_obj in convs_store.items():
         if not isinstance(c_obj, dict) or not _conv_belongs_to_same_page(c_obj):
+            continue
+        c_cid = str(c_obj.get("conversation_id") or "").strip()
+        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "portfolio_")):
             continue
 
         c_pid = str(c_obj.get("participant_id") or "").strip()
@@ -1558,12 +1614,21 @@ def get_conversation_messages_thread(
         target_conv = None
         target_key = ""
 
+        is_req_portfolio_dm = str(conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
+
         if account_id and f"{account_id}_{conversation_id}" in convs_store:
             target_key = f"{account_id}_{conversation_id}"
             target_conv = convs_store[target_key]
         else:
             for k, c_obj in convs_store.items():
                 if not isinstance(c_obj, dict):
+                    continue
+                if is_req_portfolio_dm:
+                    if str(c_obj.get("conversation_id")) == str(conversation_id) or k == str(conversation_id):
+                        if not account_id or str(c_obj.get("account_id")) == str(account_id):
+                            target_key = k
+                            target_conv = c_obj
+                            break
                     continue
                 alt_ids = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
                 if (
@@ -1578,7 +1643,7 @@ def get_conversation_messages_thread(
                         target_conv = c_obj
                         break
 
-        if not target_conv and str(conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_")):
+        if not target_conv and is_req_portfolio_dm:
             clean_cid = str(conversation_id).strip()
             eff_acc_id = str(account_id or "6af0b109818eb5c88d1e87a6").strip()
             eff_plat = "instagram" if clean_cid.startswith("ig_live_") else "facebook"
@@ -2124,9 +2189,17 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
         conv_key = f"{payload.account_id}_{payload.conversation_id}"
         target_conv = convs_store.get(conv_key)
 
+        is_send_portfolio_dm = str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
+
         if not target_conv:
             for k, c_obj in convs_store.items():
                 if not isinstance(c_obj, dict):
+                    continue
+                if is_send_portfolio_dm:
+                    if str(c_obj.get("conversation_id")) == str(payload.conversation_id) or k == str(payload.conversation_id):
+                        target_conv = c_obj
+                        conv_key = k
+                        break
                     continue
                 alt_ids = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
                 if (
