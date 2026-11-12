@@ -1976,7 +1976,11 @@ def _notify_n8n_new_message(conv_obj: Dict[str, Any], msg_obj: Dict[str, Any], i
     plat = str(conv_obj.get("platform") or "").strip().lower()
     acc_id = str(conv_obj.get("account_id") or conv_obj.get("zernio_account_id") or "").strip()
     acc_name = str(conv_obj.get("account_name") or plat.upper()).strip()
-    acc_uname = str(conv_obj.get("username") or ("glennard.tasico.va" if acc_id == "6ad9e9b2e5d470e468e58d87" else "")).strip()
+    acc_uname = str(
+        conv_obj.get("username")
+        or ("+63 995 260 1753" if (acc_id == "6adda70399e7b30829e8859c" or plat == "whatsapp") else "")
+        or ("glennard.tasico.va" if acc_id == "6ad9e9b2e5d470e468e58d87" else "")
+    ).strip()
     conv_id = str(conv_obj.get("conversation_id") or conv_obj.get("platform_conversation_id") or "").strip()
     part_id = str(conv_obj.get("participant_id") or msg_obj.get("sender_id") or "").strip()
     part_name = str(conv_obj.get("participant_name") or msg_obj.get("sender_name") or "User").strip()

@@ -2222,8 +2222,11 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
                     conv_key = k
                     break
 
-        platform = ((target_conv or {}).get("platform") or "facebook").strip().lower()
-        acc_name = (target_conv or {}).get("account_name") or platform.capitalize()
+        default_plat = "whatsapp" if str(payload.account_id).strip() == "6adda70399e7b30829e8859c" else (
+            "instagram" if str(payload.account_id).strip() == "6ad9e9b2e5d470e468e58d87" else "facebook"
+        )
+        platform = ((target_conv or {}).get("platform") or default_plat).strip().lower()
+        acc_name = (target_conv or {}).get("account_name") or ("HappyFinds Hub" if platform == "whatsapp" else platform.capitalize())
         stored_z_acc_id = str((target_conv or {}).get("zernio_account_id") or "").strip()
         pref_key = (target_conv or {}).get("zernio_api_key") or ""
         real_conv_id = str((target_conv or {}).get("conversation_id") or payload.conversation_id).strip()

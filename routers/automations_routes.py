@@ -321,8 +321,8 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         return raw_rep
 
-    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) ternary account filter expressions
-    if ("glennbot.automation" in t or "glennard.tasico.va" in t) and "account_name" in t:
+    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) / WhatsApp (+63 995 260 1753) ternary account filter expressions
+    if ("glennbot.automation" in t or "glennard.tasico.va" in t or "9952601753" in t) and "account_name" in t:
         raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
         raw_un = str(_deep_get_path(current_json, "body.username") or _deep_get_path(current_json, "username") or "").strip()
         raw_aid = str(_deep_get_path(current_json, "body.account_id") or _deep_get_path(current_json, "account_id") or "").strip()
@@ -335,11 +335,15 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         if (
             "glennard.tasico.va" in raw_acc.lower()
             or "glennard.tasico.va" in raw_un.lower()
-            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6")
-            or raw_cid.startswith(("ig_live_", "fb_live_", "portfolio_"))
+            or "9952601753" in raw_acc.replace(" ", "")
+            or "9952601753" in raw_un.replace(" ", "")
+            or "happyfinds" in raw_acc.lower()
+            or raw_plat == "whatsapp"
+            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6adda70399e7b30829e8859c")
+            or raw_cid.startswith(("ig_live_", "fb_live_", "wa_live_", "portfolio_"))
             or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
         ):
-            return "GlennBot Automations (@glennard.tasico.va)"
+            return "GlennBot Automations (@glennard.tasico.va | +63 995 260 1753)"
         return raw_acc
 
     return t
