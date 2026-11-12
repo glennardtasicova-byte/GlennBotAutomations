@@ -334,15 +334,37 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
         wb = {}
 
     now_utc = datetime.now(pytz.utc)
-    raw_cid = str(wb.get("comment_id") or root_body.get("comment_id") or f"cid_{int(time.time() * 1000)}").strip()
-    raw_tid = str(wb.get("thread_id") or wb.get("root_comment_id") or wb.get("parent_comment_id") or raw_cid).strip()
-    raw_pid = str(wb.get("post_id") or wb.get("zernio_post_id") or wb.get("external_post_id") or "").strip()
-    raw_rid = str(wb.get("record_id") or "").strip()
-    raw_plat = str(wb.get("platform") or "facebook").strip().lower()
-    raw_acc = str(wb.get("account_name") or "GlennBot Automations").strip()
-    raw_auth = str(wb.get("author_name") or "Commenter").strip()
-    raw_msg = str(wb.get("message") or "").strip()
-    is_own = 1 if bool(wb.get("is_own_comment") or wb.get("is_own")) else 0
+    msg_obj_nested = wb.get("message") if isinstance(wb.get("message"), dict) else {}
+    raw_cid = str(
+        wb.get("comment_id")
+        or root_body.get("comment_id")
+        or wb.get("message_id")
+        or wb.get("id")
+        or msg_obj_nested.get("id")
+        or f"cid_{int(time.time() * 1000)}"
+    ).strip()
+    raw_tid = str(
+        wb.get("thread_id")
+        or wb.get("conversation_id")
+        or msg_obj_nested.get("conversation_id")
+        or wb.get("root_comment_id")
+        or wb.get("parent_comment_id")
+        or raw_cid
+    ).strip()
+    raw_pid = str(wb.get("post_id") or wb.get("zernio_post_id") or wb.get("external_post_id") or ("dm_inbox" if wb.get("conversation_id") else "")).strip()
+    raw_rid = str(wb.get("record_id") or ("sheet2_dm" if wb.get("conversation_id") else "")).strip()
+    raw_plat = str(wb.get("platform") or msg_obj_nested.get("platform") or "facebook").strip().lower()
+    raw_acc = str(wb.get("account_name") or wb.get("username") or ("Glennard Tasico (+63 917 549 7760)" if raw_plat == "whatsapp" else "GlennBot Automations")).strip()
+    raw_auth = str(wb.get("author_name") or wb.get("participant_name") or msg_obj_nested.get("sender_name") or wb.get("sender_name") or "Commenter").strip()
+    raw_msg = str(
+        wb.get("text")
+        or wb.get("message_text")
+        or msg_obj_nested.get("message")
+        or msg_obj_nested.get("text")
+        or (wb.get("message") if isinstance(wb.get("message"), str) else "")
+        or ""
+    ).strip()
+    is_own = 1 if bool(wb.get("is_own_comment") or wb.get("is_own") or wb.get("is_own_message") or msg_obj_nested.get("is_own")) else 0
 
     queue_id = str(wb.get("queue_id") or root_body.get("queue_id") or "").strip()
     if not queue_id:

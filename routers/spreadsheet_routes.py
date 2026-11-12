@@ -4176,32 +4176,37 @@ def _append_spreadsheet_row_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             prev_b = str(cells_map.get(f"B{target_row}") or "").strip()
             new_b = str(raw_row_data.get("B") or "").strip()
             if prev_b and new_b and prev_b != new_b:
-                merged_pipe_segs: List[str] = []
-
-                def _add_pipe_seg(seg_str: str) -> None:
-                    s_clean = re.sub(r"\s+", " ", str(seg_str or "")).strip()
-                    if not s_clean:
-                        return
-                    s_low = s_clean.lower()
-                    s_msg_only = s_clean.split(":", 1)[1].strip().lower() if ":" in s_clean else s_low
-                    for idx_s, ex_s in enumerate(merged_pipe_segs):
-                        ex_low = ex_s.lower()
-                        if ex_low == s_low:
-                            return
-                        if ":" not in ex_s and ":" in s_clean and ex_low == s_msg_only:
-                            merged_pipe_segs[idx_s] = s_clean
-                            return
-                        if ":" in ex_s and ":" not in s_clean and ex_s.split(":", 1)[1].strip().lower() == s_low:
-                            return
-                    merged_pipe_segs.append(s_clean)
-
-                for part_p in prev_b.split("|"):
-                    for sub_p in part_p.splitlines():
-                        _add_pipe_seg(sub_p)
-                for part_n in new_b.split("|"):
-                    for sub_n in part_n.splitlines():
-                        _add_pipe_seg(sub_n)
-                raw_row_data["B"] = " | ".join(merged_pipe_segs)
+                if new_b.startswith(prev_b):
+                    raw_row_data["B"] = new_b
+                elif prev_b.startswith(new_b):
+                    raw_row_data["B"] = prev_b
+                else:
+                    prev_segs = [
+                        re.sub(r"\s+", " ", sub_p).strip()
+                        for part_p in prev_b.split("|")
+                        for sub_p in part_p.splitlines()
+                        if re.sub(r"\s+", " ", sub_p).strip()
+                    ]
+                    new_segs = [
+                        re.sub(r"\s+", " ", sub_n).strip()
+                        for part_n in new_b.split("|")
+                        for sub_n in part_n.splitlines()
+                        if re.sub(r"\s+", " ", sub_n).strip()
+                    ]
+                    merged_pipe_segs: List[str] = list(prev_segs)
+                    for s_clean in new_segs:
+                        if not merged_pipe_segs:
+                            merged_pipe_segs.append(s_clean)
+                            continue
+                        s_low = s_clean.lower()
+                        # Avoid duplicating if already present in the last 2 segments
+                        recent_lows = [x.lower() for x in merged_pipe_segs[-2:]]
+                        if s_low in recent_lows:
+                            continue
+                        if s_low in [x.lower() for x in prev_segs] and len(new_segs) <= len(prev_segs):
+                            continue
+                        merged_pipe_segs.append(s_clean)
+                    raw_row_data["B"] = " | ".join(merged_pipe_segs)
 
         if isinstance(raw_row_data, list):
             for col_idx, val in enumerate(raw_row_data):

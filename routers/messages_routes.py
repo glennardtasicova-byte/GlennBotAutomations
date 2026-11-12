@@ -1076,7 +1076,7 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
         if not isinstance(c_obj, dict) or c_obj.get("hidden"):
             continue
         c_cid = str(c_obj.get("conversation_id") or "").strip()
-        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "portfolio_")):
+        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
             # Self-heal if a previous run merged other fb_live_ sessions into this one
             cur_alts = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
             if len(cur_alts) > 1 and c_cid:
@@ -1257,7 +1257,7 @@ def _find_existing_conversation_in_store(
         if not isinstance(c_obj, dict) or not _conv_belongs_to_same_page(c_obj):
             continue
         c_cid = str(c_obj.get("conversation_id") or "").strip()
-        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "portfolio_")):
+        if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
             continue
 
         c_pid = str(c_obj.get("participant_id") or "").strip()
@@ -2300,8 +2300,8 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
         # If this conversation belongs to Portfolio Live Showcase (Idea B: fb_live_, ig_live_, portfolio_), record outbound reply directly
         if (
             bool((target_conv or {}).get("is_portfolio_live_dm"))
-            or str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
-            or real_conv_id.startswith(("fb_live_", "ig_live_", "portfolio_"))
+            or str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
+            or real_conv_id.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
         ):
             now_dt = datetime.now(pytz.timezone("Asia/Manila"))
             new_msg_id = f"msg_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
@@ -2878,14 +2878,25 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
 
         convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
         clean_cid = str(payload.conversation_id or "").strip() or f"fb_live_{uuid.uuid4().hex[:10]}"
-        eff_plat = str(payload.platform or ("instagram" if clean_cid.startswith("ig_live_") else "facebook")).strip().lower()
-        default_acc_id = "6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6"
+        eff_plat = str(
+            payload.platform
+            or ("whatsapp" if clean_cid.startswith("wa_live_") else ("instagram" if clean_cid.startswith("ig_live_") else "facebook"))
+        ).strip().lower()
+        default_acc_id = (
+            "6adda70399e7b30829e8859c" if eff_plat == "whatsapp"
+            else ("6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6")
+        )
         raw_req_acc_id = str(payload.account_id or "").strip()
-        if eff_plat == "instagram" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6"):
+        if eff_plat == "whatsapp" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87"):
+            eff_acc_id = "6adda70399e7b30829e8859c"
+        elif eff_plat == "instagram" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6"):
             eff_acc_id = "6ad9e9b2e5d470e468e58d87"
         else:
             eff_acc_id = raw_req_acc_id or default_acc_id
-        default_acc_name = "GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations"
+        default_acc_name = (
+            "Glennard Tasico (+63 917 549 7760)" if eff_plat == "whatsapp"
+            else ("GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations")
+        )
         eff_acc_name = str(payload.account_name or default_acc_name).strip() or default_acc_name
         eff_part_name = str(payload.participant_name or "Portfolio Client").strip() or "Portfolio Client"
         eff_part_id = str(payload.participant_id or f"visitor_{clean_cid}").strip()

@@ -477,29 +477,35 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         return raw_rep
 
-    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) / WhatsApp (+63 995 260 1753) ternary account filter expressions
-    if ("glennbot.automation" in t or "glennard.tasico.va" in t or "9952601753" in t) and "account_name" in t:
+    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) / WhatsApp (Glennard Tasico +63 917 549 7760 / +63 995 260 1753) ternary account filter expressions
+    if ("glennbot.automation" in t or "glennard.tasico.va" in t or "9175497760" in t or "9952601753" in t) and "account_name" in t:
         raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
         raw_un = str(_deep_get_path(current_json, "body.username") or _deep_get_path(current_json, "username") or "").strip()
+        raw_phone = str(_deep_get_path(current_json, "body.recipient_phone") or _deep_get_path(current_json, "body.sender_phone") or _deep_get_path(current_json, "recipient_phone") or _deep_get_path(current_json, "sender_phone") or "").strip()
         raw_aid = str(_deep_get_path(current_json, "body.account_id") or _deep_get_path(current_json, "account_id") or "").strip()
         raw_cid = str(_deep_get_path(current_json, "body.conversation_id") or _deep_get_path(current_json, "conversation_id") or "").strip()
         raw_plat = str(_deep_get_path(current_json, "body.platform") or _deep_get_path(current_json, "platform") or "").strip().lower()
         raw_rec = str(_deep_get_path(current_json, "body.record_id") or _deep_get_path(current_json, "record_id") or "").strip()
         raw_pid = str(_deep_get_path(current_json, "body.post_id") or _deep_get_path(current_json, "post_id") or "").strip()
-        if "glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901":
+        if "!== 'tiktok'" in t and raw_plat == "tiktok":
+            return raw_acc or "tiktok_excluded"
+        if "glennbot.automation" in t and ("glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901"):
             return "GlennBot Automations (@glennbot.automation)"
+        compact_str = (raw_acc + " " + raw_un + " " + raw_phone).replace(" ", "")
         if (
-            "glennard.tasico.va" in raw_acc.lower()
+            "glennbot automations" in raw_acc.lower()
+            or "glennard.tasico.va" in raw_acc.lower()
             or "glennard.tasico.va" in raw_un.lower()
-            or "9952601753" in raw_acc.replace(" ", "")
-            or "9952601753" in raw_un.replace(" ", "")
+            or "glennard tasico" in raw_acc.lower()
+            or "9175497760" in compact_str
+            or "9952601753" in compact_str
             or "happyfinds" in raw_acc.lower()
             or raw_plat == "whatsapp"
             or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6adda70399e7b30829e8859c")
             or raw_cid.startswith(("ig_live_", "fb_live_", "wa_live_", "portfolio_"))
             or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
         ):
-            return "GlennBot Automations (@glennard.tasico.va | +63 995 260 1753)"
+            return "GlennBot Automations (Facebook / Instagram / WhatsApp Glennard Tasico +63 917 549 7760)"
         return raw_acc
 
     return t
@@ -829,6 +835,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
     node_id_low = str(node.get("id") or "").lower()
     if (
         "node-supabase-fifo-comment-queue" in node_id_low
+        or "node-supabase-fifo-dm-queue" in node_id_low
         or ("supabase" in node_name_low and ("enqueue" in node_name_low or "fifo" in node_name_low or "acquire" in node_name_low))
         or "SUPABASE_QUEUE_ACTION = 'enqueue_and_acquire'" in js_code
     ):
@@ -842,12 +849,15 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
 
     if (
         "node-supabase-complete-comment-queue" in node_id_low
+        or "node-supabase-complete-dm-queue" in node_id_low
         or ("supabase" in node_name_low and ("complete" in node_name_low or "release" in node_name_low or "dequeue" in node_name_low))
         or "SUPABASE_QUEUE_ACTION = 'complete_and_release'" in js_code
     ):
         q_node = (
             node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+            or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
             or node_outputs.get("Build Thread ID & Pipe Conversation")
+            or node_outputs.get("Build DM Thread ID & Pipe Conversation")
             or current_json
             or {}
         )
@@ -864,7 +874,11 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
         cid = str(
             q_node.get("comment_id")
             or q_node.get("targetCommentId")
+            or q_node.get("messageId")
+            or q_node.get("dmThreadId")
             or wh_body.get("comment_id")
+            or wh_body.get("message_id")
+            or wh_body.get("conversation_id")
             or ""
         ).strip()
         ai_rep = str(
@@ -874,7 +888,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             or current_json.get("reply")
             or ""
         ).strip()
-        is_own_c = bool(wh_body.get("is_own_comment") or q_node.get("is_own_comment"))
+        is_own_c = bool(wh_body.get("is_own_comment") or wh_body.get("is_own") or wh_body.get("is_own_message") or q_node.get("is_own_comment"))
         final_q_status = "skipped_own_comment" if (is_own_c and not ai_rep) else "completed"
         comp_res = complete_supabase_comment_queue_turn(
             queue_id=qid,
@@ -1121,9 +1135,10 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
         reply_entry = f"{page_label}: {clean_reply}"
         updated_pipe = prev_pipe
         if clean_reply:
+            last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
             if not prev_pipe:
                 updated_pipe = reply_entry
-            elif clean_reply.lower() not in prev_pipe.lower():
+            elif clean_reply.lower() not in last_seg_low:
                 updated_pipe = f"{prev_pipe} | {reply_entry}"
         return {
             **pipe_node,
@@ -1300,27 +1315,34 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                     if best_s >= 0.72:
                         t_hits += best_s
                         sc += round(14 * best_s)
-                    elif any(_word_sim_py(ct, kt) >= 0.8 for ct in ctx_tokens):
-                        sc += 3
-                if kw_tokens and t_hits > 0:
-                    sc += round((t_hits / len(kw_tokens)) * 18)
+                if t_hits > 0:
+                    for kt in kw_tokens:
+                        if any(_word_sim_py(ct, kt) >= 0.8 for ct in ctx_tokens):
+                            sc += 2
+                    if kw_tokens:
+                        sc += round((t_hits / len(kw_tokens)) * 18)
                 scored_list.append({**ent, "score": sc})
             scored_list.sort(key=lambda x: x["score"], reverse=True)
             return valid_entries, [s for s in scored_list if s["score"] >= 8][:3]
 
         if is_dm_workflow:
-            conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or "").strip()
-            participant_id = str(wb.get("participant_id") or wb.get("sender_id") or wb.get("sender_phone") or "").strip()
-            participant_name = str(wb.get("participant_name") or wb.get("sender_name") or "Client").strip()
-            msg_id = str(wb.get("message_id") or wb.get("id") or "").strip()
+            sb_dm_q = node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)") or {}
+            msg_nested = wb.get("message") if isinstance(wb.get("message"), dict) else {}
+            conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or msg_nested.get("conversation_id") or "").strip()
+            participant_id = str(wb.get("participant_id") or msg_nested.get("sender_id") or wb.get("sender_id") or wb.get("sender_phone") or "").strip()
+            participant_name = str(wb.get("participant_name") or msg_nested.get("sender_name") or wb.get("sender_name") or "Client").strip()
+            msg_id = str(wb.get("message_id") or wb.get("id") or msg_nested.get("id") or "").strip()
             raw_acc = str(wb.get("account_name") or wb.get("username") or "").strip()
-            raw_plat = str(wb.get("platform") or "").strip().lower()
+            raw_plat = str(wb.get("platform") or msg_nested.get("platform") or "").strip().lower()
+            compact_acc_dm = (raw_acc + " " + str(wb.get("username") or "") + " " + str(wb.get("recipient_phone") or "")).replace(" ", "")
             is_wa = (
                 raw_plat == "whatsapp"
                 or str(wb.get("account_id") or "").strip() == "6adda70399e7b30829e8859c"
                 or conv_id.startswith("wa_live_")
+                or "glennard tasico" in raw_acc.lower()
                 or "happyfinds" in raw_acc.lower()
-                or "9952601753" in raw_acc.replace(" ", "")
+                or "9175497760" in compact_acc_dm
+                or "9952601753" in compact_acc_dm
             )
             is_ig = (
                 not is_wa
@@ -1335,13 +1357,20 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                 wb.get("account_id")
                 or ("6adda70399e7b30829e8859c" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
             ).strip()
-            acc_name = "GlennBot Automations (+63 995 260 1753)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
-            is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", False)))
-            raw_text = str(wb.get("text") or wb.get("message") or "").strip()
+            acc_name = "Glennard Tasico (+63 917 549 7760)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
+            is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", msg_nested.get("is_own", False))))
+            raw_text = str(
+                wb.get("text")
+                or wb.get("message_text")
+                or msg_nested.get("message")
+                or msg_nested.get("text")
+                or (wb.get("message") if isinstance(wb.get("message"), str) else "")
+                or ""
+            ).strip()
             clean_msg = re.sub(r"\s+", " ", raw_text.replace("|", "/")).strip()
             def _norm_tid(val_str: str) -> str:
                 s_v = str(val_str or "").strip()
-                if s_v.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
+                if s_v.startswith(("fb_", "ig_", "wa_", "dm_", "conv_", "portfolio_")):
                     return s_v
                 return s_v.split("_")[-1].strip() if "_" in s_v else s_v
 
@@ -1371,9 +1400,8 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                 if not sc:
                     return
                 sc_low = sc.lower()
-                for ex_s in segments_list:
-                    if ex_s.lower() == sc_low:
-                        return
+                if segments_list and segments_list[-1].lower() == sc_low:
+                    return
                 segments_list.append(sc)
 
             if existing_pipe:
@@ -1403,8 +1431,8 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             ) if has_match else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
 
             plat_label = (
-                "WhatsApp (+63 995 260 1753 / HappyFinds Hub)" if is_wa
-                else ("Instagram (@glennard.tasico.va)" if is_ig else "Facebook Page (GlennBot Automations)")
+                "WhatsApp Direct Message (Glennard Tasico • +63 917 549 7760)" if is_wa
+                else ("Instagram Direct Message (@glennard.tasico.va — GlennBot Automations)" if is_ig else "Facebook Page (GlennBot Automations)")
             )
             ai_prompt = (
                 f"You are replying directly in a Private Direct Message via {plat_label} as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin') through \"{acc_name}\".\n\n"
@@ -1421,6 +1449,8 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                 f"Reply directly to {participant_name} in the exact same language as their latest message:"
             )
             return {
+                "queueId": str(sb_dm_q.get("queueId") or sb_dm_q.get("queue_id") or ""),
+                "queuePosition": int(sb_dm_q.get("queuePosition") or 1),
                 "sheetRowIdx": target_row_idx,
                 "targetRowNumber": target_row_idx,
                 "isExistingThread": matched_row_idx is not None,
@@ -1444,6 +1474,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                 "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
                 "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
                 "aiContextPrompt": ai_prompt,
+                "platform": "whatsapp" if is_wa else ("instagram" if is_ig else "facebook"),
             }
         else:
             # Post Comment workflow (`Build Thread ID & Pipe Conversation`) Python execution
@@ -2074,7 +2105,10 @@ def _execute_n8n_workflow_json_natively(
 
     # Safety guard: if workflow acquired a Supabase queue lock (`queueId`) and exited early before the completion node ran,
     # automatically release the turn in `glennbot_comment_automation_queue` so subsequent queued comments never stall.
-    sb_enqueue_out = node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+    sb_enqueue_out = (
+        node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+        or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
+    )
     sb_complete_out = node_outputs.get("Complete & Release Turn in Supabase Queue")
     if isinstance(sb_enqueue_out, dict) and sb_enqueue_out.get("queueId") and not sb_complete_out:
         try:
