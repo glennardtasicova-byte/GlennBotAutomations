@@ -226,6 +226,9 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
+from routers import bind_all_router_globals
+bind_all_router_globals(app_instance=app, templates_instance=templates)
+
 
 @app.on_event("startup")
 async def _configure_high_concurrency_threadpool_limiter():

@@ -373,6 +373,40 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                 plat_conns = [acc for acc in connected_items if (acc.get("platform") or "").strip().lower() == incoming_plat]
                 if len(plat_conns) == 1:
                     matched_acc = plat_conns[0]
+                elif plat_conns:
+                    # Prefer GlennBot Automations / @glennard.tasico.va / HappyFinds Hub if multiple accounts exist on the platform
+                    for p_acc in plat_conns:
+                        p_aid = str(p_acc.get("account_id") or "").strip()
+                        p_aname = str(p_acc.get("account_name") or "").strip().lower()
+                        if p_aid in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87", "6adda70399e7b30829e8859c") or any(
+                            k in p_aname for k in ("glennbot", "glennard.tasico", "happyfinds", "9952601753")
+                        ):
+                            matched_acc = p_acc
+                            break
+                    if not matched_acc:
+                        matched_acc = plat_conns[0]
+
+            if not matched_acc and (incoming_plat in ("facebook", "instagram", "whatsapp") or incoming_acc_id):
+                fallback_plat = incoming_plat or (
+                    "whatsapp" if incoming_acc_id == "6adda70399e7b30829e8859c" else (
+                        "instagram" if incoming_acc_id == "6ad9e9b2e5d470e468e58d87" else "facebook"
+                    )
+                )
+                default_aid_map = {
+                    "facebook": "6af0b109818eb5c88d1e87a6",
+                    "instagram": "6ad9e9b2e5d470e468e58d87",
+                    "whatsapp": "6adda70399e7b30829e8859c",
+                }
+                default_aname_map = {
+                    "facebook": "GlennBot Automations",
+                    "instagram": "glennard.tasico.va",
+                    "whatsapp": "HappyFinds Hub",
+                }
+                matched_acc = {
+                    "account_id": incoming_acc_id or default_aid_map.get(fallback_plat, "6af0b109818eb5c88d1e87a6"),
+                    "account_name": raw_incoming_uname or default_aname_map.get(fallback_plat, "GlennBot Automations"),
+                    "platform": fallback_plat,
+                }
 
             if matched_acc:
                 db_acc_id = str(matched_acc.get("account_id") or "")

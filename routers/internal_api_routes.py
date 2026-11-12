@@ -457,6 +457,8 @@ def _auto_inject_credentials_into_workflow_json(
                 params["url"] = f"{clean_base}/comments/like"
             elif "hide" in n_name and "comment" in n_name:
                 params["url"] = f"{clean_base}/comments/hide"
+            elif "read" in n_name and any(k in n_name for k in ("spreadsheet", "xlsx", "sheet")):
+                params["url"] = f"{clean_base}/spreadsheets/read"
             elif any(k in j_body or k in n_name for k in ("spreadsheet", "workbook_id", "append-row", "append_row", "sheet_name")):
                 params["url"] = f"{clean_base}/spreadsheets/append-row"
             elif any(k in j_body or k in n_name for k in ("from_email", "sender_email", "email", "gmail")):
@@ -483,7 +485,7 @@ def _auto_inject_credentials_into_workflow_json(
         # 2. If this HTTP Request node points to our GlennBot API, auto-inject method, X-API-Key header, and sub-thread comment_id
         final_url = str(params.get("url") or "")
         if "/api/v1/" in final_url:
-            if any(ep in final_url for ep in ("/comments/thread-status", "/sms/thread-status", "/api/v1/status", "/api/v1/accounts", "/api/v1/files", "/api/v1/analytics", "/api/v1/presets", "/api/v1/calendar/events")):
+            if any(ep in final_url for ep in ("/spreadsheets/read", "/comments/thread-status", "/sms/thread-status", "/api/v1/status", "/api/v1/accounts", "/api/v1/files", "/api/v1/analytics", "/api/v1/presets", "/api/v1/calendar/events")):
                 params["method"] = "GET"
             elif not params.get("method"):
                 params["method"] = "POST"
@@ -814,6 +816,9 @@ def _save_internal_api_to_cloudinary():
         )
     except Exception as e:
         print(f"[InternalAPI] Cloudinary backup warning: {e}")
+
+
+_save_internal_api_state = _save_internal_api_to_cloudinary
 
 
 def _upsert_n8n_workflow_in_db(wf_obj: Dict[str, Any], sync_cloud: bool = True) -> Dict[str, Any]:
@@ -1447,14 +1452,21 @@ def _dispatch_outbound_n8n_webhook_async(event_type: str, data: Dict[str, Any]):
             daemon=True
         ).start()
     # Also trigger any active workflows saved inside the In-Dashboard "Automations" Modal Canvas
-    try:
-        N8N_WEBHOOK_EXECUTOR.submit(_execute_active_dashboard_automations_for_event, event_type, dict(data_snapshot) if isinstance(data_snapshot, dict) else data_snapshot)
-    except Exception:
-        threading.Thread(
-            target=_execute_active_dashboard_automations_for_event,
-            args=(event_type, dict(data_snapshot) if isinstance(data_snapshot, dict) else data_snapshot),
-            daemon=True
-        ).start()
+    exec_fn = globals().get("_execute_active_dashboard_automations_for_event")
+    if not callable(exec_fn):
+        try:
+            from routers.automations_routes import _execute_active_dashboard_automations_for_event as exec_fn
+        except Exception:
+            exec_fn = None
+    if callable(exec_fn):
+        try:
+            N8N_WEBHOOK_EXECUTOR.submit(exec_fn, event_type, dict(data_snapshot) if isinstance(data_snapshot, dict) else data_snapshot)
+        except Exception:
+            threading.Thread(
+                target=exec_fn,
+                args=(event_type, dict(data_snapshot) if isinstance(data_snapshot, dict) else data_snapshot),
+                daemon=True
+            ).start()
 
 
 def _build_dynamic_test_payload_for_workflow(event_type: str, wf_obj: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

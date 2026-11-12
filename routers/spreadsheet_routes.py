@@ -33,6 +33,7 @@ import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET
 from io import BytesIO
+import io
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2255,6 +2256,10 @@ def _save_spreadsheets_store() -> bool:
     return True
 
 
+def save_spreadsheets_store_async() -> bool:
+    return _save_spreadsheets_store()
+
+
 def _push_live_cells_to_google_sheets_api(
     gdrive_file_id: str,
     sheets: Optional[List[Dict[str, Any]]] = None,
@@ -3649,8 +3654,51 @@ async def api_v1_read_spreadsheet_cells(
         )
     )
     target_wb = _find_workbook_by_query(workbooks, q_wb)
+    if not target_wb and not do_sync and q_wb:
+        workbooks, _ = await run_in_threadpool(
+            lambda: _sync_spreadsheets_with_gdrive_and_vault(
+                force_gdrive_check=True,
+                target_id=q_wb
+            )
+        )
+        target_wb = _find_workbook_by_query(workbooks, q_wb)
     if not target_wb:
-        return JSONResponse({"status": "error", "message": f"Spreadsheet '{q_wb or 'default'}' not found in Google Drive / Files Vault."}, status_code=404)
+        if q_wb and any(k in q_wb.lower() for k in ("conversation", "script", ".xlsx")):
+            clean_title = q_wb if q_wb.lower().endswith(".xlsx") else f"{q_wb}.xlsx"
+            default_sheet_name = q_sheet or "Sheet1"
+            default_cells_init: Dict[str, str] = (
+                {"A1": "Thread ID", "B1": "Conversations"}
+                if "conversation" in clean_title.lower()
+                else {"A1": "Questions", "B1": "Answers"}
+            )
+            target_wb = {
+                "id": f"wb_{uuid.uuid4().hex[:10]}",
+                "title": clean_title,
+                "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p"),
+                "sheets": [
+                    {
+                        "id": f"sheet_1_{uuid.uuid4().hex[:4]}",
+                        "name": "Sheet1",
+                        "row_count": 25,
+                        "col_count": 10,
+                        "cells": dict(default_cells_init),
+                    }
+                ],
+            }
+            if default_sheet_name.lower() not in ("sheet1", "sheet_1", "default"):
+                target_wb["sheets"].append({
+                    "id": f"sheet_2_{uuid.uuid4().hex[:4]}",
+                    "name": default_sheet_name,
+                    "row_count": 25,
+                    "col_count": 10,
+                    "cells": dict(default_cells_init),
+                })
+            with SPREADSHEETS_LOCK:
+                workbooks.append(target_wb)
+                SPREADSHEETS_STORE["workbooks"] = workbooks
+            _save_spreadsheets_store()
+        else:
+            return JSONResponse({"status": "error", "message": f"Spreadsheet '{q_wb or 'default'}' not found in Google Drive / Files Vault."}, status_code=404)
 
     sheets_list = target_wb.get("sheets") or []
     if not sheets_list:

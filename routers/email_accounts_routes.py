@@ -961,6 +961,9 @@ def _discover_composio_email_accounts() -> list:
     return EMAIL_HUB_STATE["accounts"]
 
 
+_auto_discover_composio_email_accounts = _discover_composio_email_accounts
+
+
 @router.get("/api/email/config")
 async def api_get_email_config():
     await run_in_threadpool(_load_email_hub_state)

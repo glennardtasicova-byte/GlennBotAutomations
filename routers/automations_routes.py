@@ -32,6 +32,7 @@ import subprocess
 import urllib.parse
 import xml.etree.ElementTree as ET
 from io import BytesIO
+import io
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -167,9 +168,91 @@ def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
             except Exception:
                 pass
 
+        # Auto-seed and auto-heal the two core GlennBot Automations workflows from repository JSON files
+        seed_specs = [
+            (
+                "Auto_reply_to_dm_GlennBot_Automations.json",
+                "Auto reply to DM (GlennBot Automations)",
+                "auto_wf_glennbot_dm_default",
+                {"message.received": True, "sms.received": True},
+            ),
+            (
+                "Auto_reply_to_post_GlennBot_Automations.json",
+                "Auto reply to post (GlennBot Automations)",
+                "auto_wf_glennbot_post_default",
+                {"comment.received": True},
+            ),
+        ]
+        seeded_or_healed = False
+        now_seed_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+        for seed_filename, default_wf_name, default_wf_id, default_evts in seed_specs:
+            seed_path = os.path.join(BASE_DIR, seed_filename)
+            if not os.path.exists(seed_path):
+                continue
+            try:
+                with open(seed_path, "r", encoding="utf-8") as sf:
+                    seed_json = json.load(sf)
+                if not isinstance(seed_json, dict) or not isinstance(seed_json.get("nodes"), list):
+                    continue
+                target_name = str(seed_json.get("name") or default_wf_name).strip()
+                existing_idx = next(
+                    (
+                        idx for idx, w in enumerate(wf_list)
+                        if isinstance(w, dict) and (
+                            str(w.get("id") or "") == default_wf_id
+                            or str(w.get("name") or "").strip().lower() == target_name.lower()
+                            or str((w.get("workflow_json") or {}).get("name") or "").strip().lower() == target_name.lower()
+                        )
+                    ),
+                    None
+                )
+                if existing_idx is None:
+                    wf_list.append({
+                        "id": default_wf_id,
+                        "name": target_name,
+                        "active": True,
+                        "events": dict(default_evts),
+                        "detected_conditions": [],
+                        "webhook_path": "",
+                        "workflow_json": seed_json,
+                        "updated_at": now_seed_str,
+                    })
+                    seeded_or_healed = True
+                else:
+                    ex_w = wf_list[existing_idx]
+                    ex_json_str = json.dumps(ex_w.get("workflow_json") or {}, ensure_ascii=False)
+                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs or rootBody.data unnesting
+                    if (
+                        "6adda70399e7b30829e8859c" not in ex_json_str
+                        or "rootBody.data" not in ex_json_str
+                    ):
+                        ex_w["workflow_json"] = seed_json
+                        ex_w["name"] = target_name
+                        ex_w["active"] = bool(ex_w.get("active", True))
+                        ex_evts = ex_w.get("events") if isinstance(ex_w.get("events"), dict) else {}
+                        for ek, ev in default_evts.items():
+                            ex_evts[ek] = ev
+                        ex_w["events"] = ex_evts
+                        ex_w["updated_at"] = now_seed_str
+                        seeded_or_healed = True
+            except Exception as seed_err:
+                print(f"[AutomationsCanvas] Seed check warning for {seed_filename}: {seed_err}")
+
         AUTOMATIONS_CANVAS_STATE["workflows"] = wf_list
         AUTOMATIONS_CANVAS_STATE["execution_history"] = exec_hist
         AUTOMATIONS_CANVAS_STATE["loaded"] = True
+        if seeded_or_healed:
+            try:
+                raw_seed_bytes = json.dumps({
+                    "version": 1,
+                    "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+                    "workflows": wf_list,
+                    "execution_history": exec_hist[:40]
+                }, indent=2, ensure_ascii=False)
+                with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "w", encoding="utf-8") as cf:
+                    cf.write(raw_seed_bytes)
+            except Exception:
+                pass
         return AUTOMATIONS_CANVAS_STATE
 
 
@@ -254,6 +337,34 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
             t = t[1:-1].strip()
         else:
             break
+
+    # If stripping outer parens exposed a top-level `||` or `??` fallback chain, delegate to _eval_n8n_js_expression
+    if "||" in t or "??" in t:
+        _d = 0
+        _q: Optional[str] = None
+        _has_top_op = False
+        _idx = 0
+        while _idx < len(t):
+            _ch = t[_idx]
+            if _q:
+                if _ch == _q and (_idx == 0 or t[_idx - 1] != "\\"):
+                    _q = None
+                _idx += 1
+                continue
+            if _ch in ("'", '"'):
+                _q = _ch
+                _idx += 1
+                continue
+            if _ch in ("(", "{", "["):
+                _d += 1
+            elif _ch in (")", "}", "]"):
+                _d = max(0, _d - 1)
+            elif _d == 0 and t[_idx:_idx + 2] in ("||", "??"):
+                _has_top_op = True
+                break
+            _idx += 1
+        if _has_top_op:
+            return _eval_n8n_js_expression(t, current_json, node_outputs)
 
     if t in ("true", "True"):
         return True
@@ -358,6 +469,31 @@ def _eval_n8n_js_expression(expr: str, current_json: Dict[str, Any], node_output
     if not s:
         return ""
 
+    # Strip balanced outer parentheses before scanning for top-level operators
+    while s.startswith("(") and s.endswith(")"):
+        depth_p = 0
+        balanced_p = True
+        in_q_p: Optional[str] = None
+        for idx_p, ch_p in enumerate(s):
+            if in_q_p:
+                if ch_p == in_q_p and (idx_p == 0 or s[idx_p - 1] != "\\"):
+                    in_q_p = None
+                continue
+            if ch_p in ("'", '"'):
+                in_q_p = ch_p
+                continue
+            if ch_p == "(":
+                depth_p += 1
+            elif ch_p == ")":
+                depth_p -= 1
+                if depth_p == 0 and idx_p < len(s) - 1:
+                    balanced_p = False
+                    break
+        if balanced_p:
+            s = s[1:-1].strip()
+        else:
+            break
+
     # Handle JSON.stringify({ ... })
     m_strf = re.match(r"^JSON\.stringify\(\s*(\{.*\})\s*\)$", s, re.DOTALL)
     if m_strf:
@@ -367,6 +503,7 @@ def _eval_n8n_js_expression(expr: str, current_json: Dict[str, Any], node_output
 
     # Handle fallback chains with || or ?? at top level (ignoring inside quotes/parens)
     parts: List[str] = []
+    ops: List[str] = []
     depth = 0
     in_quote: Optional[str] = None
     curr_buf: List[str] = []
@@ -396,6 +533,7 @@ def _eval_n8n_js_expression(expr: str, current_json: Dict[str, Any], node_output
             continue
         if depth == 0 and s[i:i + 2] in ("||", "??"):
             parts.append("".join(curr_buf).strip())
+            ops.append(s[i:i + 2])
             curr_buf = []
             i += 2
             continue
@@ -405,11 +543,16 @@ def _eval_n8n_js_expression(expr: str, current_json: Dict[str, Any], node_output
         parts.append("".join(curr_buf).strip())
 
     if len(parts) > 1:
-        for candidate in parts:
-            val = _eval_single_n8n_js_token(candidate, current_json, node_outputs)
-            if val is not None and val != "":
-                return val
-        return ""
+        acc_val = _eval_single_n8n_js_token(parts[0], current_json, node_outputs)
+        for idx_op, op_str in enumerate(ops):
+            next_candidate = parts[idx_op + 1]
+            if op_str == "??":
+                need_fallback = acc_val is None or acc_val == ""
+            else:
+                need_fallback = acc_val is None or acc_val == "" or acc_val is False or acc_val == 0
+            if need_fallback:
+                acc_val = _eval_single_n8n_js_token(next_candidate, current_json, node_outputs)
+        return acc_val if acc_val is not None else ""
 
     return _eval_single_n8n_js_token(s, current_json, node_outputs)
 
@@ -886,6 +1029,193 @@ const $ = (name) => {
     except Exception:
         pass
 
+    # 3. Native Python Fallback for `Build DM Thread ID & Pipe Conversation`, `Build Thread ID & Pipe Conversation`,
+    # and `Format AI Reply & Update Pipe History` when Node.js CLI is unavailable or times out (e.g., on Render Python runtime)
+    if "aiReplyText" in js_code or "colBWithAiReply" in js_code or "format ai reply" in node_name_low:
+        pipe_node = (
+            node_outputs.get("Build DM Thread ID & Pipe Conversation")
+            or node_outputs.get("Build Thread ID & Pipe Conversation")
+            or {}
+        )
+        raw_reply = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
+        raw_reply = re.sub(r"^[\"'\u201c\u201d\u2018\u2019]+|[\"'\u201c\u201d\u2018\u2019]+$", "", raw_reply).strip()
+        raw_reply = re.sub(
+            r"^(?:Glennard(?:\s+Tasico)?|GlennBot\s+Automations(?:\s*\(Page\))?)\s*:\s*",
+            "",
+            raw_reply,
+            flags=re.I
+        ).strip()
+        clean_reply = re.sub(r"\s+", " ", raw_reply.replace("|", "/")).strip()
+        prev_pipe = str(pipe_node.get("colBConversation") or "").strip()
+        reply_entry = f"GlennBot Automations: {clean_reply}"
+        updated_pipe = prev_pipe
+        if clean_reply:
+            if not prev_pipe:
+                updated_pipe = reply_entry
+            elif clean_reply.lower() not in prev_pipe.lower():
+                updated_pipe = f"{prev_pipe} | {reply_entry}"
+        return {
+            **pipe_node,
+            "aiReplyText": clean_reply,
+            "colBWithAiReply": updated_pipe,
+        }
+
+    if is_custom_pipe_or_dm_code:
+        wh_data = (
+            node_outputs.get("Webhook Trigger")
+            or node_outputs.get("Webhook")
+            or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+            or current_json
+        )
+        root_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+        wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
+
+        is_dm_workflow = "dmThreadId" in js_code or "conversation_id" in js_code or "build dm thread" in node_name_low
+        if is_dm_workflow:
+            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
+        else:
+            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet1") or {}
+        script_sheet = node_outputs.get("Read Script.xlsx Sheet1") or current_json or {}
+
+        conv_rows = conv_sheet.get("rows") if isinstance(conv_sheet.get("rows"), list) else []
+        conv_cells = conv_sheet.get("cells") if isinstance(conv_sheet.get("cells"), dict) else {}
+        script_rows = script_sheet.get("rows") if isinstance(script_sheet.get("rows"), list) else []
+        script_cells = script_sheet.get("cells") if isinstance(script_sheet.get("cells"), dict) else {}
+
+        def _extract_ab_pairs(rows_arr: List[Any], cells_map: Dict[str, Any]) -> List[Dict[str, Any]]:
+            out_pairs: List[Dict[str, Any]] = []
+            seen_r: Set[int] = set()
+            for r_obj in rows_arr:
+                if not isinstance(r_obj, dict):
+                    continue
+                rn = int(r_obj.get("_row_number") or r_obj.get("row_number") or 0)
+                v_map = r_obj.get("values") if isinstance(r_obj.get("values"), dict) else r_obj
+                ca = str(v_map.get("A") or v_map.get("Thread ID") or v_map.get("Questions") or v_map.get("Question") or "").strip()
+                cb = str(v_map.get("B") or v_map.get("Conversations") or v_map.get("Conversation") or v_map.get("Answers") or v_map.get("Answer") or "").strip()
+                if rn > 0:
+                    seen_r.add(rn)
+                out_pairs.append({"rowNum": rn, "colA": ca, "colB": cb})
+            r_nums_set: Set[int] = set()
+            for ck in cells_map.keys():
+                mc = re.match(r"^([A-Za-z]+)(\d+)$", str(ck).strip())
+                if mc:
+                    rn_c = int(mc.group(2))
+                    if rn_c >= 2 and rn_c not in seen_r:
+                        r_nums_set.add(rn_c)
+            for rn_c in sorted(r_nums_set):
+                ca = str(cells_map.get(f"A{rn_c}") or "").strip()
+                cb = str(cells_map.get(f"B{rn_c}") or "").strip()
+                if ca or cb:
+                    out_pairs.append({"rowNum": rn_c, "colA": ca, "colB": cb})
+            return out_pairs
+
+        parsed_conv_rows = _extract_ab_pairs(conv_rows, conv_cells)
+        parsed_script_rows = _extract_ab_pairs(script_rows, script_cells)
+
+        if is_dm_workflow:
+            conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or "").strip()
+            participant_id = str(wb.get("participant_id") or wb.get("sender_id") or wb.get("sender_phone") or "").strip()
+            participant_name = str(wb.get("participant_name") or wb.get("sender_name") or "Client").strip()
+            msg_id = str(wb.get("message_id") or wb.get("id") or "").strip()
+            raw_acc = str(wb.get("account_name") or wb.get("username") or "").strip()
+            raw_plat = str(wb.get("platform") or "").strip().lower()
+            is_wa = (
+                raw_plat == "whatsapp"
+                or str(wb.get("account_id") or "").strip() == "6adda70399e7b30829e8859c"
+                or conv_id.startswith("wa_live_")
+                or "happyfinds" in raw_acc.lower()
+                or "9952601753" in raw_acc.replace(" ", "")
+            )
+            is_ig = (
+                not is_wa
+                and (
+                    raw_plat == "instagram"
+                    or str(wb.get("account_id") or "").strip() == "6ad9e9b2e5d470e468e58d87"
+                    or conv_id.startswith("ig_live_")
+                    or "glennard.tasico.va" in raw_acc.lower()
+                )
+            )
+            acc_id = str(
+                wb.get("account_id")
+                or ("6adda70399e7b30829e8859c" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
+            ).strip()
+            acc_name = "HappyFinds Hub (+63 995 260 1753)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
+            is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", False)))
+            raw_text = str(wb.get("text") or wb.get("message") or "").strip()
+            clean_msg = re.sub(r"\s+", " ", raw_text.replace("|", "/")).strip()
+            dm_thread_id = conv_id or (f"dm_{participant_id}" if participant_id else f"dm_{msg_id}")
+            speaker = "GlennBot Automations" if is_own_msg else participant_name
+            new_entry = f"{speaker}: {clean_msg}" if clean_msg else ""
+
+            matched_row_idx: Optional[int] = None
+            existing_pipe = ""
+            for pr in parsed_conv_rows:
+                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "conversation_id"):
+                    continue
+                if pr["colA"] and (
+                    pr["colA"] == dm_thread_id
+                    or (conv_id and pr["colA"] == conv_id)
+                    or (participant_id and pr["colA"] == f"dm_{participant_id}")
+                ):
+                    matched_row_idx = pr["rowNum"]
+                    existing_pipe = pr["colB"]
+                    break
+
+            next_empty = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+            if next_empty < 2:
+                next_empty = 2
+            target_row_idx = matched_row_idx if matched_row_idx is not None else next_empty
+
+            pipe_conv = existing_pipe
+            if new_entry:
+                if not pipe_conv:
+                    pipe_conv = new_entry
+                else:
+                    segments = [sg.strip() for sg in pipe_conv.split("|") if sg.strip()]
+                    last_seg = segments[-1] if segments else ""
+                    if last_seg.lower() != new_entry.lower():
+                        segments.append(new_entry)
+                    pipe_conv = " | ".join(segments)
+
+            # Match against Script.xlsx QA pairs
+            qa_pairs = [
+                {"question": sr["colA"], "answer": sr["colB"]}
+                for sr in parsed_script_rows
+                if sr["colA"] and sr["colB"] and sr["colA"].lower() not in ("questions", "question", "thread id")
+            ]
+            faq_block = "\n".join(
+                f"Q{idx_q + 1}: {qp['question']}\nA{idx_q + 1}: {qp['answer']}"
+                for idx_q, qp in enumerate(qa_pairs)
+            )
+            plat_label = (
+                "WhatsApp (+63 995 260 1753 / HappyFinds Hub)" if is_wa
+                else ("Instagram (@glennard.tasico.va)" if is_ig else "Facebook Page (GlennBot Automations)")
+            )
+            ai_prompt = (
+                f"Write a natural, helpful 1-to-3 sentence direct message reply as Glennard (speaking in first-person 'I' / 'ko' / 'akin') to {participant_name} on {plat_label}.\n\n"
+                f"Official Q&A Reference (Script.xlsx):\n{faq_block or 'Use general knowledge as Glennard Tasico (AI Automation Specialist & Industrial Engineer).'}\n\n"
+                f"Conversation Thread History:\n{pipe_conv}\n\n"
+                f"Latest DM from {participant_name}: \"{clean_msg}\"\n\n"
+                f"Reply directly to {participant_name} in matching language (English, Tagalog, or Taglish):"
+            )
+            return {
+                "sheetRowIdx": target_row_idx,
+                "isExistingThread": matched_row_idx is not None,
+                "colAThreadId": dm_thread_id,
+                "colBConversation": pipe_conv,
+                "conversationId": conv_id,
+                "accountId": acc_id,
+                "accountName": acc_name,
+                "participantId": participant_id,
+                "participantName": participant_name,
+                "messageId": msg_id,
+                "latestMessage": clean_msg,
+                "isOwnMessage": is_own_msg,
+                "shouldAiReply": (not is_own_msg) and len(clean_msg) > 0,
+                "detectedLanguage": "Auto-Detect (Match Sender Language)",
+                "aiContextPrompt": ai_prompt,
+            }
+
     return current_json
 
 
@@ -978,7 +1308,8 @@ def _execute_n8n_workflow_json_natively(
     node_outputs: Dict[str, Dict[str, Any]] = {}
     execution_trace: List[Dict[str, Any]] = []
     active_api_key = _get_active_internal_api_key_token()
-    local_port = os.getenv("PORT", "5001").strip() or "5001"
+    _default_port = "5001" if os.name == "nt" else "3000"
+    local_port = os.getenv("PORT", _default_port).strip() or _default_port
     local_base_origin = f"http://127.0.0.1:{local_port}"
 
     # BFS / DFS execution queue: (node_name, input_json_dict)
@@ -1153,16 +1484,24 @@ def _execute_n8n_workflow_json_natively(
                         step_detail = f"POST {api_path_matched} -> Error"
                     node_outputs[curr_name] = out_json
                 elif target_url.startswith("http"):
-                    if method_str == "GET":
-                        r_http = HTTP_SESSION.get(target_url, headers=req_headers, timeout=30)
-                    else:
-                        r_http = HTTP_SESSION.request(
+                    def _do_http_req(u: str):
+                        if method_str == "GET":
+                            return HTTP_SESSION.get(u, headers=req_headers, timeout=30)
+                        return HTTP_SESSION.request(
                             method_str,
-                            target_url,
+                            u,
                             headers=req_headers,
                             json=req_body_obj if req_body_obj is not None else {},
                             timeout=90
                         )
+                    try:
+                        r_http = _do_http_req(target_url)
+                    except Exception:
+                        if m_api_path:
+                            alt_port = "3000" if local_port == "5001" else "5001"
+                            r_http = _do_http_req(f"http://127.0.0.1:{alt_port}{m_api_path.group(1)}")
+                        else:
+                            raise
                     try:
                         out_json = r_http.json() if r_http.content else {"status_code": r_http.status_code}
                         if not isinstance(out_json, dict):
@@ -1382,7 +1721,13 @@ async def api_save_automations_canvas_workflow(request: Request):
             wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
             replaced = False
             for idx, existing in enumerate(wfs):
-                if isinstance(existing, dict) and str(existing.get("id")) == wf_id:
+                if not isinstance(existing, dict):
+                    continue
+                if (
+                    str(existing.get("id")) == wf_id
+                    or str(existing.get("name") or "").strip().lower() == wf_name.lower()
+                ):
+                    record["id"] = str(existing.get("id") or wf_id)
                     wfs[idx] = record
                     replaced = True
                     break
