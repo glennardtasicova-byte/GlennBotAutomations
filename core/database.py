@@ -233,6 +233,27 @@ def init_records_db():
                 deleted_at TEXT
             );
         """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS glennbot_comment_automation_queue (
+                queue_id VARCHAR(128) PRIMARY KEY,
+                comment_id VARCHAR(128) NOT NULL,
+                thread_id VARCHAR(128) DEFAULT '',
+                post_id VARCHAR(128) DEFAULT '',
+                record_id VARCHAR(128) DEFAULT '',
+                platform VARCHAR(64) DEFAULT '',
+                account_name VARCHAR(255) DEFAULT '',
+                author_name VARCHAR(255) DEFAULT '',
+                message TEXT DEFAULT '',
+                is_own_comment INTEGER DEFAULT 0,
+                payload_json TEXT DEFAULT '{}',
+                status VARCHAR(32) DEFAULT 'queued',
+                ai_reply TEXT DEFAULT '',
+                error_message TEXT DEFAULT '',
+                queued_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ
+            );
+        """))
 
     if not DATABASE_URL.startswith("sqlite"):
         for col_sql in (
@@ -252,6 +273,357 @@ if DATABASE_URL.startswith("sqlite"):
         init_records_db()
     except Exception as _sqlite_init_err:
         print(f"[⚠️ SQLITE DB INIT WARNING]: {_sqlite_init_err}")
+
+
+import json as _db_json
+import uuid as _db_uuid
+import threading as _queue_threading
+
+SUPABASE_COMMENT_QUEUE_LOCK = _queue_threading.RLock()
+SUPABASE_COMMENT_QUEUE_COND = _queue_threading.Condition(SUPABASE_COMMENT_QUEUE_LOCK)
+_SUPABASE_QUEUE_TABLE_READY = False
+
+
+def _ensure_supabase_comment_queue_table() -> None:
+    global _SUPABASE_QUEUE_TABLE_READY
+    if _SUPABASE_QUEUE_TABLE_READY:
+        return
+    try:
+        with db_engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS glennbot_comment_automation_queue (
+                    queue_id VARCHAR(128) PRIMARY KEY,
+                    comment_id VARCHAR(128) NOT NULL,
+                    thread_id VARCHAR(128) DEFAULT '',
+                    post_id VARCHAR(128) DEFAULT '',
+                    record_id VARCHAR(128) DEFAULT '',
+                    platform VARCHAR(64) DEFAULT '',
+                    account_name VARCHAR(255) DEFAULT '',
+                    author_name VARCHAR(255) DEFAULT '',
+                    message TEXT DEFAULT '',
+                    is_own_comment INTEGER DEFAULT 0,
+                    payload_json TEXT DEFAULT '{}',
+                    status VARCHAR(32) DEFAULT 'queued',
+                    ai_reply TEXT DEFAULT '',
+                    error_message TEXT DEFAULT '',
+                    queued_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    started_at TIMESTAMPTZ,
+                    completed_at TIMESTAMPTZ
+                );
+            """))
+        _SUPABASE_QUEUE_TABLE_READY = True
+    except Exception as e:
+        print(f"[SupabaseCommentQueue] Table init warning: {e}")
+
+
+def enqueue_and_acquire_supabase_comment_queue_turn(
+    wb_data: Dict[str, Any],
+    is_test_run: bool = False,
+    max_wait_seconds: float = 180.0
+) -> Dict[str, Any]:
+    """
+    Stores an incoming post comment/reply webhook into the Supabase `glennbot_comment_automation_queue`
+    table (via `DATABASE_URL` in `.env`) with `status = 'queued'`, and waits in strict FIFO order
+    until all earlier comments in the queue have finished processing before marking this item
+    `status = 'processing'` and returning control to the automation workflow.
+    """
+    _ensure_supabase_comment_queue_table()
+    root_body = wb_data.get("body") if isinstance(wb_data.get("body"), dict) else wb_data
+    wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
+    if not isinstance(wb, dict):
+        wb = {}
+
+    now_utc = datetime.now(pytz.utc)
+    raw_cid = str(wb.get("comment_id") or root_body.get("comment_id") or f"cid_{int(time.time() * 1000)}").strip()
+    raw_tid = str(wb.get("thread_id") or wb.get("root_comment_id") or wb.get("parent_comment_id") or raw_cid).strip()
+    raw_pid = str(wb.get("post_id") or wb.get("zernio_post_id") or wb.get("external_post_id") or "").strip()
+    raw_rid = str(wb.get("record_id") or "").strip()
+    raw_plat = str(wb.get("platform") or "facebook").strip().lower()
+    raw_acc = str(wb.get("account_name") or "GlennBot Automations").strip()
+    raw_auth = str(wb.get("author_name") or "Commenter").strip()
+    raw_msg = str(wb.get("message") or "").strip()
+    is_own = 1 if bool(wb.get("is_own_comment") or wb.get("is_own")) else 0
+
+    queue_id = str(wb.get("queue_id") or root_body.get("queue_id") or "").strip()
+    if not queue_id:
+        queue_id = f"sbq_{int(time.time() * 1000)}_{_db_uuid.uuid4().hex[:6]}"
+
+    payload_str = _db_json.dumps(wb, ensure_ascii=False, default=str)
+    queue_position = 1
+    pending_count = 1
+    waited_ms = 0
+    enqueue_t0 = time.time()
+
+    try:
+        with db_engine.begin() as conn:
+            # 1. Auto-expire stale 'processing' or 'queued' rows older than 90 seconds so the queue never blocks
+            stale_cutoff = now_utc - timedelta(seconds=90)
+            conn.execute(
+                text("""
+                    UPDATE glennbot_comment_automation_queue
+                    SET status = 'expired_timeout',
+                        error_message = 'Auto-expired stale processing lock (>90s)',
+                        completed_at = :now_ts
+                    WHERE status IN ('processing', 'queued')
+                      AND queued_at < :cutoff
+                """),
+                {"now_ts": now_utc, "cutoff": stale_cutoff}
+            )
+            # 2. Insert incoming comment webhook into Supabase queue as 'queued'
+            conn.execute(
+                text("""
+                    INSERT INTO glennbot_comment_automation_queue
+                    (queue_id, comment_id, thread_id, post_id, record_id, platform,
+                     account_name, author_name, message, is_own_comment, payload_json,
+                     status, queued_at)
+                    VALUES (:qid, :cid, :tid, :pid, :rid, :plat,
+                            :aname, :auth, :msg, :is_own, :pjson,
+                            'queued', :q_at)
+                    ON CONFLICT (queue_id) DO UPDATE SET
+                        status = 'queued',
+                        queued_at = EXCLUDED.queued_at
+                """),
+                {
+                    "qid": queue_id,
+                    "cid": raw_cid,
+                    "tid": raw_tid,
+                    "pid": raw_pid,
+                    "rid": raw_rid,
+                    "plat": raw_plat,
+                    "aname": raw_acc,
+                    "auth": raw_auth,
+                    "msg": raw_msg,
+                    "is_own": is_own,
+                    "pjson": payload_str,
+                    "q_at": now_utc,
+                }
+            )
+    except Exception as e:
+        print(f"[SupabaseCommentQueue] Enqueue insert warning: {e}")
+
+    # 3. Acquire FIFO turn so comments & replies are processed strictly one-by-one
+    effective_timeout = 2.0 if is_test_run else max(5.0, min(max_wait_seconds, 240.0))
+    deadline = time.time() + effective_timeout
+
+    with SUPABASE_COMMENT_QUEUE_COND:
+        while True:
+            can_acquire = False
+            try:
+                with db_engine.begin() as conn:
+                    now_check = datetime.now(pytz.utc)
+                    conn.execute(
+                        text("""
+                            UPDATE glennbot_comment_automation_queue
+                            SET status = 'expired_timeout',
+                                completed_at = :now_ts
+                            WHERE status = 'processing'
+                              AND started_at IS NOT NULL
+                              AND started_at < :cutoff
+                        """),
+                        {"now_ts": now_check, "cutoff": now_check - timedelta(seconds=75)}
+                    )
+                    active_rows = conn.execute(
+                        text("""
+                            SELECT queue_id, status
+                            FROM glennbot_comment_automation_queue
+                            WHERE status IN ('processing', 'queued')
+                            ORDER BY queued_at ASC, queue_id ASC
+                            LIMIT 100
+                        """)
+                    ).mappings().all()
+
+                    pending_count = len(active_rows)
+                    for idx_r, r_item in enumerate(active_rows):
+                        if str(r_item["queue_id"]) == queue_id:
+                            queue_position = idx_r + 1
+                            break
+
+                    any_other_processing = any(
+                        str(r_item["status"]) == "processing" and str(r_item["queue_id"]) != queue_id
+                        for r_item in active_rows
+                    )
+                    head_queued_id = next(
+                        (str(r_item["queue_id"]) for r_item in active_rows if str(r_item["status"]) == "queued"),
+                        queue_id
+                    )
+
+                    if (not any_other_processing and head_queued_id == queue_id) or time.time() >= deadline:
+                        conn.execute(
+                            text("""
+                                UPDATE glennbot_comment_automation_queue
+                                SET status = 'processing',
+                                    started_at = :now_ts
+                                WHERE queue_id = :qid
+                            """),
+                            {"now_ts": now_check, "qid": queue_id}
+                        )
+                        can_acquire = True
+            except Exception as e:
+                print(f"[SupabaseCommentQueue] FIFO check warning: {e}")
+                can_acquire = True
+
+            if can_acquire:
+                break
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            SUPABASE_COMMENT_QUEUE_COND.wait(timeout=min(0.4, remaining))
+
+    waited_ms = int((time.time() - enqueue_t0) * 1000)
+    db_engine_label = "sqlite_fallback" if DATABASE_URL.startswith("sqlite") else "supabase_postgresql"
+    return {
+        **wb_data,
+        "queueId": queue_id,
+        "queue_id": queue_id,
+        "queueStatus": "processing",
+        "queuePosition": queue_position,
+        "pendingInSupabaseQueue": pending_count,
+        "queueWaitMs": waited_ms,
+        "supabaseTable": "glennbot_comment_automation_queue",
+        "databaseEngine": db_engine_label,
+        "databaseUrlConfigured": not DATABASE_URL.startswith("sqlite"),
+        "comment_id": raw_cid,
+        "thread_id": raw_tid,
+        "post_id": raw_pid,
+        "record_id": raw_rid,
+        "platform": raw_plat,
+        "account_name": raw_acc,
+        "author_name": raw_auth,
+        "message": raw_msg,
+        "is_own_comment": bool(is_own),
+    }
+
+
+def complete_supabase_comment_queue_turn(
+    queue_id: str = "",
+    comment_id: str = "",
+    ai_reply: str = "",
+    status: str = "completed",
+    error_message: str = ""
+) -> Dict[str, Any]:
+    """
+    Marks the currently processing comment in `glennbot_comment_automation_queue` as `completed`
+    (or `failed` / `skipped_own_comment`) and immediately notifies the next queued comment in Supabase!
+    """
+    _ensure_supabase_comment_queue_table()
+    clean_qid = str(queue_id or "").strip()
+    clean_cid = str(comment_id or "").strip()
+    clean_status = str(status or "completed").strip() or "completed"
+    now_utc = datetime.now(pytz.utc)
+    remaining_queued = 0
+
+    with SUPABASE_COMMENT_QUEUE_COND:
+        try:
+            with db_engine.begin() as conn:
+                if clean_qid:
+                    conn.execute(
+                        text("""
+                            UPDATE glennbot_comment_automation_queue
+                            SET status = :st,
+                                ai_reply = CASE WHEN :rep != '' THEN :rep ELSE ai_reply END,
+                                error_message = CASE WHEN :err != '' THEN :err ELSE error_message END,
+                                completed_at = :now_ts
+                            WHERE queue_id = :qid
+                        """),
+                        {
+                            "st": clean_status,
+                            "rep": str(ai_reply or "")[:4000],
+                            "err": str(error_message or "")[:1000],
+                            "now_ts": now_utc,
+                            "qid": clean_qid,
+                        }
+                    )
+                elif clean_cid:
+                    conn.execute(
+                        text("""
+                            UPDATE glennbot_comment_automation_queue
+                            SET status = :st,
+                                ai_reply = CASE WHEN :rep != '' THEN :rep ELSE ai_reply END,
+                                error_message = CASE WHEN :err != '' THEN :err ELSE error_message END,
+                                completed_at = :now_ts
+                            WHERE comment_id = :cid AND status IN ('processing', 'queued')
+                        """),
+                        {
+                            "st": clean_status,
+                            "rep": str(ai_reply or "")[:4000],
+                            "err": str(error_message or "")[:1000],
+                            "now_ts": now_utc,
+                            "cid": clean_cid,
+                        }
+                    )
+                rem_row = conn.execute(
+                    text("""
+                        SELECT COUNT(*) AS cnt
+                        FROM glennbot_comment_automation_queue
+                        WHERE status = 'queued'
+                    """)
+                ).mappings().first()
+                remaining_queued = int((rem_row or {}).get("cnt") or 0)
+        except Exception as e:
+            print(f"[SupabaseCommentQueue] Complete turn warning: {e}")
+        finally:
+            SUPABASE_COMMENT_QUEUE_COND.notify_all()
+
+    return {
+        "status": "success",
+        "queueId": clean_qid,
+        "commentId": clean_cid,
+        "queueStatus": clean_status,
+        "remainingInSupabaseQueue": remaining_queued,
+        "supabaseTable": "glennbot_comment_automation_queue",
+        "completedAt": now_utc.astimezone(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+    }
+
+
+def get_supabase_comment_queue_status(limit: int = 50) -> Dict[str, Any]:
+    _ensure_supabase_comment_queue_table()
+    items: List[Dict[str, Any]] = []
+    counts = {"queued": 0, "processing": 0, "completed": 0}
+    try:
+        with db_engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT queue_id, comment_id, thread_id, post_id, record_id, platform,
+                           account_name, author_name, message, is_own_comment, status,
+                           ai_reply, error_message, queued_at, started_at, completed_at
+                    FROM glennbot_comment_automation_queue
+                    ORDER BY queued_at DESC
+                    LIMIT :lim
+                """),
+                {"lim": max(1, min(limit, 200))}
+            ).mappings().all()
+            for r in rows:
+                d = dict(r)
+                st = str(d.get("status") or "queued")
+                if st in counts:
+                    counts[st] += 1
+                items.append({
+                    "queue_id": d.get("queue_id"),
+                    "comment_id": d.get("comment_id"),
+                    "thread_id": d.get("thread_id"),
+                    "post_id": d.get("post_id"),
+                    "record_id": d.get("record_id"),
+                    "platform": d.get("platform"),
+                    "account_name": d.get("account_name"),
+                    "author_name": d.get("author_name"),
+                    "message": d.get("message"),
+                    "is_own_comment": bool(d.get("is_own_comment")),
+                    "status": st,
+                    "ai_reply": d.get("ai_reply") or "",
+                    "error_message": d.get("error_message") or "",
+                    "queued_at": str(d.get("queued_at") or ""),
+                    "started_at": str(d.get("started_at") or ""),
+                    "completed_at": str(d.get("completed_at") or ""),
+                })
+    except Exception as e:
+        print(f"[SupabaseCommentQueue] Status read warning: {e}")
+    return {
+        "status": "success",
+        "supabase_table": "glennbot_comment_automation_queue",
+        "database_url_configured": not DATABASE_URL.startswith("sqlite"),
+        "counts": counts,
+        "items": items,
+    }
 
 
 jobstores = {

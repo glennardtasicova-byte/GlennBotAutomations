@@ -221,12 +221,15 @@ def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
                 else:
                     ex_w = wf_list[existing_idx]
                     ex_json_str = json.dumps(ex_w.get("workflow_json") or {}, ensure_ascii=False)
-                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs, rootBody.data unnesting, or updated Sheet1/Sheet2 pipe memory nodes
+                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs, rootBody.data unnesting, Supabase queue, or Script.xlsx fuzzy matching & pivot rules
                     if (
                         "6adda70399e7b30829e8859c" not in ex_json_str
                         or "rootBody.data" not in ex_json_str
+                        or "UNMATCHED / OUT-OF-SCOPE PIVOT RULE" not in ex_json_str
+                        or "sync_gdrive=true" not in ex_json_str
                         or ("dm-thread-ai-agent" in ex_json_str and "SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS" not in ex_json_str)
                         or ("comment-thread-ai-agent" in ex_json_str and "Save Bot Response to Conversations.xlsx Sheet1" not in ex_json_str)
+                        or ("comment-thread-ai-agent" in ex_json_str and "node-supabase-fifo-comment-queue" not in ex_json_str)
                     ):
                         ex_w["workflow_json"] = seed_json
                         ex_w["name"] = target_name
@@ -781,8 +784,70 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
     if not js_code:
         return current_json
 
-    # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
+    # 0. Native fast-path for Supabase FIFO Comment Queue Code nodes (`Supabase FIFO Comment Queue` & `Complete & Release Turn in Supabase Queue`)
     node_name_low = str(node.get("name") or "").lower()
+    node_id_low = str(node.get("id") or "").lower()
+    if (
+        "node-supabase-fifo-comment-queue" in node_id_low
+        or ("supabase" in node_name_low and ("enqueue" in node_name_low or "fifo" in node_name_low or "acquire" in node_name_low))
+        or "SUPABASE_QUEUE_ACTION = 'enqueue_and_acquire'" in js_code
+    ):
+        wh_data = (
+            node_outputs.get("Webhook Trigger")
+            or node_outputs.get("Webhook")
+            or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+            or current_json
+        )
+        return enqueue_and_acquire_supabase_comment_queue_turn(wh_data, is_test_run=False)
+
+    if (
+        "node-supabase-complete-comment-queue" in node_id_low
+        or ("supabase" in node_name_low and ("complete" in node_name_low or "release" in node_name_low or "dequeue" in node_name_low))
+        or "SUPABASE_QUEUE_ACTION = 'complete_and_release'" in js_code
+    ):
+        q_node = (
+            node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+            or node_outputs.get("Build Thread ID & Pipe Conversation")
+            or current_json
+            or {}
+        )
+        fmt_node = node_outputs.get("Format AI Reply & Update Pipe History") or {}
+        wh_data = node_outputs.get("Webhook Trigger") or {}
+        wh_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+        qid = str(
+            q_node.get("queueId")
+            or q_node.get("queue_id")
+            or current_json.get("queueId")
+            or current_json.get("queue_id")
+            or ""
+        ).strip()
+        cid = str(
+            q_node.get("comment_id")
+            or q_node.get("targetCommentId")
+            or wh_body.get("comment_id")
+            or ""
+        ).strip()
+        ai_rep = str(
+            fmt_node.get("aiReplyText")
+            or fmt_node.get("reply")
+            or current_json.get("aiReplyText")
+            or current_json.get("reply")
+            or ""
+        ).strip()
+        is_own_c = bool(wh_body.get("is_own_comment") or q_node.get("is_own_comment"))
+        final_q_status = "skipped_own_comment" if (is_own_c and not ai_rep) else "completed"
+        comp_res = complete_supabase_comment_queue_turn(
+            queue_id=qid,
+            comment_id=cid,
+            ai_reply=ai_rep,
+            status=final_q_status
+        )
+        return {
+            **(current_json if isinstance(current_json, dict) else {}),
+            **comp_res,
+        }
+
+    # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
     is_custom_pipe_or_dm_code = any(
         k in js_code for k in (
             "colAThreadId",
@@ -1042,14 +1107,32 @@ const $ = (name) => {
         raw_reply = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         raw_reply = re.sub(r"^[\"'\u201c\u201d\u2018\u2019]+|[\"'\u201c\u201d\u2018\u2019]+$", "", raw_reply).strip()
         raw_reply = re.sub(
-            r"^(?:Glennard(?:\s+Tasico)?|GlennBot\s+Automations(?:\s*\(Page\))?)\s*:\s*",
+            r"^(?:Glennard(?:\s+R\.?\s+Tasico|\s+Tasico)?|GlennBot\s+Automations(?:\s*\([^)]+\))?|@?glennard\.tasico\.va|@?glennbot\.automation|HappyFinds\s+Hub)\s*:\s*",
             "",
             raw_reply,
             flags=re.I
         ).strip()
         clean_reply = re.sub(r"\s+", " ", raw_reply.replace("|", "/")).strip()
-        prev_pipe = str(pipe_node.get("colBConversation") or "").strip()
-        reply_entry = f"GlennBot Automations: {clean_reply}"
+        if not clean_reply or "apologies for the brief delay" in clean_reply.lower():
+            guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
+            lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
+            if guide:
+                clean_reply = guide
+            elif "tagalog" in lang_low or "taglish" in lang_low:
+                clean_reply = (
+                    "Salamat sa comment/message! Nandito ako para tumulong sa inyong Automation at Web App Projects "
+                    "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
+                    "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
+                )
+            else:
+                clean_reply = (
+                    "Thanks for reaching out! I'm right here and ready to help with your Automation and Web App Projects—"
+                    "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
+                    "What specific automation or web app project can I help you build?"
+                )
+        page_label = str(pipe_node.get("pageName") or "GlennBot Automations").strip()
+        prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
+        reply_entry = f"{page_label}: {clean_reply}"
         updated_pipe = prev_pipe
         if clean_reply:
             if not prev_pipe:
@@ -1060,6 +1143,7 @@ const $ = (name) => {
             **pipe_node,
             "aiReplyText": clean_reply,
             "colBWithAiReply": updated_pipe,
+            "pipeConversationWithReply": updated_pipe,
         }
 
     if is_custom_pipe_or_dm_code:
@@ -1092,27 +1176,147 @@ const $ = (name) => {
                     continue
                 rn = int(r_obj.get("_row_number") or r_obj.get("row_number") or 0)
                 v_map = r_obj.get("values") if isinstance(r_obj.get("values"), dict) else r_obj
-                ca = str(v_map.get("A") or v_map.get("Thread ID") or v_map.get("Questions") or v_map.get("Question") or "").strip()
-                cb = str(v_map.get("B") or v_map.get("Conversations") or v_map.get("Conversation") or v_map.get("Answers") or v_map.get("Answer") or "").strip()
+                ca = str(v_map.get("A") or v_map.get("Thread ID") or v_map.get("Questions") or v_map.get("Question") or v_map.get("Keywords") or "").strip()
+                cb = str(v_map.get("B") or v_map.get("Conversations") or v_map.get("Conversation") or v_map.get("Answers") or v_map.get("Answer") or v_map.get("Script") or "").strip()
+                if not ca or not cb:
+                    raw_keys = [k for k in v_map.keys() if not str(k).startswith("_") and str(k) not in ("row_number", "values")]
+                    if not ca and len(raw_keys) >= 1:
+                        ca = str(v_map.get(raw_keys[0]) or "").strip()
+                    if not cb and len(raw_keys) >= 2:
+                        cb = str(v_map.get(raw_keys[1]) or "").strip()
                 if rn > 0:
                     seen_r.add(rn)
-                out_pairs.append({"rowNum": rn, "colA": ca, "colB": cb})
+                if ca or cb:
+                    out_pairs.append({"rowNum": rn, "colA": ca, "colB": cb})
             r_nums_set: Set[int] = set()
             for ck in cells_map.keys():
                 mc = re.match(r"^([A-Za-z]+)(\d+)$", str(ck).strip())
                 if mc:
                     rn_c = int(mc.group(2))
-                    if rn_c >= 2 and rn_c not in seen_r:
+                    if rn_c >= 1 and rn_c not in seen_r:
                         r_nums_set.add(rn_c)
             for rn_c in sorted(r_nums_set):
-                ca = str(cells_map.get(f"A{rn_c}") or "").strip()
-                cb = str(cells_map.get(f"B{rn_c}") or "").strip()
+                ca = str(cells_map.get(f"A{rn_c}") or cells_map.get(f"a{rn_c}") or "").strip()
+                cb = str(cells_map.get(f"B{rn_c}") or cells_map.get(f"b{rn_c}") or "").strip()
                 if ca or cb:
                     out_pairs.append({"rowNum": rn_c, "colA": ca, "colB": cb})
             return out_pairs
 
         parsed_conv_rows = _extract_ab_pairs(conv_rows, conv_cells)
-        parsed_script_rows = _extract_ab_pairs(script_rows, script_cells)
+        script_wb_title = str(script_sheet.get("workbook_title") or script_sheet.get("title") or "Script.xlsx").lower()
+        parsed_script_rows = _extract_ab_pairs(script_rows, script_cells) if "conversation" not in script_wb_title else []
+
+        # Helper for typo-tolerant Script.xlsx Column A -> Column B matching in Python
+        stop_words_py = {
+            "the", "is", "are", "was", "were", "be", "to", "of", "and", "a", "in", "that", "have", "it",
+            "for", "on", "with", "as", "do", "at", "this", "but", "by", "from", "or", "an", "so", "if",
+            "can", "you", "your", "me", "my", "we", "our", "what", "how", "when", "where", "who", "why",
+            "glennbot", "glennard", "tasico", "automations",
+            "ang", "ng", "mga", "sa", "na", "pa", "po", "opo", "ba", "kasi", "naman", "lang", "din", "rin",
+            "ito", "iyan", "iyon", "ung", "yung", "yong", "ko", "mo", "niya", "natin", "namin", "nyo",
+            "at", "ay", "may", "para", "kung", "kapag", "pag", "nga", "daw", "raw", "pala", "muna"
+        }
+
+        def _tokenize_py(txt: str) -> List[str]:
+            words = re.sub(r"[^a-z0-9\u00c0-\u024f]+", " ", str(txt or "").lower()).strip().split()
+            return [w for w in words if len(w) >= 2 and w not in stop_words_py]
+
+        def _stem_py(w: str) -> str:
+            return re.sub(r"(?:ing|ed|es|s)$", "", str(w or "").lower())
+
+        def _dl_dist_py(s1: str, s2: str) -> int:
+            a_s, b_s = s1.lower(), s2.lower()
+            if a_s == b_s:
+                return 0
+            m_l, n_l = len(a_s), len(b_s)
+            if not m_l:
+                return n_l
+            if not n_l:
+                return m_l
+            dp = [[0] * (n_l + 1) for _ in range(m_l + 1)]
+            for i_idx in range(m_l + 1):
+                dp[i_idx][0] = i_idx
+            for j_idx in range(n_l + 1):
+                dp[0][j_idx] = j_idx
+            for i_idx in range(1, m_l + 1):
+                for j_idx in range(1, n_l + 1):
+                    cost = 0 if a_s[i_idx - 1] == b_s[j_idx - 1] else 1
+                    dp[i_idx][j_idx] = min(
+                        dp[i_idx - 1][j_idx] + 1,
+                        dp[i_idx][j_idx - 1] + 1,
+                        dp[i_idx - 1][j_idx - 1] + cost
+                    )
+                    if i_idx > 1 and j_idx > 1 and a_s[i_idx - 1] == b_s[j_idx - 2] and a_s[i_idx - 2] == b_s[j_idx - 1]:
+                        dp[i_idx][j_idx] = min(dp[i_idx][j_idx], dp[i_idx - 2][j_idx - 2] + 1)
+            return dp[m_l][n_l]
+
+        def _word_sim_py(w1: str, w2: str) -> float:
+            if not w1 or not w2:
+                return 0.0
+            if w1 == w2:
+                return 1.0
+            st1, st2 = _stem_py(w1), _stem_py(w2)
+            if len(st1) >= 3 and st1 == st2:
+                return 0.95
+            if len(w1) >= 4 and len(w2) >= 4 and (w1 in w2 or w2 in w1):
+                return 0.88
+            if len(st1) >= 4 and len(st2) >= 4 and (st1 in st2 or st2 in st1):
+                return 0.85
+            max_l = max(len(st1), len(st2))
+            if max_l < 4:
+                return 0.0
+            sim = 1.0 - (_dl_dist_py(st1, st2) / float(max_l))
+            return sim if sim >= 0.72 else 0.0
+
+        def _score_script_rows_py(query_text: str, thread_text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+            header_tokens_a = ("keyword", "keywords", "key sentence", "key phrases", "question", "questions", "tanong", "column a", "trigger", "topic", "thread id")
+            header_tokens_b = ("script", "answer", "answers", "reply", "replies", "sagot", "response", "column b", "conversations")
+            valid_entries: List[Dict[str, Any]] = []
+            for idx_sr, sr in enumerate(parsed_script_rows):
+                rn_s = int(sr.get("rowNum") or (idx_sr + 1))
+                ca_s = re.sub(r"\s+", " ", str(sr.get("colA") or "")).strip()
+                cb_s = re.sub(r"\s+", " ", str(sr.get("colB") or "")).strip()
+                if not ca_s or not cb_s:
+                    continue
+                if rn_s == 1 and (any(h in ca_s.lower() for h in header_tokens_a) or any(h in cb_s.lower() for h in header_tokens_b)):
+                    continue
+                valid_entries.append({"rowNumber": rn_s, "keywordsRaw": ca_s, "answerGuide": cb_s})
+
+            q_clean = re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", str(query_text or "").lower())
+            q_clean = re.sub(r"\s+", " ", q_clean).strip()
+            q_tokens = _tokenize_py(query_text)
+            ctx_tokens = _tokenize_py(thread_text)
+
+            scored_list: List[Dict[str, Any]] = []
+            for ent in valid_entries:
+                kw_raw = ent["keywordsRaw"]
+                kw_low = kw_raw.lower()
+                kw_clean = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", kw_low)).strip()
+                phrases = [
+                    re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", p)).strip()
+                    for p in re.split(r"[,;|/\n?]+", kw_low)
+                ]
+                phrases = [p for p in phrases if p]
+                kw_tokens = _tokenize_py(kw_raw)
+                sc = 0
+                if kw_clean and q_clean and (kw_clean in q_clean or (len(q_clean) >= 4 and q_clean in kw_clean)):
+                    sc += 45
+                for ph in phrases:
+                    if len(ph) >= 3 and ph in q_clean:
+                        sc += 30 + min(len(ph.split()) * 5, 20)
+                t_hits = 0.0
+                for kt in kw_tokens:
+                    best_s = max((_word_sim_py(mt, kt) for mt in q_tokens), default=0.0)
+                    if best_s >= 0.72:
+                        t_hits += best_s
+                        sc += round(14 * best_s)
+                    elif any(_word_sim_py(ct, kt) >= 0.8 for ct in ctx_tokens):
+                        sc += 3
+                if kw_tokens and t_hits > 0:
+                    sc += round((t_hits / len(kw_tokens)) * 18)
+                scored_list.append({**ent, "score": sc})
+            scored_list.sort(key=lambda x: x["score"], reverse=True)
+            return valid_entries, [s for s in scored_list if s["score"] >= 8][:3]
 
         if is_dm_workflow:
             conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or "").strip()
@@ -1195,26 +1399,32 @@ const $ = (name) => {
                 _add_dm_seg(new_entry)
             pipe_conv = " | ".join(segments_list)
 
-            # Match against Script.xlsx QA pairs
-            qa_pairs = [
-                {"question": sr["colA"], "answer": sr["colB"]}
-                for sr in parsed_script_rows
-                if sr["colA"] and sr["colB"] and sr["colA"].lower() not in ("questions", "question", "thread id", "keywords")
-            ]
+            valid_scripts, top_matches = _score_script_rows_py(clean_msg, pipe_conv)
+            best_match = top_matches[0] if top_matches else None
+            has_match = bool(best_match and best_match.get("score", 0) >= 8)
+
             faq_block = "\n".join(
-                f"Row {idx_q + 1} | Column A (Keywords / Questions): \"{qp['question']}\" -> Column B (Reference Answer): \"{qp['answer']}\""
-                for idx_q, qp in enumerate(qa_pairs)
-            )
+                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+                for s in valid_scripts
+            ) or "(No rows found in Script.xlsx Sheet1 yet)"
+            closest_block = "\n\n".join(
+                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+                for idx_m, m in enumerate(top_matches)
+            ) if has_match else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+
             plat_label = (
                 "WhatsApp (+63 995 260 1753 / HappyFinds Hub)" if is_wa
                 else ("Instagram (@glennard.tasico.va)" if is_ig else "Facebook Page (GlennBot Automations)")
             )
             ai_prompt = (
                 f"You are replying directly in a Private Direct Message via {plat_label} as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin') through \"{acc_name}\".\n\n"
-                f"SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet2 & \"Script.xlsx\" Sheet1):\n"
+                f"SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet2 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
                 f"1. Read the Full DM Conversation History in Sheet2 (separated by '|') carefully so you remember the ongoing topic and context.\n"
-                f"2. Match the client's Latest Direct Message (\"{clean_msg}\") against Column A of Script.xlsx (Sheet1) and use Column B as your factual guide to construct your own natural reply (do NOT copy-paste Column B verbatim).\n\n"
-                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block or '(Use general knowledge as Glennard Tasico, AI Automation Specialist & Industrial Engineer)'}\n\n"
+                f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match the client's Latest Direct Message (\"{clean_msg}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
+                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
+                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the message is NOT related to any information in \"Script.xlsx\" (e.g. \"I need you!!\" or unrelated remarks), warmly acknowledge their message and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n\n"
+                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
+                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
                 f"Conversation ID: {dm_thread_id}\n"
                 f"Full DM Conversation History in Sheet2 (separated by |):\n{pipe_conv}\n\n"
                 f"Latest Direct Message from {participant_name}: \"{clean_msg}\"\n\n"
@@ -1239,7 +1449,165 @@ const $ = (name) => {
                 "isOwnMessage": is_own_msg,
                 "shouldAiReply": (not is_own_msg) and len(clean_msg) > 0,
                 "detectedLanguage": "Auto-Detect (Match Sender Language)",
+                "hasScriptMatch": has_match,
+                "matchedScriptRow": best_match["rowNumber"] if best_match else None,
+                "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
+                "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
                 "aiContextPrompt": ai_prompt,
+            }
+        else:
+            # Post Comment workflow (`Build Thread ID & Pipe Conversation`) Python execution
+            def _norm_cid(val_str: Any) -> str:
+                s_v = str(val_str or "").strip()
+                return s_v.split("_")[-1].strip() if "_" in s_v else s_v
+
+            raw_cid = str(wb.get("comment_id") or "").strip()
+            raw_parent = str(wb.get("parent_comment_id") or wb.get("replied_to_id") or "").strip()
+            raw_root = str(wb.get("thread_id") or wb.get("root_comment_id") or raw_parent or raw_cid).strip()
+            resolved_tid = _norm_cid(raw_root) or _norm_cid(raw_cid) or "unknown_thread"
+
+            cand_cids: Set[str] = {resolved_tid}
+            for raw_item in [raw_root, raw_parent, raw_cid] + list(wb.get("thread_comment_ids") or []):
+                nc = _norm_cid(raw_item)
+                if nc:
+                    cand_cids.add(nc)
+
+            is_own_c = bool(wb.get("is_own_comment") or wb.get("is_own"))
+            raw_plat = str(wb.get("platform") or "facebook").strip().lower()
+            raw_acc_id = str(wb.get("account_id") or "").strip()
+            raw_acc_name = str(wb.get("account_name") or wb.get("username") or "GlennBot Automations").strip()
+            raw_post_id = str(wb.get("post_id") or "").strip()
+
+            is_tt = (
+                "tiktok" in raw_plat
+                or raw_acc_id == "6af0b1b7818eb5c88d1e880e"
+                or "glennbot.automation" in raw_acc_name.lower()
+                or raw_post_id.startswith("tt_")
+            )
+            is_ig = (
+                not is_tt
+                and (
+                    "instagram" in raw_plat
+                    or raw_acc_id == "6ad9e9b2e5d470e468e58d87"
+                    or "glennard.tasico.va" in raw_acc_name.lower()
+                    or raw_post_id.startswith("18")
+                )
+            )
+            resolved_plat = "tiktok" if is_tt else ("instagram" if is_ig else "facebook")
+            resolved_acc_id = (
+                (raw_acc_id if raw_acc_id and raw_acc_id not in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87") else "6af0b1b7818eb5c88d1e880e")
+                if is_tt
+                else (
+                    (raw_acc_id if raw_acc_id and raw_acc_id != "6af0b109818eb5c88d1e87a6" else "6ad9e9b2e5d470e468e58d87")
+                    if is_ig
+                    else (raw_acc_id or "6af0b109818eb5c88d1e87a6")
+                )
+            )
+            page_name = "@glennbot.automation" if is_tt else ("@glennard.tasico.va" if is_ig else (raw_acc_name or "GlennBot Automations"))
+            commenter_name = str(
+                (wb.get("parent_author_name") or "Commenter")
+                if is_own_c
+                else (wb.get("author_name") or "Commenter")
+            ).strip()
+            speaker_name = page_name if is_own_c else commenter_name
+            raw_msg = re.sub(r"\s+", " ", str(wb.get("message") or wb.get("text") or "")).strip()
+            clean_comment_for_match = re.sub(
+                r"^(?:@?glennbot\s+automations|@?glennbot\.automation|@?glennard\.tasico\.va|@?glennard\s+tasico)[\s,:;\-]*",
+                "",
+                raw_msg,
+                flags=re.I
+            ).strip() or raw_msg
+
+            matched_row_idx_c: Optional[int] = None
+            existing_pipe_c = ""
+            for pr in parsed_conv_rows:
+                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "comment id", "id"):
+                    continue
+                if pr["colA"] and (_norm_cid(pr["colA"]) in cand_cids or pr["colA"] in cand_cids):
+                    matched_row_idx_c = pr["rowNum"]
+                    existing_pipe_c = pr["colB"]
+                    break
+
+            next_empty_c = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+            if next_empty_c < 2:
+                next_empty_c = 2
+            sheet_row_idx = matched_row_idx_c if matched_row_idx_c is not None else next_empty_c
+
+            segs_c: List[str] = []
+            def _add_c_seg(s_raw: str) -> None:
+                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+                if not sc:
+                    return
+                sc_low = sc.lower()
+                for ex_s in segs_c:
+                    if ex_s.lower() == sc_low:
+                        return
+                segs_c.append(sc)
+
+            if existing_pipe_c:
+                for pt in existing_pipe_c.split("|"):
+                    for sl in pt.splitlines():
+                        _add_c_seg(sl)
+            raw_tr = str(wb.get("thread_transcript") or "").strip()
+            if raw_tr:
+                for sl in raw_tr.splitlines():
+                    for pt in sl.split("|"):
+                        _add_c_seg(pt)
+            if raw_msg:
+                _add_c_seg(f"{speaker_name}: {raw_msg}")
+            col_b_conv = " | ".join(segs_c)
+
+            valid_scripts, top_matches = _score_script_rows_py(clean_comment_for_match, col_b_conv)
+            best_match = top_matches[0] if top_matches else None
+            has_match = bool(best_match and best_match.get("score", 0) >= 8)
+
+            faq_block = "\n".join(
+                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+                for s in valid_scripts
+            ) or "(No rows found in Script.xlsx Sheet1 yet)"
+            closest_block = "\n\n".join(
+                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+                for idx_m, m in enumerate(top_matches)
+            ) if has_match else "NONE — The commenter's message did not directly match any keyword/question in Column A of Script.xlsx. First double-check the Complete Script.xlsx Sheet1 Reference Table below; if genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+
+            ai_prompt_c = (
+                f"You are replying to a public social media post comment as Glennard R. Tasico (speaking in FIRST-PERSON: 'I', 'me', 'my' in English, or 'ako', 'ko', 'akin' in Tagalog/Taglish) through \"{page_name}\".\n\n"
+                f"SCRIPT-BASED REPLY INSTRUCTIONS (FROM \"Script.xlsx\" Sheet1 & \"Conversations.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
+                f"1. FIRST, read the Full Thread Conversation History in Sheet1 (separated by '|') so you remember the full context.\n"
+                f"2. SECOND — SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Compare {commenter_name}'s Latest Comment (\"{clean_comment_for_match}\") against Column A (Keywords / Possible Questions) of \"Script.xlsx\" (Sheet1), including similar phrasing or typos (e.g., \"wehbooks\" -> \"webhooks\").\n"
+                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Check its corresponding Column B (Reference Script / Core Answer) in \"Script.xlsx\" and use Column B's core answer to construct a natural, custom first-person reply in the commenter's language (DO NOT copy-paste Column B verbatim).\n"
+                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If {commenter_name}'s comment (\"{clean_comment_for_match}\") is NOT related to any information in \"Script.xlsx\" (for example, general remarks like \"I need you!!\" or unrelated questions), warmly acknowledge their comment and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
+                f"5. NEVER output generic delay apologies like \"My apologies for the brief delay!\".\n\n"
+                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
+                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
+                f"Thread ID: {resolved_tid}\n"
+                f"Full Thread Conversation History in Sheet1 (separated by |):\n{col_b_conv}\n\n"
+                f"Latest Comment from {commenter_name}: \"{raw_msg}\"\n\n"
+                f"Write your custom first-person reply as Glennard (via {page_name}) in the exact language of the commenter:"
+            )
+            q_node_out = node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)") or {}
+            return {
+                "queueId": str(q_node_out.get("queueId") or q_node_out.get("queue_id") or ""),
+                "sheetRowIdx": sheet_row_idx,
+                "targetRowNumber": sheet_row_idx,
+                "colAThreadId": resolved_tid,
+                "threadId": resolved_tid,
+                "colBConversation": col_b_conv,
+                "pipeConversation": col_b_conv,
+                "shouldAiReply": (not is_own_c) and len(raw_msg) > 0,
+                "detectedLanguage": "Auto-Detect (Match Commenter Language)",
+                "hasScriptMatch": has_match,
+                "matchedScriptRow": best_match["rowNumber"] if best_match else None,
+                "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
+                "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
+                "aiContextPrompt": ai_prompt_c,
+                "targetCommentId": raw_cid,
+                "postId": raw_post_id,
+                "accountId": resolved_acc_id,
+                "pageName": page_name,
+                "platform": resolved_plat,
+                "commenterName": commenter_name,
+                "authorId": str(wb.get("author_id") or ""),
             }
 
     return current_json
@@ -1582,6 +1950,21 @@ def _execute_n8n_workflow_json_natively(
                         for edge in target_edges:
                             if isinstance(edge, dict) and edge.get("node"):
                                 queue.append((str(edge["node"]), out_json))
+
+    # Safety guard: if workflow acquired a Supabase queue lock (`queueId`) and exited early before the completion node ran,
+    # automatically release the turn in `glennbot_comment_automation_queue` so subsequent queued comments never stall.
+    sb_enqueue_out = node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+    sb_complete_out = node_outputs.get("Complete & Release Turn in Supabase Queue")
+    if isinstance(sb_enqueue_out, dict) and sb_enqueue_out.get("queueId") and not sb_complete_out:
+        try:
+            complete_supabase_comment_queue_turn(
+                queue_id=str(sb_enqueue_out.get("queueId") or ""),
+                comment_id=str(sb_enqueue_out.get("comment_id") or ""),
+                status="failed" if any(t.get("status") == "error" for t in execution_trace) else "completed",
+                error_message="Auto-released on workflow exit"
+            )
+        except Exception:
+            pass
 
     total_ms = int((time.time() - start_ts) * 1000)
     any_err = any(t.get("status") == "error" for t in execution_trace)
@@ -3085,5 +3468,55 @@ async def api_v1_sync_contacts(request: Request):
     if not key_obj:
         return _unauthorized_v1_response()
     return await run_in_threadpool(api_sync_all_crm_contacts)
+
+
+@router.get("/api/v1/automations/supabase-queue")
+async def api_v1_get_supabase_comment_queue(request: Request, limit: int = 50):
+    """
+    Inspects the live Supabase FIFO comment automation queue (`glennbot_comment_automation_queue`).
+    """
+    return await run_in_threadpool(lambda: get_supabase_comment_queue_status(limit=limit))
+
+
+@router.post("/api/v1/automations/supabase-queue/enqueue")
+async def api_v1_enqueue_supabase_comment_queue(request: Request):
+    """
+    Enqueues an incoming comment/reply webhook into `glennbot_comment_automation_queue` in Supabase (`DATABASE_URL`)
+    and waits in strict FIFO order until it is this comment's turn to be processed.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    is_test = bool(body.get("is_test_run", False))
+    res = await run_in_threadpool(lambda: enqueue_and_acquire_supabase_comment_queue_turn(body, is_test_run=is_test))
+    return res
+
+
+@router.post("/api/v1/automations/supabase-queue/complete")
+async def api_v1_complete_supabase_comment_queue(request: Request):
+    """
+    Marks a queued comment in `glennbot_comment_automation_queue` as completed and releases the FIFO lock
+    for the next comment waiting in Supabase.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    qid = str(body.get("queue_id") or body.get("queueId") or "").strip()
+    cid = str(body.get("comment_id") or body.get("commentId") or "").strip()
+    ai_rep = str(body.get("ai_reply") or body.get("aiReplyText") or body.get("reply") or "").strip()
+    st = str(body.get("status") or "completed").strip()
+    err_m = str(body.get("error_message") or "").strip()
+    res = await run_in_threadpool(
+        lambda: complete_supabase_comment_queue_turn(
+            queue_id=qid,
+            comment_id=cid,
+            ai_reply=ai_rep,
+            status=st,
+            error_message=err_m
+        )
+    )
+    return res
 
 

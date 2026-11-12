@@ -2665,8 +2665,30 @@ def _sync_spreadsheets_with_gdrive_and_vault(
             if _sanitize_workbook_sheets_cells(w):
                 pass
         vault_files: List[Dict[str, Any]] = list(v_store.get("files") or [])
+        target_clean = (target_id or "").strip()
         any_changed = False
         vault_changed = False
+
+        # Ensure 'Files' modal (FILES_VAULT_STORE) is synced with Google Drive if empty or if target spreadsheet is missing from vault
+        if is_gdrive_authorized():
+            target_in_vault = bool(
+                target_clean and any(
+                    isinstance(vf, dict) and (
+                        str(vf.get("file_id") or "") == target_clean
+                        or str(vf.get("gdrive_file_id") or "") == target_clean
+                        or str(vf.get("filename") or "").strip().lower() == target_clean.lower()
+                        or target_clean.lower() in str(vf.get("filename") or "").strip().lower()
+                    )
+                    for vf in vault_files
+                )
+            )
+            if not vault_files or (target_clean and not target_in_vault):
+                try:
+                    _sync_files_vault_with_gdrive(force=bool(force_gdrive_check))
+                    v_store = _load_files_vault_store(force_cloud=False)
+                    vault_files = list(v_store.get("files") or [])
+                except Exception:
+                    pass
 
         # 1. Link any spreadsheet (.xlsx / .xls) uploaded in the 'Files' modal into SPREADSHEETS_STORE
         for vf in vault_files:
@@ -2684,6 +2706,7 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                     w for w in workbooks
                     if (v_fid and str(w.get("file_id") or "") == v_fid)
                     or (v_gd_id and str(w.get("gdrive_file_id") or "") == v_gd_id)
+                    or (v_fname and str(w.get("title") or "").strip().lower() == v_fname.lower())
                 ),
                 None
             )
@@ -2711,17 +2734,27 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                 workbooks.insert(0, new_wb)
                 any_changed = True
             else:
+                had_gd_id = bool(str(existing_wb.get("gdrive_file_id") or "").strip())
                 if v_fid and not existing_wb.get("file_id"):
                     existing_wb["file_id"] = v_fid
                     any_changed = True
                 if v_gd_id and not existing_wb.get("gdrive_file_id"):
                     existing_wb["gdrive_file_id"] = v_gd_id
                     any_changed = True
+                if not existing_wb.get("workbook_id"):
+                    existing_wb["workbook_id"] = str(vf.get("workbook_id") or f"wb_{v_fid or uuid.uuid4().hex[:8]}").strip()
+                    any_changed = True
+                ex_cells_cnt = sum(len((s or {}).get("cells") or {}) for s in (existing_wb.get("sheets") or []) if isinstance(s, dict))
+                if v_gd_id and (not had_gd_id or ex_cells_cnt <= 2):
+                    parsed_sheets = _download_and_parse_gdrive_spreadsheet(v_gd_id, v_fname, v_mime, prefer_live_sheets_export=True)
+                    if parsed_sheets:
+                        existing_wb["sheets"] = parsed_sheets
+                        existing_wb["sheet_count"] = len(parsed_sheets)
+                        any_changed = True
 
         # 2. Check Google Drive / Google Sheets for external edits made by the client
         now_ts = time.time()
         last_sync_ts = float(SPREADSHEETS_STORE.get("last_gdrive_sync_ts") or 0.0)
-        target_clean = (target_id or "").strip()
         should_query_gdrive = is_gdrive_authorized() and (
             force_gdrive_check
             or bool(target_clean)
@@ -2821,7 +2854,16 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                             and (now_ts - last_local_save_ts) < 60.0
                             and not is_meta_modified
                         )
-                        should_download_live = (bool(target_clean) or is_meta_modified) and not recent_glennbot_write
+                        wb_cells_count = sum(
+                            len((s or {}).get("cells") or {})
+                            for s in (wb.get("sheets") or [])
+                            if isinstance(s, dict)
+                        )
+                        should_download_live = (
+                            bool(target_clean)
+                            or is_meta_modified
+                            or wb_cells_count <= 2
+                        ) and not recent_glennbot_write
                         if should_download_live:
                             wb_title_str = str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx")
                             fresh_sheets = _download_and_parse_gdrive_spreadsheet(
@@ -2891,8 +2933,20 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                     except Exception as wb_sync_err:
                         print(f"[⚠️ SPREADSHEET GDRIVE CHECK WARNING] ({gd_id}): {wb_sync_err}")
 
-                # 2b. When scanning all spreadsheets (no single target_id), also scan the Google Drive Vault folder for any new spreadsheet files
-                if force_gdrive_check and not target_clean:
+                # 2b. Scan the Google Drive Vault folder ('GlennBot_Media_Vault') for any spreadsheet files not yet in workbooks
+                target_has_gdrive_wb = bool(
+                    target_clean and any(
+                        str(w.get("gdrive_file_id") or "").strip() and (
+                            str(w.get("workbook_id") or "") == target_clean
+                            or str(w.get("file_id") or "") == target_clean
+                            or str(w.get("gdrive_file_id") or "") == target_clean
+                            or str(w.get("title") or "").lower() == target_clean.lower()
+                            or target_clean.lower() in str(w.get("title") or "").lower()
+                        )
+                        for w in workbooks
+                    )
+                )
+                if force_gdrive_check or (target_clean and not target_has_gdrive_wb):
                     folder_id = gdrive_ensure_vault_folder()
                     if folder_id:
                         q_str = (
@@ -3475,7 +3529,21 @@ def _build_sheet_structured_rows(sheet_obj: Dict[str, Any]) -> Tuple[Dict[str, s
             "answer", "answers", "script", "reply", "replies", "response", "column a", "column b",
             "name", "client name", "email", "phone", "platform", "status", "id", "author", "tanong", "sagot"
         }
-        if r1_a in known_headers or r1_b in known_headers:
+        if (
+            r1_a in known_headers
+            or r1_b in known_headers
+            or (
+                len(r1_a) <= 64
+                and len(r1_b) <= 64
+                and any(
+                    hk in r1_a or hk in r1_b
+                    for hk in (
+                        "keyword", "possible question", "client question", "reference script",
+                        "core answer", "thread id", "conversation id"
+                    )
+                )
+            )
+        ):
             row1_is_header = True
         elif (
             len(rows_by_num) > 1
@@ -3512,16 +3580,46 @@ def _find_workbook_by_query(workbooks: List[Dict[str, Any]], query: str) -> Opti
     if not q:
         return workbooks[0] if workbooks else None
     q_low = q.lower()
+    q_stem = os.path.splitext(q_low)[0].strip()
+
+    matched_candidates: List[Tuple[int, int, Dict[str, Any]]] = []
     for w in workbooks:
-        if (
-            str(w.get("workbook_id") or "") == q
-            or str(w.get("file_id") or "") == q
-            or str(w.get("gdrive_file_id") or "") == q
-            or str(w.get("title") or "").lower() == q_low
-            or q_low in str(w.get("title") or "").lower()
-        ):
-            return w
-    return workbooks[0] if workbooks else None
+        if not isinstance(w, dict):
+            continue
+        wb_id = str(w.get("workbook_id") or w.get("id") or "").strip()
+        fid = str(w.get("file_id") or "").strip()
+        gd_id = str(w.get("gdrive_file_id") or "").strip()
+        title_low = str(w.get("title") or "").strip().lower()
+        title_stem = os.path.splitext(title_low)[0].strip()
+        gd_name_low = str(w.get("gdrive_file_name") or "").strip().lower()
+
+        is_exact = (
+            wb_id == q
+            or fid == q
+            or gd_id == q
+            or title_low == q_low
+            or gd_name_low == q_low
+            or (q_stem and title_stem == q_stem)
+        )
+        is_partial = (
+            not is_exact
+            and bool(q_stem)
+            and (q_low in title_low or q_stem in title_stem)
+        )
+        if is_exact or is_partial:
+            has_gdrive_link = 1 if (gd_id or fid) else 0
+            total_cells = sum(
+                len((s or {}).get("cells") or {})
+                for s in (w.get("sheets") or [])
+                if isinstance(s, dict)
+            )
+            priority = (2 if is_exact else 1) * 10 + (has_gdrive_link * 5)
+            matched_candidates.append((priority, total_cells, w))
+
+    if matched_candidates:
+        matched_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return matched_candidates[0][2]
+    return None
 
 
 def _sync_updated_workbook_to_cloudinary(target_wb: Dict[str, Any]) -> Dict[str, Any]:
@@ -3685,7 +3783,14 @@ async def api_v1_read_spreadsheet_cells(
         )
     )
     target_wb = _find_workbook_by_query(workbooks, q_wb)
-    if not target_wb and not do_sync and q_wb:
+    target_cells_count = (
+        sum(len((s or {}).get("cells") or {}) for s in (target_wb.get("sheets") or []) if isinstance(s, dict))
+        if isinstance(target_wb, dict) else 0
+    )
+    if q_wb and (
+        not target_wb
+        or (not do_sync and (not target_wb.get("gdrive_file_id") or target_cells_count <= 2))
+    ):
         workbooks, _ = await run_in_threadpool(
             lambda: _sync_spreadsheets_with_gdrive_and_vault(
                 force_gdrive_check=True,
@@ -3700,10 +3805,12 @@ async def api_v1_read_spreadsheet_cells(
             default_cells_init: Dict[str, str] = (
                 {"A1": "Thread ID", "B1": "Conversations"}
                 if "conversation" in clean_title.lower()
-                else {"A1": "Questions", "B1": "Answers"}
+                else {"A1": "Keywords / Possible Questions", "B1": "Reference Script / Core Answer"}
             )
+            new_wb_id = f"wb_{uuid.uuid4().hex[:10]}"
             target_wb = {
-                "id": f"wb_{uuid.uuid4().hex[:10]}",
+                "id": new_wb_id,
+                "workbook_id": new_wb_id,
                 "title": clean_title,
                 "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p"),
                 "sheets": [
