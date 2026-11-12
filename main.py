@@ -14,16 +14,29 @@ except Exception:
 # Pre-bind the listening socket within the first 5ms when launched as `python3 main.py`
 # so container process supervisors that probe the port within 1.5s immediately detect the bound port.
 _EARLY_SERVER_SOCKET = None
+_EXTRA_SERVER_SOCKETS = []
 if __name__ == "__main__":
     try:
         import socket as _socket
-        _early_port = int(os.getenv("PORT", 3000))
+        _default_port = 5001 if os.name == "nt" else 3000
+        _early_port = int(os.getenv("PORT", _default_port))
         _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         _s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         _s.bind(("0.0.0.0", _early_port))
         _s.listen(2048)
         _s.setblocking(False)
         _EARLY_SERVER_SOCKET = _s
+        for _alt_p in (5001, 3000):
+            if _alt_p != _early_port:
+                try:
+                    _s_alt = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                    _s_alt.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+                    _s_alt.bind(("0.0.0.0", _alt_p))
+                    _s_alt.listen(2048)
+                    _s_alt.setblocking(False)
+                    _EXTRA_SERVER_SOCKETS.append(_s_alt)
+                except Exception:
+                    pass
     except Exception:
         _EARLY_SERVER_SOCKET = None
 
@@ -339,14 +352,15 @@ threading.Thread(target=_start_scheduler_and_recovery_bg, daemon=True).start()
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 3000))
+    _default_port = 5001 if os.name == "nt" else 3000
+    port = int(os.getenv("PORT", _default_port))
     detected_pub = get_dynamic_base_url(prefer_public=True)
     print("\n" + "=" * 68)
     print("🚀 GLENNBOT AUTOMATIONS SERVER STARTING...")
-    print(f"   • Local Device Access URL : http://localhost:{port}")
+    print(f"   • Local Device Access URL : http://localhost:{port} (and http://localhost:5001)")
     if detected_pub and not _is_localhost_origin(detected_pub):
         print(f"   • Public / Tunnel / Cloud : {detected_pub}")
-        print(f"   • Active Webhook Endpoint : {detected_pub}/webhooks")
+        print(f"   • Active Webhook Endpoint : {detected_pub}/api/webhooks/zernio")
         print(f"   • Active Internal API v1  : {detected_pub}/api/v1")
     else:
         print(f"   • Active Base API v1      : http://localhost:{port}/api/v1")
@@ -354,6 +368,6 @@ if __name__ == "__main__":
     if _EARLY_SERVER_SOCKET is not None:
         _uv_config = uvicorn.Config(app, host="0.0.0.0", port=port)
         _uv_server = uvicorn.Server(_uv_config)
-        _uv_server.run(sockets=[_EARLY_SERVER_SOCKET])
+        _uv_server.run(sockets=[_EARLY_SERVER_SOCKET] + _EXTRA_SERVER_SOCKETS)
     else:
         uvicorn.run(app, host="0.0.0.0", port=port)
