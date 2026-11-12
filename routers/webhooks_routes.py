@@ -205,11 +205,20 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
 
     print(f"\n[⚡ EXTERNAL API WEBHOOK RECEIVED] Payload: {json.dumps(body)}")
 
+    raw_body_lower = json.dumps(body).lower()
+    event_name = str(body.get("event") or body.get("type") or "").strip().lower()
+    if (
+        "this is a test webhook from zernio" in raw_body_lower
+        or event_name in ("webhook.test", "test", "ping")
+        or bool(body.get("is_test") or body.get("test"))
+    ):
+        print("[✅ ZERNIO TEST WEBHOOK]: Synthetic test ping acknowledged (200 OK) without polluting Comments/Messages store.")
+        return {"status": "received", "test_webhook": True, "message": "Zernio test webhook verified!"}
+
     connected_items = refresh_connected_accounts_cache(force=False)
     if not connected_items or not get_all_zernio_keys():
         return {"status": "ignored", "reason": "no_connected_accounts"}
 
-    event_name = str(body.get("event") or body.get("type") or "").strip().lower()
     root_obj = body.get("data") if isinstance(body.get("data"), dict) else body
 
     # --- 0.5 CHECK IF WEBHOOK IS A SCHEDULED POST STATUS EVENT (post.published, post.failed, post.partial) ---

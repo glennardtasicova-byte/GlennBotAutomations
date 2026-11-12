@@ -385,24 +385,26 @@ def get_dynamic_base_url(request: Optional[Request] = None, prefer_public: bool 
         NGROK_PUBLIC_URL = cloud_env_url
         return cloud_env_url
 
-    # 2. If a public origin was already observed from an incoming request (e.g. Ngrok or custom domain), use it
+    # 2. Prioritize explicit .env PUBLIC_APP_URL / NGROK_PUBLIC_URL when configured
+    env_public = _normalize_origin_url(os.getenv("PUBLIC_APP_URL", ""))
+    env_ngrok = _normalize_origin_url(os.getenv("NGROK_PUBLIC_URL", ""))
+    for cand in (env_public, env_ngrok):
+        if cand and not _is_localhost_origin(cand):
+            PUBLIC_APP_URL = cand
+            NGROK_PUBLIC_URL = cand
+            return cand
+
+    # 3. If a public origin was already observed from an incoming request (e.g. Ngrok or custom domain), use it
     last_pub = _normalize_origin_url(_RUNTIME_URL_STATE.get("last_public_origin") or "")
     if last_pub and not _is_localhost_origin(last_pub):
         return last_pub
 
-    # 3. Check live local Ngrok tunnel daemon (http://127.0.0.1:4040/api/tunnels)
+    # 4. Check live local Ngrok tunnel daemon (http://127.0.0.1:4040/api/tunnels)
     live_ngrok = _detect_local_ngrok_tunnel_url(force=False)
     if live_ngrok and not _is_localhost_origin(live_ngrok):
         PUBLIC_APP_URL = live_ngrok
         NGROK_PUBLIC_URL = live_ngrok
         return live_ngrok
-
-    # 4. Check explicit .env tunnel/public variables (NGROK_PUBLIC_URL / PUBLIC_APP_URL)
-    env_ngrok = _normalize_origin_url(os.getenv("NGROK_PUBLIC_URL", ""))
-    env_public = _normalize_origin_url(os.getenv("PUBLIC_APP_URL", ""))
-    for cand in (env_ngrok, env_public):
-        if cand and not _is_localhost_origin(cand):
-            return cand
 
     # 5. If request came from localhost or no public tunnel is active, return browser origin or localhost
     if req_origin:
@@ -415,9 +417,9 @@ def get_dynamic_base_url(request: Optional[Request] = None, prefer_public: bool 
 
 PUBLIC_APP_URL = (
     _detect_cloud_hosting_url_from_env()
-    or _detect_local_ngrok_tunnel_url(force=True)
-    or _normalize_origin_url(os.getenv("NGROK_PUBLIC_URL", ""))
     or _normalize_origin_url(os.getenv("PUBLIC_APP_URL", ""))
+    or _normalize_origin_url(os.getenv("NGROK_PUBLIC_URL", ""))
+    or _detect_local_ngrok_tunnel_url(force=True)
     or LOCAL_DEVICE_URL
 )
 NGROK_PUBLIC_URL = PUBLIC_APP_URL

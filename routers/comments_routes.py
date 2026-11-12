@@ -2913,18 +2913,24 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                             continue
                         obj_cid = str(c_obj.get("comment_id") or c_k).strip()
                         c_plat = str(c_obj.get("platform") or plat_check or "").strip().lower()
+                        c_msg_low = str(c_obj.get("message") or "").strip().lower()
+                        is_synthetic_test = (
+                            "test webhook from zernio" in c_msg_low
+                            or c_plat == "whatsapp"
+                            or obj_cid.startswith(("local_", "opt_", "test_"))
+                        )
                         if not is_reply_only and (
                             c_k in ids_to_mark_seen
                             or _normalize_comment_key(c_k) in norm_targets_pre
                             or obj_cid in ids_to_mark_seen
                             or _normalize_comment_key(obj_cid) in norm_targets_pre
                         ):
-                            if c_plat == "tiktok" and not skip_zernio:
+                            if c_plat == "tiktok" and not skip_zernio and not is_synthetic_test:
                                 return {
                                     "status": "error",
                                     "message": "Delete Comment is not supported on TikTok via Zernio API — please use the 'Hide' button instead!"
                                 }
-                            if not skip_zernio:
+                            if not skip_zernio and not is_synthetic_test:
                                 zernio_targets_to_delete.append((str(p_key), obj_cid or str(c_k), dict(c_obj), False, ""))
                                 # Also queue any real platform reply IDs under this parent comment so no child replies are left stranded on Instagram/Facebook!
                                 for sub_r in (c_obj.get("replies") or []):
@@ -2951,17 +2957,16 @@ def dismiss_or_clear_comment_notifications(payload: DismissCommentsPayload):
                         if mod_res.get("status") == "success" and mod_res.get("zernio_synced"):
                             zernio_deleted_any = True
                         elif not is_sub_rep:
-                            parent_delete_errors.append(str(mod_res.get("message") or "Failed to delete comment on social media platform."))
+                            err_msg = str(mod_res.get("message") or "Failed to delete comment on social media platform.")
+                            if "platform_not_supported" not in err_msg.lower() and "does not support deleting" not in err_msg.lower():
+                                parent_delete_errors.append(err_msg)
                     except Exception as del_err:
                         print(f"[⚠️ ZERNIO COMMENT DELETE WARNING]: {del_err}")
                         if not is_sub_rep:
                             parent_delete_errors.append(str(del_err))
 
                 if parent_delete_errors and not zernio_deleted_any:
-                    return {
-                        "status": "error",
-                        "message": parent_delete_errors[0]
-                    }
+                    print(f"[ℹ️ COMMENT DISMISS FALLBACK]: Proceeding with local/Cloudinary cleanup despite external API error: {parent_delete_errors[0]}")
 
         # STEP 2: Remove confirmed-deleted comments from CLOUDINARY_COMMENTS_STORE under lock and save to Cloudinary
         with COMMENTS_STORE_LOCK:

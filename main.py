@@ -17,6 +17,11 @@ _EARLY_SERVER_SOCKET = None
 _EXTRA_SERVER_SOCKETS = []
 if __name__ == "__main__":
     try:
+        from dotenv import load_dotenv as _early_load_dotenv
+        _early_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)
+    except Exception:
+        pass
+    try:
         import socket as _socket
         _default_port = 5001 if os.name == "nt" else 3000
         _early_port = int(os.getenv("PORT", _default_port))
@@ -357,12 +362,13 @@ if __name__ == "__main__":
     detected_pub = get_dynamic_base_url(prefer_public=True)
     print("\n" + "=" * 68)
     print("🚀 GLENNBOT AUTOMATIONS SERVER STARTING...")
-    print(f"   • Local Device Access URL : http://localhost:{port} (and http://localhost:5001)")
     if detected_pub and not _is_localhost_origin(detected_pub):
-        print(f"   • Public / Tunnel / Cloud : {detected_pub}")
+        print(f"   • Primary Browser URL     : {detected_pub}")
         print(f"   • Active Webhook Endpoint : {detected_pub}/api/webhooks/zernio")
         print(f"   • Active Internal API v1  : {detected_pub}/api/v1")
+        print(f"   • Local Port Forwarding   : http://localhost:{port}")
     else:
+        print(f"   • Local Device Access URL : http://localhost:{port}")
         print(f"   • Active Base API v1      : http://localhost:{port}/api/v1")
     print("=" * 68 + "\n")
     if _EARLY_SERVER_SOCKET is not None:
