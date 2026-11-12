@@ -48,8 +48,10 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import text
 
+import copy
 from core.config import *
 from core.config import (
+    AUTOMATIONS_WORKFLOW_EXECUTOR,
     _invalidate_fast_db_cache,
     _normalize_origin_url,
     _is_localhost_origin,
@@ -57,6 +59,11 @@ from core.config import (
     _detect_local_ngrok_tunnel_url,
     _extract_origin_from_request,
     _RUNTIME_URL_STATE,
+)
+from routers.spreadsheet_routes import (
+    _read_spreadsheet_cells_sync,
+    _append_spreadsheet_row_sync,
+    _update_spreadsheet_cells_sync,
 )
 from core.database import *
 from core.database import (
@@ -261,7 +268,11 @@ def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
         return AUTOMATIONS_CANVAS_STATE
 
 
-def _save_automations_canvas_state() -> bool:
+_AUTOMATIONS_CLOUD_SAVE_LOCK = threading.Lock()
+_AUTOMATIONS_CLOUD_SAVE_TIMER: Optional[threading.Timer] = None
+
+
+def _save_automations_canvas_state(sync_cloud: bool = True) -> bool:
     with AUTOMATIONS_CANVAS_LOCK:
         payload = {
             "version": 1,
@@ -276,6 +287,9 @@ def _save_automations_canvas_state() -> bool:
         except Exception:
             pass
 
+    if not sync_cloud:
+        return True
+
     if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
         try:
             cloudinary.uploader.upload(
@@ -289,6 +303,32 @@ def _save_automations_canvas_state() -> bool:
         except Exception as e:
             print(f"[AutomationsCanvas] Cloudinary save warning: {e}")
     return False
+
+
+def _schedule_debounced_automations_canvas_save(delay_seconds: float = 0.6) -> None:
+    """
+    Saves local Automations Canvas cache immediately (<0.5ms) and coalesces Cloudinary uploads
+    when 4+ concurrent workflow executions finish at the same time.
+    """
+    global _AUTOMATIONS_CLOUD_SAVE_TIMER
+    _save_automations_canvas_state(sync_cloud=False)
+
+    def _fire_cloud():
+        global _AUTOMATIONS_CLOUD_SAVE_TIMER
+        with _AUTOMATIONS_CLOUD_SAVE_LOCK:
+            _AUTOMATIONS_CLOUD_SAVE_TIMER = None
+        _save_automations_canvas_state(sync_cloud=True)
+
+    with _AUTOMATIONS_CLOUD_SAVE_LOCK:
+        if _AUTOMATIONS_CLOUD_SAVE_TIMER is not None:
+            try:
+                _AUTOMATIONS_CLOUD_SAVE_TIMER.cancel()
+            except Exception:
+                pass
+        t = threading.Timer(delay_seconds, _fire_cloud)
+        t.daemon = True
+        _AUTOMATIONS_CLOUD_SAVE_TIMER = t
+        t.start()
 
 
 def _deep_get_path(obj: Any, path_str: str) -> Any:
@@ -1041,63 +1081,9 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             "isUpdate": matched_row_num is not None
         }
 
-    # 2. Try running custom JS via `node` CLI using stdin (avoids OS argv length/quoting issues on Windows)
-    try:
-        import subprocess
-        runner_payload = {
-            "current_json": current_json,
-            "node_outputs": node_outputs,
-            "js_code": js_code
-        }
-        wrapper_js = """
-const fs = require('fs');
-const payload = JSON.parse(fs.readFileSync(0, 'utf-8'));
-const $json = payload.current_json || {};
-const $input = {
-  first: () => ({ json: $json }),
-  all: () => ([{ json: $json }]),
-  item: { json: $json }
-};
-const $ = (name) => {
-  const out = (payload.node_outputs && payload.node_outputs[name]) || $json;
-  return {
-    first: () => ({ json: out }),
-    item: { json: out }
-  };
-};
-(async () => {
-  const fn = new Function('$json', '$input', '$', `return (async () => { ${payload.js_code} })();`);
-  const res = await fn($json, $input, $);
-  if (Array.isArray(res) && res.length > 0) {
-    const first = res[0];
-    console.log(JSON.stringify(first && first.json ? first.json : first));
-  } else if (res && typeof res === 'object') {
-    console.log(JSON.stringify(res.json ? res.json : res));
-  } else {
-    console.log(JSON.stringify($json));
-  }
-})().catch(err => {
-  console.error(err.message || String(err));
-  process.exit(1);
-});
-"""
-        proc = subprocess.run(
-            ["node", "-e", wrapper_js],
-            input=json.dumps(runner_payload, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-            timeout=6
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            last_line = proc.stdout.strip().splitlines()[-1]
-            parsed_out = json.loads(last_line)
-            if isinstance(parsed_out, dict):
-                return parsed_out
-    except Exception:
-        pass
-
-    # 3. Native Python Fallback for `Build DM Thread ID & Pipe Conversation`, `Build Thread ID & Pipe Conversation`,
-    # and `Format AI Reply & Update Pipe History` when Node.js CLI is unavailable or times out (e.g., on Render Python runtime)
+    # 2. Native In-Memory Python Fast-Path (<0.4ms) for `Format AI Reply & Update Pipe History`,
+    # `Build Thread ID & Pipe Conversation`, and `Build DM Thread ID & Pipe Conversation`
+    # so 4+ simultaneous workflow executions NEVER spawn OS Node.js subprocesses!
     if "aiReplyText" in js_code or "colBWithAiReply" in js_code or "format ai reply" in node_name_low:
         pipe_node = (
             node_outputs.get("Build DM Thread ID & Pipe Conversation")
@@ -1156,7 +1142,11 @@ const $ = (name) => {
         root_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
         wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
 
-        is_dm_workflow = "dmThreadId" in js_code or "conversation_id" in js_code or "build dm thread" in node_name_low
+        is_dm_workflow = (
+            "dmThreadId" in js_code
+            or "build dm thread" in node_name_low
+            or "Read Conversations.xlsx Sheet2" in js_code
+        )
         if is_dm_workflow:
             conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
         else:
@@ -1610,6 +1600,60 @@ const $ = (name) => {
                 "authorId": str(wb.get("author_id") or ""),
             }
 
+    # 3. Fallback for arbitrary custom user-authored JS nodes via `node` CLI using stdin
+    try:
+        runner_payload = {
+            "current_json": current_json,
+            "node_outputs": node_outputs,
+            "js_code": js_code
+        }
+        wrapper_js = """
+const fs = require('fs');
+const payload = JSON.parse(fs.readFileSync(0, 'utf-8'));
+const $json = payload.current_json || {};
+const $input = {
+  first: () => ({ json: $json }),
+  all: () => ([{ json: $json }]),
+  item: { json: $json }
+};
+const $ = (name) => {
+  const out = (payload.node_outputs && payload.node_outputs[name]) || $json;
+  return {
+    first: () => ({ json: out }),
+    item: { json: out }
+  };
+};
+(async () => {
+  const fn = new Function('$json', '$input', '$', `return (async () => { ${payload.js_code} })();`);
+  const res = await fn($json, $input, $);
+  if (Array.isArray(res) && res.length > 0) {
+    const first = res[0];
+    console.log(JSON.stringify(first && first.json ? first.json : first));
+  } else if (res && typeof res === 'object') {
+    console.log(JSON.stringify(res.json ? res.json : res));
+  } else {
+    console.log(JSON.stringify($json));
+  }
+})().catch(err => {
+  console.error(err.message || String(err));
+  process.exit(1);
+});
+"""
+        proc = subprocess.run(
+            ["node", "-e", wrapper_js],
+            input=json.dumps(runner_payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=6
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            last_line = proc.stdout.strip().splitlines()[-1]
+            parsed_out = json.loads(last_line)
+            if isinstance(parsed_out, dict):
+                return parsed_out
+    except Exception:
+        pass
+
     return current_json
 
 
@@ -1848,8 +1892,13 @@ def _execute_n8n_workflow_json_natively(
                                     req_body_obj[str(bp["name"])] = _resolve_n8n_parameter_value(bp.get("value"), curr_input, node_outputs)
 
                 api_path_matched = m_api_path.group(1) if m_api_path else ""
-                if method_str == "POST" and api_path_matched.split("?")[0] in ("/api/v1/ai/ask", "/api/ai/ask"):
-                    body_dict = req_body_obj if isinstance(req_body_obj, dict) else {}
+                api_route_clean = api_path_matched.split("?")[0].rstrip("/")
+                api_query_str = api_path_matched.split("?", 1)[1] if "?" in api_path_matched else ""
+                api_query_params = dict(urllib.parse.parse_qsl(api_query_str)) if api_query_str else {}
+                body_dict = req_body_obj if isinstance(req_body_obj, dict) else {}
+
+                # --- ZERO-OVERHEAD IN-PROCESS FAST-PATHS FOR ALL INTERNAL GLENNBOT /api/v1/* NODES ---
+                if method_str == "POST" and api_route_clean in ("/api/v1/ai/ask", "/api/ai/ask"):
                     u_topic = str(
                         body_dict.get("topic")
                         or body_dict.get("prompt")
@@ -1871,12 +1920,84 @@ def _execute_n8n_workflow_json_natively(
                     if isinstance(ai_res, dict):
                         out_json = ai_res
                         step_status = "success"
-                        step_detail = f"POST {api_path_matched} -> HTTP 200 (In-Process FastPath)"
+                        step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process FastPath)"
                     else:
                         out_json = {"status": "error", "reply": ""}
                         step_status = "error"
-                        step_detail = f"POST {api_path_matched} -> Error"
+                        step_detail = f"POST {api_route_clean} -> Error"
                     node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/enqueue":
+                    out_json = enqueue_and_acquire_supabase_comment_queue_turn(
+                        body_dict or curr_input,
+                        is_test_run=is_test_run
+                    )
+                    step_status = "success"
+                    step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Turn)"
+                    node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/complete":
+                    out_json = complete_supabase_comment_queue_turn(
+                        queue_id=str(body_dict.get("queue_id") or body_dict.get("queueId") or ""),
+                        comment_id=str(body_dict.get("comment_id") or body_dict.get("commentId") or ""),
+                        ai_reply=str(body_dict.get("ai_reply") or body_dict.get("aiReplyText") or body_dict.get("reply") or ""),
+                        status=str(body_dict.get("status") or "completed"),
+                        error_message=str(body_dict.get("error_message") or "")
+                    )
+                    step_status = "success"
+                    step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Complete)"
+                    node_outputs[curr_name] = out_json
+
+                elif api_route_clean == "/api/v1/spreadsheets/read":
+                    sync_flag_str = str(api_query_params.get("sync_gdrive", body_dict.get("sync_gdrive", "true"))).strip().lower()
+                    do_sync_fast = sync_flag_str not in ("false", "0", "no")
+                    read_res = _read_spreadsheet_cells_sync(
+                        workbook_id=str(api_query_params.get("workbook_id") or body_dict.get("workbook_id") or ""),
+                        file_id=str(api_query_params.get("file_id") or body_dict.get("file_id") or ""),
+                        sheet_name=str(api_query_params.get("sheet_name") or api_query_params.get("sheet") or body_dict.get("sheet_name") or ""),
+                        cell=str(api_query_params.get("cell") or body_dict.get("cell") or ""),
+                        row=int(api_query_params.get("row") or body_dict.get("row") or 0),
+                        column=str(api_query_params.get("column") or body_dict.get("column") or ""),
+                        lookup_column=str(api_query_params.get("lookup_column") or body_dict.get("lookup_column") or ""),
+                        lookup_value=str(api_query_params.get("lookup_value") or body_dict.get("lookup_value") or ""),
+                        sync_gdrive=do_sync_fast,
+                        body=body_dict,
+                    )
+                    out_json = read_res
+                    step_status = "success" if read_res.get("status") == "success" else "error"
+                    step_detail = f"{method_str} {api_path_matched} -> HTTP {200 if step_status == 'success' else 404} (In-Process FastPath)"
+                    node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/append-row":
+                    app_res = _append_spreadsheet_row_sync(body_dict)
+                    out_json = app_res
+                    step_status = "success" if app_res.get("status") == "success" else "error"
+                    step_detail = f"POST {api_route_clean} (Row #{app_res.get('appended_row_number')}) -> HTTP {200 if step_status == 'success' else 400} (In-Process Atomic FastPath)"
+                    node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/update-cells":
+                    upd_res = _update_spreadsheet_cells_sync(body_dict)
+                    out_json = upd_res
+                    step_status = "success" if upd_res.get("status") == "success" else "error"
+                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+                    node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean in ("/api/v1/comments/reply", "/api/v1/comments/send-dm"):
+                    out_json = _execute_v1_comment_reply_or_dm_inprocess(
+                        body_dict,
+                        is_send_dm_route=api_route_clean.endswith("/send-dm"),
+                        is_test_run=is_test_run
+                    )
+                    step_status = "success" if out_json.get("status") == "success" else "error"
+                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+                    node_outputs[curr_name] = out_json
+
+                elif method_str == "POST" and api_route_clean == "/api/v1/messages/send":
+                    out_json = _execute_v1_send_message_inprocess(body_dict, is_test_run=is_test_run)
+                    step_status = "success" if out_json.get("status") == "success" else "error"
+                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+                    node_outputs[curr_name] = out_json
+
                 elif target_url.startswith("http"):
                     def _do_http_req(u: str):
                         if method_str == "GET":
@@ -1973,6 +2094,7 @@ def _execute_n8n_workflow_json_natively(
         "workflow_name": str(workflow_json.get("name") or "Automation Workflow"),
         "event_type": event_type,
         "is_test_run": is_test_run,
+        "worker_thread": threading.current_thread().name,
         "status": "error" if any_err else "success",
         "steps_count": len(execution_trace),
         "duration_ms": total_ms,
@@ -1983,9 +2105,9 @@ def _execute_n8n_workflow_json_natively(
     with AUTOMATIONS_CANVAS_LOCK:
         hist = list(AUTOMATIONS_CANVAS_STATE.get("execution_history") or [])
         hist.insert(0, summary_record)
-        AUTOMATIONS_CANVAS_STATE["execution_history"] = hist[:40]
+        AUTOMATIONS_CANVAS_STATE["execution_history"] = hist[:50]
 
-    threading.Thread(target=_save_automations_canvas_state, daemon=True).start()
+    _schedule_debounced_automations_canvas_save(delay_seconds=0.6)
 
     with INTERNAL_API_LOCK:
         logs = list(INTERNAL_API_STATE.get("recent_logs") or [])
@@ -2001,11 +2123,18 @@ def _execute_n8n_workflow_json_natively(
     return summary_record
 
 
-def _execute_active_dashboard_automations_for_event(event_type: str, data: Dict[str, Any]):
+def _execute_active_dashboard_automations_for_event(
+    event_type: str,
+    data: Dict[str, Any],
+    wait_for_completion: bool = False
+) -> List[Dict[str, Any]]:
     """
-    Automatically runs any Active workflow inside the In-Dashboard 'Automations' Modal
+    Concurrently runs all Active workflows inside the In-Dashboard 'Automations' Modal
     when a matching dashboard event (`comment.received`, `message.received`, `email.received`, etc.) occurs.
+    Each workflow execution runs in its own isolated snapshot inside `AUTOMATIONS_WORKFLOW_EXECUTOR`
+    so 4+ simultaneous webhooks execute concurrently in parallel like n8n!
     """
+    futures = []
     try:
         state = _load_automations_canvas_state(force_cloud=False)
         api_state = _load_internal_api_state(force_cloud=False)
@@ -2045,9 +2174,27 @@ def _execute_active_dashboard_automations_for_event(event_type: str, data: Dict[
                 or is_comment_wf
                 or not has_explicit_evts
             ):
-                _execute_n8n_workflow_json_natively(wf_json, event_type, data, is_test_run=False)
+                event_data_snapshot = copy.deepcopy(data) if isinstance(data, dict) else {}
+                fut = AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
+                    _execute_n8n_workflow_json_natively,
+                    wf_json,
+                    event_type,
+                    event_data_snapshot,
+                    False
+                )
+                futures.append(fut)
     except Exception as e:
         print(f"[AutomationsCanvas] Event execution warning: {e}")
+
+    if wait_for_completion and futures:
+        results = []
+        for f in futures:
+            try:
+                results.append(f.result(timeout=90))
+            except Exception as exc:
+                results.append({"status": "error", "error": str(exc)})
+        return results
+    return []
 
 
 @router.get("/api/automations/workflows")
@@ -2194,6 +2341,31 @@ async def api_execute_automations_canvas_workflow(request: Request):
         if not sim_event:
             sim_event = next((k for k, v in evts.items() if v), "comment.received")
 
+        batch_payloads = body.get("batch_payloads") if isinstance(body.get("batch_payloads"), list) else None
+        if batch_payloads:
+            clean_batch = [copy.deepcopy(p) for p in batch_payloads if isinstance(p, dict)]
+            futures = [
+                AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
+                    _execute_n8n_workflow_json_natively,
+                    patched_json,
+                    sim_event,
+                    p_item,
+                    True
+                )
+                for p_item in clean_batch
+            ]
+            batch_results = []
+            for fut in futures:
+                try:
+                    batch_results.append(fut.result(timeout=90))
+                except Exception as exc:
+                    batch_results.append({"status": "error", "error": str(exc)})
+            _schedule_debounced_automations_canvas_save()
+            primary_res = batch_results[0] if batch_results else {}
+            primary_res["batch_count"] = len(batch_results)
+            primary_res["batch_results"] = batch_results
+            return primary_res, None
+
         custom_payload = body.get("test_payload") if isinstance(body.get("test_payload"), dict) else None
         if not custom_payload:
             custom_payload = _build_dynamic_test_payload_for_workflow(sim_event, {
@@ -2218,7 +2390,7 @@ async def api_execute_automations_canvas_workflow(request: Request):
             custom_payload,
             is_test_run=True
         )
-        threading.Thread(target=_save_automations_canvas_state, daemon=True).start()
+        _schedule_debounced_automations_canvas_save()
         return exec_result, None
 
     res_obj, err_str = await run_in_threadpool(_do_exec)
@@ -2229,6 +2401,7 @@ async def api_execute_automations_canvas_workflow(request: Request):
         "status": "success",
         "message": f"Executed '{res_obj.get('workflow_name')}' ({res_obj.get('steps_count')} nodes in {res_obj.get('duration_ms')}ms)!",
         "execution": res_obj,
+        "batch_results": res_obj.get("batch_results"),
         "execution_history": AUTOMATIONS_CANVAS_STATE.get("execution_history") or []
     }
 
@@ -2696,25 +2869,7 @@ async def api_v1_get_messages(
     }
 
 
-@router.post("/api/v1/messages/send")
-async def api_v1_send_message(request: Request):
-    """
-    Sends a Direct Message reply on Facebook, Instagram, WhatsApp, or Telegram from n8n.
-    JSON Body:
-      - conversation_id (str, required): Conversation ID or thread ID
-      - account_id (str, required): Connected Social/WhatsApp/Telegram Account ID
-      - message (str, required): Message text to send
-      - recipient_id (str, optional): Participant / recipient ID
-    """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
+def _execute_v1_send_message_inprocess(body: Dict[str, Any], is_test_run: bool = False) -> Dict[str, Any]:
     conv_id = str(body.get("conversation_id") or "").strip()
     acc_id = str(body.get("account_id") or "").strip()
     msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or "")
@@ -2726,12 +2881,12 @@ async def api_v1_send_message(request: Request):
         msg_text = "Here is the file you requested:"
 
     if not conv_id or not acc_id or not msg_text:
-        return JSONResponse({
+        return {
             "status": "error",
             "message": "'conversation_id', 'account_id', and 'message' (or 'file_id') are required."
-        }, status_code=400)
+        }
 
-    if conv_id.startswith("test_") or acc_id.startswith("test_"):
+    if is_test_run or conv_id.startswith("test_") or acc_id.startswith("test_"):
         return {
             "status": "success",
             "simulated": True,
@@ -2752,7 +2907,29 @@ async def api_v1_send_message(request: Request):
         media_url=media_url_in
     )
     trigger_wh = bool(body.get("trigger_webhook", False))
-    res = await run_in_threadpool(lambda: send_direct_message_reply(payload, trigger_n8n_webhook=trigger_wh))
+    return send_direct_message_reply(payload, trigger_n8n_webhook=trigger_wh)
+
+
+@router.post("/api/v1/messages/send")
+async def api_v1_send_message(request: Request):
+    """
+    Sends a Direct Message reply on Facebook, Instagram, WhatsApp, or Telegram from n8n.
+    JSON Body:
+      - conversation_id (str, required): Conversation ID or thread ID
+      - account_id (str, required): Connected Social/WhatsApp/Telegram Account ID
+      - message (str, required): Message text to send
+      - recipient_id (str, optional): Participant / recipient ID
+    """
+    key_obj = _verify_internal_api_key(request)
+    if not key_obj:
+        return _unauthorized_v1_response()
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+
+    res = await run_in_threadpool(lambda: _execute_v1_send_message_inprocess(body, is_test_run=False))
     if res.get("status") == "success":
         return res
     return JSONResponse(res, status_code=400)
@@ -3123,6 +3300,73 @@ async def api_v1_hide_comment(request: Request):
     return JSONResponse(res, status_code=400)
 
 
+def _execute_v1_comment_reply_or_dm_inprocess(
+    body: Dict[str, Any],
+    is_send_dm_route: bool = False,
+    is_test_run: bool = False
+) -> Dict[str, Any]:
+    rec_id = str(body.get("record_id") or "").strip()
+    post_id_in = str(body.get("post_id") or "").strip()
+    comm_id = str(body.get("comment_id") or "").strip()
+    file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
+    media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
+    author_name_in = str(body.get("author_name") or body.get("commenter_name") or "").strip()
+    mention_author_in = bool(body.get("mention_author", True))
+    default_msg = "Here is the file you requested:" if (file_id_in or media_url_in) else "Thank you for your comment here is our offers"
+    msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or default_msg) or default_msg
+    send_dm = True if is_send_dm_route else bool(body.get("send_dm", False))
+
+    if not comm_id:
+        ai_topic = str(body.get("topic") or body.get("prompt") or body.get("question") or body.get("query") or "").strip()
+        if ai_topic:
+            return _execute_glennbot_ask_ai_core(
+                user_topic=ai_topic,
+                tone_str=str(body.get("tone") or "Polite, friendly and professional").strip(),
+                lang_str=str(body.get("language") or "Taglish").strip(),
+                post_type_str="comment_reply",
+                platforms_list=body.get("platforms") if isinstance(body.get("platforms"), list) else ["facebook", "instagram"],
+                force_reply_mode=True,
+                use_search=bool(body.get("use_search", True))
+            )
+        return {
+            "status": "error",
+            "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
+        }
+
+    if is_test_run or comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
+        return {
+            "status": "success",
+            "simulated": True,
+            "action": "private_dm_to_commenter" if send_dm else "public_comment_reply",
+            "comment_id": comm_id,
+            "record_id": rec_id or "test_record_fb_01",
+            "file_id": file_id_in,
+            "media_url": media_url_in,
+            "sent_message": msg_text,
+            "message": f"Test Verified! In live production, GlennBot will automatically send {'Private DM' if send_dm else 'Public Reply'}: '{msg_text}'{' with Vault File (' + file_id_in + ')' if file_id_in else ''} to commenter ({comm_id})."
+        }
+
+    resolved_rid = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
+    if not resolved_rid:
+        return {
+            "status": "error",
+            "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
+        }
+    if send_dm:
+        return send_dm_to_commenter(CommentSendDmPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
+    return reply_to_comment(
+        CommentReplyPayload(
+            record_id=resolved_rid,
+            comment_id=comm_id,
+            message=msg_text,
+            file_id=file_id_in,
+            media_url=media_url_in,
+            author_name=author_name_in,
+            mention_author=mention_author_in
+        )
+    )
+
+
 @router.post("/api/v1/comments/reply")
 @router.post("/api/v1/comments/send-dm")
 async def api_v1_reply_to_comment(request: Request):
@@ -3144,77 +3388,10 @@ async def api_v1_reply_to_comment(request: Request):
     except Exception:
         return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
 
-    rec_id = str(body.get("record_id") or "").strip()
-    post_id_in = str(body.get("post_id") or "").strip()
-    comm_id = str(body.get("comment_id") or "").strip()
-    file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
-    media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
-    author_name_in = str(body.get("author_name") or body.get("commenter_name") or "").strip()
-    mention_author_in = bool(body.get("mention_author", True))
-    default_msg = "Here is the file you requested:" if (file_id_in or media_url_in) else "Thank you for your comment here is our offers"
-    msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or default_msg) or default_msg
     is_send_dm_route = str(request.url.path or "").endswith("/send-dm")
-    send_dm = True if is_send_dm_route else bool(body.get("send_dm", False))
-
-    if not comm_id:
-        ai_topic = str(body.get("topic") or body.get("prompt") or body.get("question") or body.get("query") or "").strip()
-        if ai_topic:
-            return await run_in_threadpool(
-                lambda: _execute_glennbot_ask_ai_core(
-                    user_topic=ai_topic,
-                    tone_str=str(body.get("tone") or "Polite, friendly and professional").strip(),
-                    lang_str=str(body.get("language") or "Taglish").strip(),
-                    post_type_str="comment_reply",
-                    platforms_list=body.get("platforms") if isinstance(body.get("platforms"), list) else ["facebook", "instagram"],
-                    force_reply_mode=True,
-                    use_search=bool(body.get("use_search", True))
-                )
-            )
-        return JSONResponse({
-            "status": "error",
-            "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
-        }, status_code=400)
-
-    # Gracefully handle simulated n8n test comments so "Test step" in n8n returns 200 OK
-    if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "action": "private_dm_to_commenter" if send_dm else "public_comment_reply",
-            "comment_id": comm_id,
-            "record_id": rec_id or "test_record_fb_01",
-            "file_id": file_id_in,
-            "media_url": media_url_in,
-            "sent_message": msg_text,
-            "message": f"Test Verified! In live production, GlennBot will automatically send {'Private DM' if send_dm else 'Public Reply'}: '{msg_text}'{' with Vault File (' + file_id_in + ')' if file_id_in else ''} to commenter ({comm_id})."
-        }
-
-    # Auto-resolve record_id and execute reply / DM inside worker threadpool so event loop never blocks!
-    def _execute_v1_comment_reply_or_dm():
-        resolved_rid = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
-        if not resolved_rid:
-            return None
-        if send_dm:
-            return send_dm_to_commenter(CommentSendDmPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
-        return reply_to_comment(
-            CommentReplyPayload(
-                record_id=resolved_rid,
-                comment_id=comm_id,
-                message=msg_text,
-                file_id=file_id_in,
-                media_url=media_url_in,
-                author_name=author_name_in,
-                mention_author=mention_author_in
-            )
-        )
-
-    res = await run_in_threadpool(_execute_v1_comment_reply_or_dm)
-    if res is None:
-        return JSONResponse({
-            "status": "error",
-            "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
-        }, status_code=400)
-
+    res = await run_in_threadpool(
+        lambda: _execute_v1_comment_reply_or_dm_inprocess(body, is_send_dm_route=is_send_dm_route, is_test_run=False)
+    )
     if res.get("status") == "success":
         return res
     return JSONResponse(res, status_code=400)

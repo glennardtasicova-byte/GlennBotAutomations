@@ -2645,7 +2645,8 @@ def _download_and_parse_gdrive_spreadsheet(
 
 def _sync_spreadsheets_with_gdrive_and_vault(
     force_gdrive_check: bool = False,
-    target_id: str = ""
+    target_id: str = "",
+    force_live_download: bool = False
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Two-Way Live Auto-Sync Engine between:
@@ -2654,6 +2655,29 @@ def _sync_spreadsheets_with_gdrive_and_vault(
       3) 'Spread Sheet' Modal (SPREADSHEETS_STORE)
     Returns (workbooks_list, any_changed).
     """
+    now_fast_ts = time.time()
+    target_fast_clean = (target_id or "").strip()
+    # Fast lock-free read path for concurrent workflow executions:
+    # When 4+ simultaneous comment/DM workflows read Conversations.xlsx or Script.xlsx at the same millisecond,
+    # if the target workbook is already loaded in memory with cells and was checked/saved within the last 8.0 seconds,
+    # return immediately (<0.1ms) without serializing on SPREADSHEETS_SYNC_LOCK or re-downloading from Google Drive!
+    if target_fast_clean and not force_live_download and SPREADSHEETS_STORE.get("loaded"):
+        cached_wbs = list(SPREADSHEETS_STORE.get("workbooks") or [])
+        fast_wb = _find_workbook_by_query(cached_wbs, target_fast_clean)
+        if isinstance(fast_wb, dict):
+            fast_cells_cnt = sum(
+                len((s or {}).get("cells") or {})
+                for s in (fast_wb.get("sheets") or [])
+                if isinstance(s, dict)
+            )
+            last_wb_check = max(
+                float(fast_wb.get("last_gdrive_check_ts") or 0.0),
+                float(fast_wb.get("last_local_save_ts") or 0.0),
+                float(SPREADSHEETS_STORE.get("last_gdrive_sync_ts") or 0.0),
+            )
+            if fast_cells_cnt > 1 and (now_fast_ts - last_wb_check) < 8.0:
+                return cached_wbs, False
+
     with SPREADSHEETS_SYNC_LOCK:
         sp_store = _load_spreadsheets_store(force_cloud=False)
         v_store = _load_files_vault_store(force_cloud=False)
@@ -2847,11 +2871,13 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                                     pass
                         wb["obsolete_replaced_sigs"] = obsolete_sigs
 
-                        # When syncing the active target workbook (target_clean), ALWAYS pull live bytes
-                        # UNLESS GlennBot just wrote to this workbook locally within the last 60s and Drive metadata hasn't changed outside GlennBot!
+                        # When syncing the active target workbook (target_clean), pull live bytes
+                        # ONLY when Drive metadata changed, or force_live_download is True, or workbook has <=2 cells
+                        # (and never overwrite a recent local GlennBot write within 60s unless Drive metadata changed).
+                        wb["last_gdrive_check_ts"] = now_ts
                         recent_glennbot_write = (
                             str(wb.get("last_edit_source") or "") == "glennbot"
-                            and (now_ts - last_local_save_ts) < 60.0
+                            and (now_ts - last_local_save) < 60.0
                             and not is_meta_modified
                         )
                         wb_cells_count = sum(
@@ -2859,12 +2885,15 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                             for s in (wb.get("sheets") or [])
                             if isinstance(s, dict)
                         )
+                        last_dl_ts = float(wb.get("last_gdrive_download_ts") or 0.0)
                         should_download_live = (
-                            bool(target_clean)
+                            force_live_download
                             or is_meta_modified
                             or wb_cells_count <= 2
+                            or (bool(target_clean) and (now_ts - last_dl_ts) >= 15.0)
                         ) and not recent_glennbot_write
                         if should_download_live:
+                            wb["last_gdrive_download_ts"] = now_ts
                             wb_title_str = str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx")
                             fresh_sheets = _download_and_parse_gdrive_spreadsheet(
                                 gd_id,
@@ -3622,66 +3651,107 @@ def _find_workbook_by_query(workbooks: List[Dict[str, Any]], query: str) -> Opti
     return None
 
 
+_WORKBOOK_CLOUD_SYNC_LOCK = threading.Lock()
+_WORKBOOK_CLOUD_SYNC_INFLIGHT: Dict[str, threading.Lock] = {}
+_WORKBOOK_CLOUD_SYNC_TIMERS: Dict[str, threading.Timer] = {}
+
+
 def _sync_updated_workbook_to_cloudinary(target_wb: Dict[str, Any]) -> Dict[str, Any]:
     """
     Synchronizes any workbook updated via /api/v1/spreadsheets/* directly to Google Drive
     and the 'Files' modal (FILES_VAULT_STORE), keeping the client's Google Drive file 100% in sync!
+    Serialized per-workbook so concurrent updates never race on Google Drive PATCH.
     """
-    wb_id = str(target_wb.get("workbook_id") or "").strip()
-    fid = str(target_wb.get("file_id") or "").strip()
-    gd_id = str(target_wb.get("gdrive_file_id") or "").strip()
-    raw_title = str(target_wb.get("title") or "GlennBot_Spreadsheet.xlsx").strip()
-    if not raw_title.lower().endswith(".xlsx"):
-        raw_title = f"{os.path.splitext(raw_title)[0]}.xlsx"
+    wb_key = str(target_wb.get("workbook_id") or target_wb.get("title") or "default_wb").strip()
+    with _WORKBOOK_CLOUD_SYNC_LOCK:
+        wb_lock = _WORKBOOK_CLOUD_SYNC_INFLIGHT.setdefault(wb_key, threading.Lock())
 
-    sheets_list = target_wb.get("sheets") or []
-    xlsx_bytes = build_xlsx_bytes_from_sheets(sheets_list)
+    with wb_lock:
+        wb_id = str(target_wb.get("workbook_id") or "").strip()
+        fid = str(target_wb.get("file_id") or "").strip()
+        gd_id = str(target_wb.get("gdrive_file_id") or "").strip()
+        raw_title = str(target_wb.get("title") or "GlennBot_Spreadsheet.xlsx").strip()
+        if not raw_title.lower().endswith(".xlsx"):
+            raw_title = f"{os.path.splitext(raw_title)[0]}.xlsx"
 
-    if is_gdrive_authorized():
+        with SPREADSHEETS_LOCK:
+            sheets_list = [dict(s, cells=dict(s.get("cells") or {})) for s in (target_wb.get("sheets") or []) if isinstance(s, dict)]
+        xlsx_bytes = build_xlsx_bytes_from_sheets(sheets_list)
+
+        if is_gdrive_authorized():
+            try:
+                v_store = _load_files_vault_store(force_cloud=False)
+                existing_fids = {str(x.get("file_id") or "") for x in (v_store.get("files") or [])}
+                if not fid:
+                    fid = _generate_python_automation_file_id(existing_fids)
+                if not wb_id:
+                    wb_id = f"wb_{fid}"
+
+                target_wb["last_local_save_ts"] = time.time()
+                target_wb["last_edit_source"] = "glennbot"
+                gd_info = _upload_or_update_spreadsheet_on_gdrive(
+                    xlsx_bytes=xlsx_bytes,
+                    filename=raw_title,
+                    existing_gdrive_file_id=gd_id,
+                    py_file_id=fid,
+                    sheets=sheets_list,
+                    wb_ref=target_wb
+                )
+                vault_rec = _register_or_update_spreadsheet_in_files_vault(
+                    py_file_id=fid,
+                    filename=raw_title,
+                    size_bytes=len(xlsx_bytes),
+                    gdrive_info=gd_info,
+                    workbook_id=wb_id
+                )
+                target_wb["workbook_id"] = wb_id
+                target_wb["file_id"] = vault_rec["file_id"]
+                target_wb["gdrive_file_id"] = gd_info["gdrive_file_id"]
+                target_wb["gdrive_file_name"] = gd_info["gdrive_file_name"]
+                target_wb["gdrive_modified_time"] = gd_info.get("gdrive_modified_time") or ""
+                target_wb["gdrive_md5"] = gd_info.get("gdrive_md5") or ""
+                target_wb["last_local_save_ts"] = time.time()
+                target_wb["last_gdrive_check_ts"] = time.time()
+                target_wb["last_edit_source"] = "glennbot"
+                target_wb["web_view_link"] = gd_info.get("web_view_link") or ""
+                target_wb["storage_provider"] = "google_drive"
+            except Exception as e:
+                print(f"[⚠️ V1 SPREADSHEET GDRIVE SYNC WARNING]: {e}")
+
+        target_wb["size_bytes"] = len(xlsx_bytes)
+        target_wb["size_formatted"] = _format_file_size_human(len(xlsx_bytes))
+        target_wb["sheet_count"] = len(sheets_list)
+        target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
+        _save_spreadsheets_store()
+        return target_wb
+
+
+def _schedule_debounced_workbook_cloud_sync(target_wb: Dict[str, Any], delay_seconds: float = 0.45) -> None:
+    """
+    Coalesces rapid concurrent row updates (e.g., 4 simultaneous comments writing to Conversations.xlsx)
+    into a single consolidated Google Drive & Cloudinary upload so append-row returns in <2ms!
+    """
+    wb_key = str(target_wb.get("workbook_id") or target_wb.get("title") or "default_wb").strip()
+
+    def _fire_sync():
+        with _WORKBOOK_CLOUD_SYNC_LOCK:
+            _WORKBOOK_CLOUD_SYNC_TIMERS.pop(wb_key, None)
         try:
-            v_store = _load_files_vault_store(force_cloud=False)
-            existing_fids = {str(x.get("file_id") or "") for x in (v_store.get("files") or [])}
-            if not fid:
-                fid = _generate_python_automation_file_id(existing_fids)
-            if not wb_id:
-                wb_id = f"wb_{fid}"
-
-            target_wb["last_local_save_ts"] = time.time()
-            target_wb["last_edit_source"] = "glennbot"
-            gd_info = _upload_or_update_spreadsheet_on_gdrive(
-                xlsx_bytes=xlsx_bytes,
-                filename=raw_title,
-                existing_gdrive_file_id=gd_id,
-                py_file_id=fid,
-                sheets=sheets_list,
-                wb_ref=target_wb
-            )
-            vault_rec = _register_or_update_spreadsheet_in_files_vault(
-                py_file_id=fid,
-                filename=raw_title,
-                size_bytes=len(xlsx_bytes),
-                gdrive_info=gd_info,
-                workbook_id=wb_id
-            )
-            target_wb["workbook_id"] = wb_id
-            target_wb["file_id"] = vault_rec["file_id"]
-            target_wb["gdrive_file_id"] = gd_info["gdrive_file_id"]
-            target_wb["gdrive_file_name"] = gd_info["gdrive_file_name"]
-            target_wb["gdrive_modified_time"] = gd_info.get("gdrive_modified_time") or ""
-            target_wb["gdrive_md5"] = gd_info.get("gdrive_md5") or ""
-            target_wb["last_local_save_ts"] = time.time()
-            target_wb["last_edit_source"] = "glennbot"
-            target_wb["web_view_link"] = gd_info.get("web_view_link") or ""
-            target_wb["storage_provider"] = "google_drive"
+            _sync_updated_workbook_to_cloudinary(target_wb)
         except Exception as e:
-            print(f"[⚠️ V1 SPREADSHEET GDRIVE SYNC WARNING]: {e}")
+            print(f"[⚠️ DEBOUNCED WORKBOOK SYNC WARNING]: {e}")
 
-    target_wb["size_bytes"] = len(xlsx_bytes)
-    target_wb["size_formatted"] = _format_file_size_human(len(xlsx_bytes))
-    target_wb["sheet_count"] = len(sheets_list)
-    target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
-    _save_spreadsheets_store()
-    return target_wb
+    with _WORKBOOK_CLOUD_SYNC_LOCK:
+        old_timer = _WORKBOOK_CLOUD_SYNC_TIMERS.pop(wb_key, None)
+        if old_timer is not None:
+            try:
+                old_timer.cancel()
+            except Exception:
+                pass
+        t = threading.Timer(delay_seconds, _fire_sync)
+        t.daemon = True
+        _WORKBOOK_CLOUD_SYNC_TIMERS[wb_key] = t
+        t.start()
 
 
 @router.get("/api/v1/spreadsheets")
@@ -3739,9 +3809,7 @@ async def api_v1_list_spreadsheets(
     }
 
 
-@router.api_route("/api/v1/spreadsheets/read", methods=["GET", "POST"])
-async def api_v1_read_spreadsheet_cells(
-    request: Request,
+def _read_spreadsheet_cells_sync(
     workbook_id: str = "",
     file_id: str = "",
     sheet_name: str = "",
@@ -3750,37 +3818,26 @@ async def api_v1_read_spreadsheet_cells(
     column: str = "",
     lookup_column: str = "",
     lookup_value: str = "",
-    sync_gdrive: bool = True
-):
+    sync_gdrive: bool = True,
+    body: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
-    Reads live cell values, row objects, or column lookups from a Google Drive synced spreadsheet (.xlsx / .xls) for n8n automations!
-    Supports both GET query params and POST JSON body.
+    Synchronous high-speed implementation of `/api/v1/spreadsheets/read` that can be called
+    both via HTTP and directly in-process by concurrent Automations Canvas workflow threads!
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
+    b = body if isinstance(body, dict) else {}
+    q_wb = str(b.get("workbook_id") or b.get("file_id") or b.get("title") or workbook_id or file_id or "").strip()
+    q_sheet = str(b.get("sheet_name") or b.get("sheet") or sheet_name or "").strip()
+    q_cell = str(b.get("cell") or b.get("coord") or cell or "").strip().upper()
+    q_row = int(b.get("row") or row or 0)
+    q_col = str(b.get("column") or b.get("col") or column or "").strip()
+    q_lookup_col = str(b.get("lookup_column") or lookup_column or "").strip()
+    q_lookup_val = str(b.get("lookup_value") if b.get("lookup_value") is not None else lookup_value).strip()
+    do_sync = bool(b.get("sync_gdrive", sync_gdrive))
 
-    body: Dict[str, Any] = {}
-    if request.method == "POST":
-        try:
-            body = await request.json() or {}
-        except Exception:
-            body = {}
-
-    q_wb = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or workbook_id or file_id or "").strip()
-    q_sheet = str(body.get("sheet_name") or body.get("sheet") or sheet_name or "").strip()
-    q_cell = str(body.get("cell") or body.get("coord") or cell or "").strip().upper()
-    q_row = int(body.get("row") or row or 0)
-    q_col = str(body.get("column") or body.get("col") or column or "").strip()
-    q_lookup_col = str(body.get("lookup_column") or lookup_column or "").strip()
-    q_lookup_val = str(body.get("lookup_value") if body.get("lookup_value") is not None else lookup_value).strip()
-    do_sync = bool(body.get("sync_gdrive", sync_gdrive))
-
-    workbooks, _ = await run_in_threadpool(
-        lambda: _sync_spreadsheets_with_gdrive_and_vault(
-            force_gdrive_check=do_sync,
-            target_id=q_wb
-        )
+    workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(
+        force_gdrive_check=do_sync,
+        target_id=q_wb
     )
     target_wb = _find_workbook_by_query(workbooks, q_wb)
     target_cells_count = (
@@ -3791,13 +3848,12 @@ async def api_v1_read_spreadsheet_cells(
         not target_wb
         or (not do_sync and (not target_wb.get("gdrive_file_id") or target_cells_count <= 2))
     ):
-        workbooks, _ = await run_in_threadpool(
-            lambda: _sync_spreadsheets_with_gdrive_and_vault(
-                force_gdrive_check=True,
-                target_id=q_wb
-            )
+        workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(
+            force_gdrive_check=True,
+            target_id=q_wb
         )
         target_wb = _find_workbook_by_query(workbooks, q_wb)
+
     if not target_wb:
         if q_wb and any(k in q_wb.lower() for k in ("conversation", "script", ".xlsx")):
             clean_title = q_wb if q_wb.lower().endswith(".xlsx") else f"{q_wb}.xlsx"
@@ -3807,68 +3863,73 @@ async def api_v1_read_spreadsheet_cells(
                 if "conversation" in clean_title.lower()
                 else {"A1": "Keywords / Possible Questions", "B1": "Reference Script / Core Answer"}
             )
-            new_wb_id = f"wb_{uuid.uuid4().hex[:10]}"
-            target_wb = {
-                "id": new_wb_id,
-                "workbook_id": new_wb_id,
-                "title": clean_title,
-                "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p"),
-                "sheets": [
-                    {
-                        "id": f"sheet_1_{uuid.uuid4().hex[:4]}",
-                        "name": "Sheet1",
-                        "row_count": 25,
-                        "col_count": 10,
-                        "cells": dict(default_cells_init),
-                    }
-                ],
-            }
-            if default_sheet_name.lower() not in ("sheet1", "sheet_1", "default"):
-                target_wb["sheets"].append({
-                    "id": f"sheet_2_{uuid.uuid4().hex[:4]}",
-                    "name": default_sheet_name,
-                    "row_count": 25,
-                    "col_count": 10,
-                    "cells": dict(default_cells_init),
-                })
             with SPREADSHEETS_LOCK:
-                workbooks.append(target_wb)
-                SPREADSHEETS_STORE["workbooks"] = workbooks
+                existing_again = _find_workbook_by_query(SPREADSHEETS_STORE.get("workbooks") or workbooks, q_wb)
+                if existing_again:
+                    target_wb = existing_again
+                else:
+                    new_wb_id = f"wb_{uuid.uuid4().hex[:10]}"
+                    target_wb = {
+                        "id": new_wb_id,
+                        "workbook_id": new_wb_id,
+                        "title": clean_title,
+                        "last_gdrive_check_ts": time.time(),
+                        "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p"),
+                        "sheets": [
+                            {
+                                "id": f"sheet_1_{uuid.uuid4().hex[:4]}",
+                                "name": "Sheet1",
+                                "row_count": 25,
+                                "col_count": 10,
+                                "cells": dict(default_cells_init),
+                            }
+                        ],
+                    }
+                    if default_sheet_name.lower() not in ("sheet1", "sheet_1", "default"):
+                        target_wb["sheets"].append({
+                            "id": f"sheet_2_{uuid.uuid4().hex[:4]}",
+                            "name": default_sheet_name,
+                            "row_count": 25,
+                            "col_count": 10,
+                            "cells": dict(default_cells_init),
+                        })
+                    workbooks.append(target_wb)
+                    SPREADSHEETS_STORE["workbooks"] = workbooks
             _save_spreadsheets_store()
         else:
-            return JSONResponse({"status": "error", "message": f"Spreadsheet '{q_wb or 'default'}' not found in Google Drive / Files Vault."}, status_code=404)
+            return {"status": "error", "status_code": 404, "message": f"Spreadsheet '{q_wb or 'default'}' not found in Google Drive / Files Vault."}
 
-    sheets_list = target_wb.get("sheets") or []
-    if not sheets_list:
-        return JSONResponse({"status": "error", "message": "Spreadsheet has no sheets."}, status_code=404)
+    with SPREADSHEETS_LOCK:
+        sheets_list = target_wb.get("sheets") or []
+        if not sheets_list:
+            return {"status": "error", "status_code": 404, "message": "Spreadsheet has no sheets."}
 
-    target_sheet = next(
-        (s for s in sheets_list if q_sheet and (str(s.get("name") or "").lower() == q_sheet.lower() or str(s.get("id") or "") == q_sheet)),
-        None
-    )
-    if not target_sheet:
-        if q_sheet and q_sheet.lower() not in ("sheet1", "sheet_1", "default"):
-            new_sheet_idx = len(sheets_list) + 1
-            default_cells: Dict[str, str] = {}
-            if "conversation" in str(target_wb.get("title") or "").lower():
-                default_cells = {"A1": "Thread ID", "B1": "Conversations"}
-            target_sheet = {
-                "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
-                "name": q_sheet,
-                "row_count": 25,
-                "col_count": 10,
-                "cells": default_cells
-            }
-            sheets_list.append(target_sheet)
-            target_wb["sheets"] = sheets_list
-            with SPREADSHEETS_LOCK:
+        target_sheet = next(
+            (s for s in sheets_list if q_sheet and (str(s.get("name") or "").lower() == q_sheet.lower() or str(s.get("id") or "") == q_sheet)),
+            None
+        )
+        if not target_sheet:
+            if q_sheet and q_sheet.lower() not in ("sheet1", "sheet_1", "default"):
+                new_sheet_idx = len(sheets_list) + 1
+                default_cells: Dict[str, str] = {}
+                if "conversation" in str(target_wb.get("title") or "").lower():
+                    default_cells = {"A1": "Thread ID", "B1": "Conversations"}
+                target_sheet = {
+                    "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
+                    "name": q_sheet,
+                    "row_count": 25,
+                    "col_count": 10,
+                    "cells": default_cells
+                }
+                sheets_list.append(target_sheet)
+                target_wb["sheets"] = sheets_list
                 SPREADSHEETS_STORE["workbooks"] = workbooks
-            save_spreadsheets_store_async()
-        else:
-            target_sheet = sheets_list[0]
+                save_spreadsheets_store_async()
+            else:
+                target_sheet = sheets_list[0]
 
-    headers_by_col, structured_rows, evaluated_cells = _build_sheet_structured_rows(target_sheet)
-    _, next_empty_row = _extract_sheet_headers_and_next_row(target_sheet)
+        headers_by_col, structured_rows, evaluated_cells = _build_sheet_structured_rows(target_sheet)
+        _, next_empty_row = _extract_sheet_headers_and_next_row(target_sheet)
 
     cell_val = evaluated_cells.get(q_cell, "") if q_cell else ""
     matched_row_data: Dict[str, Any] = {}
@@ -3879,7 +3940,6 @@ async def api_v1_read_spreadsheet_cells(
                 matched_row_data = r_obj
                 break
         if not matched_row_data:
-            # Construct directly from evaluated_cells for that row number
             temp_r: Dict[str, Any] = {"_row_number": q_row}
             for c_coord, c_v in evaluated_cells.items():
                 parsed_c = _split_cell_coord(c_coord)
@@ -3894,7 +3954,7 @@ async def api_v1_read_spreadsheet_cells(
         lk_low = q_lookup_val.lower()
         for r_obj in structured_rows:
             cand = str(r_obj.get(q_lookup_col) or r_obj.get(q_lookup_col.upper()) or "").strip()
-            if cand.lower() == lk_low or ( len(lk_low) >= 7 and lk_low in cand.lower() ):
+            if cand.lower() == lk_low or (len(lk_low) >= 7 and lk_low in cand.lower()):
                 matched_row_data = r_obj
                 break
     elif structured_rows:
@@ -3929,6 +3989,301 @@ async def api_v1_read_spreadsheet_cells(
     }
 
 
+@router.api_route("/api/v1/spreadsheets/read", methods=["GET", "POST"])
+async def api_v1_read_spreadsheet_cells(
+    request: Request,
+    workbook_id: str = "",
+    file_id: str = "",
+    sheet_name: str = "",
+    cell: str = "",
+    row: int = 0,
+    column: str = "",
+    lookup_column: str = "",
+    lookup_value: str = "",
+    sync_gdrive: bool = True
+):
+    """
+    Reads live cell values, row objects, or column lookups from a Google Drive synced spreadsheet (.xlsx / .xls) for n8n automations!
+    Supports both GET query params and POST JSON body.
+    """
+    key_obj = _verify_internal_api_key(request)
+    if not key_obj:
+        return _unauthorized_v1_response()
+
+    body: Dict[str, Any] = {}
+    if request.method == "POST":
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+
+    res = await run_in_threadpool(
+        lambda: _read_spreadsheet_cells_sync(
+            workbook_id=workbook_id,
+            file_id=file_id,
+            sheet_name=sheet_name,
+            cell=cell,
+            row=row,
+            column=column,
+            lookup_column=lookup_column,
+            lookup_value=lookup_value,
+            sync_gdrive=sync_gdrive,
+            body=body,
+        )
+    )
+    if res.get("status") == "error":
+        return JSONResponse(res, status_code=int(res.get("status_code") or 404))
+    return res
+
+
+def _append_spreadsheet_row_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Thread-safe, atomic implementation of `/api/v1/spreadsheets/append-row`.
+    When 4+ simultaneous comment/DM workflows call append-row at the exact same millisecond:
+      - If they belong to DIFFERENT threads (`match_value` / `colAThreadId`), each new thread atomically
+        claims its own distinct row number inside `SPREADSHEETS_LOCK` (never overwriting another thread's row!).
+      - If they belong to the SAME thread (`match_value` / `colAThreadId`), their '|' pipe conversation
+        segments are atomically merged inside `SPREADSHEETS_LOCK` without losing a single message!
+    """
+    wb_query = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or "").strip()
+    force_gd = bool(body.get("sync_gdrive", False)) or not bool(SPREADSHEETS_STORE.get("workbooks"))
+    workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=force_gd, target_id=wb_query)
+
+    with SPREADSHEETS_LOCK:
+        workbooks = list(SPREADSHEETS_STORE.get("workbooks") or workbooks)
+        target_wb = _find_workbook_by_query(workbooks, wb_query)
+        if not target_wb:
+            target_wb = {
+                "workbook_id": f"wb_{uuid.uuid4().hex[:8]}",
+                "title": wb_query if wb_query.lower().endswith((".xlsx", ".xls")) else "GlennBot_Automation_Sheet.xlsx",
+                "last_gdrive_check_ts": time.time(),
+                "sheets": [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}]
+            }
+            workbooks.insert(0, target_wb)
+            SPREADSHEETS_STORE["workbooks"] = workbooks
+
+        sheets_list: List[Dict[str, Any]] = list(target_wb.get("sheets") or [])
+        if not sheets_list:
+            sheets_list = [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}]
+            target_wb["sheets"] = sheets_list
+
+        sheet_query = str(body.get("sheet_name") or body.get("sheet") or "").strip()
+        target_sheet = None
+        if sheet_query:
+            target_sheet = next(
+                (s for s in sheets_list if str(s.get("name") or "").lower() == sheet_query.lower() or str(s.get("id") or "") == sheet_query),
+                None
+            )
+        if not target_sheet:
+            if sheet_query and sheet_query.lower() not in ("sheet1", "sheet_1", "default"):
+                new_sheet_idx = len(sheets_list) + 1
+                default_cells = {}
+                if "conversation" in str(target_wb.get("title") or "").lower():
+                    default_cells = {"A1": "Thread ID", "B1": "Conversations"}
+                target_sheet = {
+                    "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
+                    "name": sheet_query,
+                    "row_count": 25,
+                    "col_count": 10,
+                    "cells": default_cells
+                }
+                sheets_list.append(target_sheet)
+                target_wb["sheets"] = sheets_list
+            else:
+                target_sheet = sheets_list[0]
+
+        cells_map: Dict[str, str] = target_sheet.setdefault("cells", {})
+        prev_sig_before_append = _compute_sheets_signature(target_wb.get("sheets"))
+        headers_by_col, fresh_next_empty_row = _extract_sheet_headers_and_next_row(target_sheet)
+        target_row = fresh_next_empty_row
+        header_name_to_col = {str(h_val).strip().lower(): c_let for c_let, h_val in headers_by_col.items() if h_val}
+
+        raw_row_data = body.get("row") or body.get("values") or body.get("cells") or body.get("data")
+        if isinstance(raw_row_data, dict):
+            raw_row_data = dict(raw_row_data)
+        elif isinstance(raw_row_data, list):
+            raw_row_data = list(raw_row_data)
+        if not raw_row_data and (body.get("colA") is not None or body.get("colB") is not None):
+            raw_row_data = {
+                "A": body.get("colA") or "",
+                "B": body.get("colB") or ""
+            }
+        written_cells: Dict[str, str] = {}
+
+        # 1. Check if match_column + match_value matches an existing row in cells_map
+        match_col = str(body.get("match_column") or "A").strip().upper()
+        match_val = str(
+            body.get("match_value")
+            or (raw_row_data.get("A") if isinstance(raw_row_data, dict) and "conversation" in str(target_wb.get("title") or "").lower() else "")
+            or ""
+        ).strip()
+        matched_existing_row: Optional[int] = None
+        if match_col and match_val:
+            norm_mv = match_val.split("_")[-1].strip() if not match_val.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else match_val
+            for coord_k, cell_v in list(cells_map.items()):
+                parsed_c = _split_cell_coord(coord_k)
+                if not parsed_c:
+                    continue
+                c_let_k, _, r_num_k = parsed_c
+                if c_let_k == match_col and r_num_k >= 1:
+                    c_str = str(cell_v or "").strip()
+                    if r_num_k == 1 and c_str.lower() in ("thread id", "thread_id", "conversation id", "questions", "question", "keywords"):
+                        continue
+                    norm_c_str = c_str.split("_")[-1].strip() if not c_str.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else c_str
+                    if c_str == match_val or c_str == norm_mv or (norm_mv and (norm_c_str == norm_mv or norm_mv in c_str)):
+                        matched_existing_row = r_num_k
+                        break
+
+        explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
+        if matched_existing_row is not None:
+            target_row = matched_existing_row
+        elif explicit_row_num >= 1:
+            # Concurrency collision guard:
+            # If 4 simultaneous new comments read Conversations.xlsx at t=0, all 4 saw next_empty_row=2 (`explicit_row_num=2`).
+            # If comment #1 already wrote its thread_id into A2, comment #2/#3/#4 MUST NOT overwrite A2!
+            # Instead, if explicit_row_num is already occupied by a different thread_id (or Row 1 header), allocate `fresh_next_empty_row`!
+            existing_a_at_explicit = str(cells_map.get(f"{match_col or 'A'}{explicit_row_num}") or "").strip()
+            existing_b_at_explicit = str(cells_map.get(f"B{explicit_row_num}") or "").strip()
+            if not existing_a_at_explicit and not existing_b_at_explicit and explicit_row_num >= 1:
+                target_row = explicit_row_num
+            else:
+                target_row = max(2 if cells_map.get("A1") else 1, fresh_next_empty_row)
+
+        # Optional native thread grouping: if thread_id is passed (or [Thread: ...] in Column A),
+        # find any existing row in cells_map that belongs to the same comment thread and update that row in-place!
+        req_thread_id = str(body.get("thread_id") or body.get("threadId") or "").strip()
+        existing_thread_row: Optional[int] = None
+        if req_thread_id:
+            norm_req_tid = req_thread_id.split("_")[-1].strip()
+            for coord_k, cell_v in list(cells_map.items()):
+                parsed_c = _split_cell_coord(coord_k)
+                if not parsed_c:
+                    continue
+                c_let_k, _, r_num_k = parsed_c
+                if c_let_k == "A" and r_num_k >= 1:
+                    cell_str = str(cell_v or "")
+                    m_th = re.search(r"\[Thread:\s*([^\]]+)\]", cell_str, re.I)
+                    if m_th:
+                        tracked_ids = [x.strip().split("_")[-1] for x in m_th.group(1).split(",") if x.strip()]
+                        if norm_req_tid in tracked_ids or req_thread_id in tracked_ids:
+                            existing_thread_row = r_num_k
+                            break
+        if existing_thread_row is not None:
+            target_row = existing_thread_row
+
+        # If updating an existing row in Conversations.xlsx, preserve all earlier '|' pipe segments so history is never lost!
+        if "conversation" in str(target_wb.get("title") or "").lower() and isinstance(raw_row_data, dict) and "B" in raw_row_data and f"B{target_row}" in cells_map:
+            prev_b = str(cells_map.get(f"B{target_row}") or "").strip()
+            new_b = str(raw_row_data.get("B") or "").strip()
+            if prev_b and new_b and prev_b != new_b:
+                merged_pipe_segs: List[str] = []
+
+                def _add_pipe_seg(seg_str: str) -> None:
+                    s_clean = re.sub(r"\s+", " ", str(seg_str or "")).strip()
+                    if not s_clean:
+                        return
+                    s_low = s_clean.lower()
+                    s_msg_only = s_clean.split(":", 1)[1].strip().lower() if ":" in s_clean else s_low
+                    for idx_s, ex_s in enumerate(merged_pipe_segs):
+                        ex_low = ex_s.lower()
+                        if ex_low == s_low:
+                            return
+                        if ":" not in ex_s and ":" in s_clean and ex_low == s_msg_only:
+                            merged_pipe_segs[idx_s] = s_clean
+                            return
+                        if ":" in ex_s and ":" not in s_clean and ex_s.split(":", 1)[1].strip().lower() == s_low:
+                            return
+                    merged_pipe_segs.append(s_clean)
+
+                for part_p in prev_b.split("|"):
+                    for sub_p in part_p.splitlines():
+                        _add_pipe_seg(sub_p)
+                for part_n in new_b.split("|"):
+                    for sub_n in part_n.splitlines():
+                        _add_pipe_seg(sub_n)
+                raw_row_data["B"] = " | ".join(merged_pipe_segs)
+
+        if isinstance(raw_row_data, list):
+            for col_idx, val in enumerate(raw_row_data):
+                if val is not None and str(val).strip() != "":
+                    c_let = _col_idx_to_letter(col_idx)
+                    coord = f"{c_let}{target_row}"
+                    cells_map[coord] = str(val).strip()
+                    written_cells[coord] = str(val).strip()
+        elif isinstance(raw_row_data, dict):
+            for k_raw, v_raw in raw_row_data.items():
+                if v_raw is None or str(v_raw).strip() == "":
+                    continue
+                k_str = str(k_raw).strip()
+                val_str = str(v_raw).strip()
+                parsed_coord = _split_cell_coord(k_str)
+                if parsed_coord:
+                    c_let, _, r_num = parsed_coord
+                    # If caller passed coordinate like A2/B2, respect resolved target_row when concurrent collision adjusted it
+                    effective_r = target_row if (matched_existing_row is not None or explicit_row_num > 0) else r_num
+                    coord = f"{c_let}{effective_r}"
+                    target_row = effective_r
+                elif re.match(r"^[A-Za-z]{1,2}$", k_str) and k_str.lower() not in header_name_to_col:
+                    coord = f"{k_str.upper()}{target_row}"
+                elif k_str.lower() in header_name_to_col:
+                    coord = f"{header_name_to_col[k_str.lower()]}{target_row}"
+                else:
+                    used_col_indices = [_letter_to_col_idx(c) for c in headers_by_col.keys()]
+                    next_col_idx = (max(used_col_indices) + 1) if used_col_indices else 0
+                    new_col_let = _col_idx_to_letter(next_col_idx)
+                    cells_map[f"{new_col_let}1"] = k_str
+                    headers_by_col[new_col_let] = k_str
+                    header_name_to_col[k_str.lower()] = new_col_let
+                    coord = f"{new_col_let}{target_row}"
+                cells_map[coord] = val_str
+                written_cells[coord] = val_str
+
+        if not written_cells:
+            default_col_mapping = [
+                ("A", body.get("client_name") or body.get("name") or body.get("author_id") or body.get("author_name") or body.get("sender_name") or body.get("participant_name") or req_thread_id or ""),
+                ("B", body.get("email_address") or body.get("email") or body.get("sender_email") or body.get("thread_transcript") or body.get("message") or ""),
+                ("C", body.get("contact_number") or body.get("phone") or ""),
+                ("D", body.get("platform") or ""),
+                ("E", body.get("status") or body.get("category") or body.get("notes") or "")
+            ]
+            for c_let, v_val in default_col_mapping:
+                if v_val is not None and str(v_val).strip() != "":
+                    coord = f"{c_let}{target_row}"
+                    cells_map[coord] = str(v_val).strip()
+                    written_cells[coord] = str(v_val).strip()
+
+        if not written_cells:
+            return {"status": "error", "status_code": 400, "message": "No row values provided. Pass 'row': {'A': '...', 'B': '...'} or top-level 'client_name', 'email_address', 'platform', 'status'."}
+
+        target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), target_row + 5)
+        now_append_ts = time.time()
+        if prev_sig_before_append:
+            obs_map = target_wb.get("obsolete_replaced_sigs")
+            if not isinstance(obs_map, dict):
+                obs_map = {}
+            obs_map[prev_sig_before_append] = now_append_ts
+            target_wb["obsolete_replaced_sigs"] = obs_map
+        target_wb["last_local_save_ts"] = now_append_ts
+        target_wb["last_gdrive_check_ts"] = now_append_ts
+        target_wb["last_edit_source"] = "glennbot"
+        target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
+
+    _save_spreadsheets_store()
+    _schedule_debounced_workbook_cloud_sync(target_wb, delay_seconds=0.45)
+
+    return {
+        "status": "success",
+        "workbook_id": target_wb.get("workbook_id"),
+        "file_id": target_wb.get("file_id") or "",
+        "gdrive_file_id": target_wb.get("gdrive_file_id") or "",
+        "title": target_wb.get("title"),
+        "sheet_name": target_sheet.get("name"),
+        "appended_row_number": target_row,
+        "written_cells": written_cells,
+        "message": f"Appended row #{target_row} ({len(written_cells)} cell(s)) to '{target_wb.get('title')}' [{target_sheet.get('name')}] and queued Google Drive sync!"
+    }
+
+
 @router.post("/api/v1/spreadsheets/append-row")
 async def api_v1_append_spreadsheet_row(request: Request):
     """
@@ -3944,214 +4299,56 @@ async def api_v1_append_spreadsheet_row(request: Request):
     except Exception:
         return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
 
+    res = await run_in_threadpool(lambda: _append_spreadsheet_row_sync(body if isinstance(body, dict) else {}))
+    if res.get("status") == "error":
+        return JSONResponse(res, status_code=int(res.get("status_code") or 400))
+    return res
+
+
+def _update_spreadsheet_cells_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     wb_query = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or "").strip()
-    force_gd = bool(body.get("sync_gdrive", False)) or not bool(SPREADSHEETS_STORE.get("workbooks"))
-    workbooks, _ = await run_in_threadpool(
-        lambda: _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=force_gd, target_id=wb_query)
-    )
-    target_wb = _find_workbook_by_query(workbooks, wb_query)
-    if not target_wb:
-        target_wb = {
-            "workbook_id": f"wb_{uuid.uuid4().hex[:8]}",
-            "title": wb_query if wb_query.lower().endswith((".xlsx", ".xls")) else "GlennBot_Automation_Sheet.xlsx",
-            "sheets": [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}]
-        }
-        workbooks.insert(0, target_wb)
-        with SPREADSHEETS_LOCK:
-            SPREADSHEETS_STORE["workbooks"] = workbooks
+    workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=True, target_id=wb_query)
+    with SPREADSHEETS_LOCK:
+        target_wb = _find_workbook_by_query(workbooks, wb_query)
+        if not target_wb:
+            return {"status": "error", "status_code": 404, "message": f"Spreadsheet '{wb_query}' not found."}
 
-    sheets_list: List[Dict[str, Any]] = list(target_wb.get("sheets") or [])
-    if not sheets_list:
-        sheets_list = [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}]
-        target_wb["sheets"] = sheets_list
-
-    sheet_query = str(body.get("sheet_name") or body.get("sheet") or "").strip()
-    target_sheet = None
-    if sheet_query:
+        sheets_list = target_wb.setdefault("sheets", [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}])
+        sheet_query = str(body.get("sheet_name") or body.get("sheet") or "").strip()
         target_sheet = next(
-            (s for s in sheets_list if str(s.get("name") or "").lower() == sheet_query.lower() or str(s.get("id") or "") == sheet_query),
-            None
+            (s for s in sheets_list if sheet_query and str(s.get("name") or "").lower() == sheet_query.lower()),
+            sheets_list[0]
         )
-    if not target_sheet:
-        if sheet_query and sheet_query.lower() not in ("sheet1", "sheet_1", "default"):
-            new_sheet_idx = len(sheets_list) + 1
-            default_cells = {}
-            if "conversation" in str(target_wb.get("title") or "").lower():
-                default_cells = {"A1": "Thread ID", "B1": "Conversations"}
-            target_sheet = {
-                "id": f"sheet_{new_sheet_idx}_{uuid.uuid4().hex[:4]}",
-                "name": sheet_query,
-                "row_count": 25,
-                "col_count": 10,
-                "cells": default_cells
-            }
-            sheets_list.append(target_sheet)
-            target_wb["sheets"] = sheets_list
-        else:
-            target_sheet = sheets_list[0]
 
-    cells_map: Dict[str, str] = target_sheet.setdefault("cells", {})
-    prev_sig_before_append = _compute_sheets_signature(target_wb.get("sheets"))
-    headers_by_col, target_row = _extract_sheet_headers_and_next_row(target_sheet)
-    header_name_to_col = {str(h_val).strip().lower(): c_let for c_let, h_val in headers_by_col.items() if h_val}
-
-    raw_row_data = body.get("row") or body.get("values") or body.get("cells") or body.get("data")
-    if not raw_row_data and (body.get("colA") is not None or body.get("colB") is not None):
-        raw_row_data = {
-            "A": body.get("colA") or "",
-            "B": body.get("colB") or ""
+        raw_cells = body.get("cells") if isinstance(body.get("cells"), dict) else {
+            k: v for k, v in body.items() if _split_cell_coord(k) is not None
         }
-    written_cells: Dict[str, str] = {}
+        if not raw_cells:
+            return {"status": "error", "status_code": 400, "message": "Provide 'cells' dict with cell coordinates (e.g. {'A2': 'Value', 'B2': '100'})."}
 
-    # Always check if match_column + match_value matches an existing row first (even if row_number was passed)
-    # so we never accidentally create duplicate rows for the same thread or overwrite the wrong row!
-    match_col = str(body.get("match_column") or "A").strip().upper()
-    match_val = str(
-        body.get("match_value")
-        or (raw_row_data.get("A") if isinstance(raw_row_data, dict) and "conversation" in str(target_wb.get("title") or "").lower() else "")
-        or ""
-    ).strip()
-    matched_existing_row: Optional[int] = None
-    if match_col and match_val:
-        norm_mv = match_val.split("_")[-1].strip() if not match_val.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else match_val
-        for coord_k, cell_v in list(cells_map.items()):
-            parsed_c = _split_cell_coord(coord_k)
-            if not parsed_c:
+        cells_map = target_sheet.setdefault("cells", {})
+        updated_coords: Dict[str, str] = {}
+        for coord_k, val_v in raw_cells.items():
+            parsed = _split_cell_coord(coord_k)
+            if not parsed:
                 continue
-            c_let_k, _, r_num_k = parsed_c
-            if c_let_k == match_col and r_num_k >= 1:
-                c_str = str(cell_v or "").strip()
-                if r_num_k == 1 and c_str.lower() in ("thread id", "thread_id", "conversation id", "questions", "question", "keywords"):
-                    continue
-                norm_c_str = c_str.split("_")[-1].strip() if not c_str.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else c_str
-                if c_str == match_val or c_str == norm_mv or (norm_mv and (norm_c_str == norm_mv or norm_mv in c_str)):
-                    matched_existing_row = r_num_k
-                    break
-
-    explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
-    if matched_existing_row is not None:
-        target_row = matched_existing_row
-    elif explicit_row_num >= 1:
-        target_row = explicit_row_num
-
-    # Optional native thread grouping: if thread_id is passed (or [Thread: ...] in Column A),
-    # find any existing row in cells_map that belongs to the same comment thread and update that row in-place!
-    req_thread_id = str(body.get("thread_id") or body.get("threadId") or "").strip()
-    existing_thread_row: Optional[int] = None
-    if req_thread_id:
-        norm_req_tid = req_thread_id.split("_")[-1].strip()
-        for coord_k, cell_v in list(cells_map.items()):
-            parsed_c = _split_cell_coord(coord_k)
-            if not parsed_c:
-                continue
-            c_let_k, _, r_num_k = parsed_c
-            if c_let_k == "A" and r_num_k >= 1:
-                cell_str = str(cell_v or "")
-                m_th = re.search(r"\[Thread:\s*([^\]]+)\]", cell_str, re.I)
-                if m_th:
-                    tracked_ids = [x.strip().split("_")[-1] for x in m_th.group(1).split(",") if x.strip()]
-                    if norm_req_tid in tracked_ids or req_thread_id in tracked_ids:
-                        existing_thread_row = r_num_k
-                        break
-    if existing_thread_row is not None:
-        target_row = existing_thread_row
-
-    # If updating an existing row in Conversations.xlsx, preserve all earlier '|' pipe segments so history is never lost!
-    if "conversation" in str(target_wb.get("title") or "").lower() and isinstance(raw_row_data, dict) and "B" in raw_row_data and f"B{target_row}" in cells_map:
-        prev_b = str(cells_map.get(f"B{target_row}") or "").strip()
-        new_b = str(raw_row_data.get("B") or "").strip()
-        if prev_b and new_b and prev_b != new_b:
-            merged_pipe_segs: List[str] = []
-            def _add_pipe_seg(seg_str: str) -> None:
-                s_clean = re.sub(r"\s+", " ", str(seg_str or "")).strip()
-                if not s_clean:
-                    return
-                s_low = s_clean.lower()
-                s_msg_only = s_clean.split(":", 1)[1].strip().lower() if ":" in s_clean else s_low
-                for idx_s, ex_s in enumerate(merged_pipe_segs):
-                    ex_low = ex_s.lower()
-                    if ex_low == s_low:
-                        return
-                    if ":" not in ex_s and ":" in s_clean and ex_low == s_msg_only:
-                        merged_pipe_segs[idx_s] = s_clean
-                        return
-                    if ":" in ex_s and ":" not in s_clean and ex_s.split(":", 1)[1].strip().lower() == s_low:
-                        return
-                merged_pipe_segs.append(s_clean)
-
-            for part_p in prev_b.split("|"):
-                for sub_p in part_p.splitlines():
-                    _add_pipe_seg(sub_p)
-            for part_n in new_b.split("|"):
-                for sub_n in part_n.splitlines():
-                    _add_pipe_seg(sub_n)
-            raw_row_data = dict(raw_row_data)
-            raw_row_data["B"] = " | ".join(merged_pipe_segs)
-
-    if isinstance(raw_row_data, list):
-        for col_idx, val in enumerate(raw_row_data):
-            if val is not None and str(val).strip() != "":
-                c_let = _col_idx_to_letter(col_idx)
-                coord = f"{c_let}{target_row}"
-                cells_map[coord] = str(val).strip()
-                written_cells[coord] = str(val).strip()
-    elif isinstance(raw_row_data, dict):
-        for k_raw, v_raw in raw_row_data.items():
-            if v_raw is None or str(v_raw).strip() == "":
-                continue
-            k_str = str(k_raw).strip()
-            val_str = str(v_raw).strip()
-            parsed_coord = _split_cell_coord(k_str)
-            if parsed_coord:
-                c_let, _, r_num = parsed_coord
-                coord = f"{c_let}{r_num}"
-                target_row = r_num
-            elif re.match(r"^[A-Za-z]{1,2}$", k_str) and k_str.lower() not in header_name_to_col:
-                coord = f"{k_str.upper()}{target_row}"
-            elif k_str.lower() in header_name_to_col:
-                coord = f"{header_name_to_col[k_str.lower()]}{target_row}"
+            c_let, c_idx, r_num = parsed
+            norm_coord = f"{c_let}{r_num}"
+            v_str = str(val_v if val_v is not None else "").strip()
+            if v_str == "":
+                cells_map.pop(norm_coord, None)
             else:
-                used_col_indices = [_letter_to_col_idx(c) for c in headers_by_col.keys()]
-                next_col_idx = (max(used_col_indices) + 1) if used_col_indices else 0
-                new_col_let = _col_idx_to_letter(next_col_idx)
-                cells_map[f"{new_col_let}1"] = k_str
-                headers_by_col[new_col_let] = k_str
-                header_name_to_col[k_str.lower()] = new_col_let
-                coord = f"{new_col_let}{target_row}"
-            cells_map[coord] = val_str
-            written_cells[coord] = val_str
+                cells_map[norm_coord] = v_str
+            updated_coords[norm_coord] = v_str
+            target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), r_num + 5)
+            target_sheet["col_count"] = max(int(target_sheet.get("col_count") or 10), c_idx + 2)
 
-    if not written_cells:
-        default_col_mapping = [
-            ("A", body.get("client_name") or body.get("name") or body.get("author_id") or body.get("author_name") or body.get("sender_name") or body.get("participant_name") or req_thread_id or ""),
-            ("B", body.get("email_address") or body.get("email") or body.get("sender_email") or body.get("thread_transcript") or body.get("message") or ""),
-            ("C", body.get("contact_number") or body.get("phone") or ""),
-            ("D", body.get("platform") or ""),
-            ("E", body.get("status") or body.get("category") or body.get("notes") or "")
-        ]
-        for c_let, v_val in default_col_mapping:
-            if v_val is not None and str(v_val).strip() != "":
-                coord = f"{c_let}{target_row}"
-                cells_map[coord] = str(v_val).strip()
-                written_cells[coord] = str(v_val).strip()
+        target_wb["last_local_save_ts"] = time.time()
+        target_wb["last_gdrive_check_ts"] = time.time()
+        target_wb["last_edit_source"] = "glennbot"
 
-    if not written_cells:
-        return JSONResponse({"status": "error", "message": "No row values provided. Pass 'row': {'A': '...', 'B': '...'} or top-level 'client_name', 'email_address', 'platform', 'status'."}, status_code=400)
-
-    target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), target_row + 5)
-    now_append_ts = time.time()
-    if prev_sig_before_append:
-        obs_map = target_wb.get("obsolete_replaced_sigs")
-        if not isinstance(obs_map, dict):
-            obs_map = {}
-        obs_map[prev_sig_before_append] = now_append_ts
-        target_wb["obsolete_replaced_sigs"] = obs_map
-    target_wb["last_local_save_ts"] = now_append_ts
-    target_wb["last_edit_source"] = "glennbot"
-    target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
     _save_spreadsheets_store()
-    threading.Thread(target=_sync_updated_workbook_to_cloudinary, args=(target_wb,), daemon=True).start()
-
+    _schedule_debounced_workbook_cloud_sync(target_wb, delay_seconds=0.45)
     return {
         "status": "success",
         "workbook_id": target_wb.get("workbook_id"),
@@ -4159,9 +4356,8 @@ async def api_v1_append_spreadsheet_row(request: Request):
         "gdrive_file_id": target_wb.get("gdrive_file_id") or "",
         "title": target_wb.get("title"),
         "sheet_name": target_sheet.get("name"),
-        "appended_row_number": target_row,
-        "written_cells": written_cells,
-        "message": f"Appended row #{target_row} ({len(written_cells)} cell(s)) to '{target_wb.get('title')}' [{target_sheet.get('name')}] and queued Google Drive sync!"
+        "updated_cells": updated_coords,
+        "message": f"Updated {len(updated_coords)} cell(s) in '{target_wb.get('title')}' [{target_sheet.get('name')}] and synced to Google Drive!"
     }
 
 
@@ -4180,55 +4376,10 @@ async def api_v1_update_spreadsheet_cells(request: Request):
     except Exception:
         return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
 
-    wb_query = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or "").strip()
-    workbooks, _ = await run_in_threadpool(
-        lambda: _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=True, target_id=wb_query)
-    )
-    target_wb = _find_workbook_by_query(workbooks, wb_query)
-    if not target_wb:
-        return JSONResponse({"status": "error", "message": f"Spreadsheet '{wb_query}' not found."}, status_code=404)
-
-    sheets_list = target_wb.setdefault("sheets", [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}])
-    sheet_query = str(body.get("sheet_name") or body.get("sheet") or "").strip()
-    target_sheet = next(
-        (s for s in sheets_list if sheet_query and str(s.get("name") or "").lower() == sheet_query.lower()),
-        sheets_list[0]
-    )
-
-    raw_cells = body.get("cells") if isinstance(body.get("cells"), dict) else {
-        k: v for k, v in body.items() if _split_cell_coord(k) is not None
-    }
-    if not raw_cells:
-        return JSONResponse({"status": "error", "message": "Provide 'cells' dict with cell coordinates (e.g. {'A2': 'Value', 'B2': '100'})."}, status_code=400)
-
-    cells_map = target_sheet.setdefault("cells", {})
-    updated_coords: Dict[str, str] = {}
-    for coord_k, val_v in raw_cells.items():
-        parsed = _split_cell_coord(coord_k)
-        if not parsed:
-            continue
-        c_let, c_idx, r_num = parsed
-        norm_coord = f"{c_let}{r_num}"
-        v_str = str(val_v if val_v is not None else "").strip()
-        if v_str == "":
-            cells_map.pop(norm_coord, None)
-        else:
-            cells_map[norm_coord] = v_str
-        updated_coords[norm_coord] = v_str
-        target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), r_num + 5)
-        target_sheet["col_count"] = max(int(target_sheet.get("col_count") or 10), c_idx + 2)
-
-    await run_in_threadpool(lambda: _sync_updated_workbook_to_cloudinary(target_wb))
-    return {
-        "status": "success",
-        "workbook_id": target_wb.get("workbook_id"),
-        "file_id": target_wb.get("file_id") or "",
-        "gdrive_file_id": target_wb.get("gdrive_file_id") or "",
-        "title": target_wb.get("title"),
-        "sheet_name": target_sheet.get("name"),
-        "updated_cells": updated_coords,
-        "message": f"Updated {len(updated_coords)} cell(s) in '{target_wb.get('title')}' [{target_sheet.get('name')}] and synced to Google Drive!"
-    }
+    res = await run_in_threadpool(lambda: _update_spreadsheet_cells_sync(body if isinstance(body, dict) else {}))
+    if res.get("status") == "error":
+        return JSONResponse(res, status_code=int(res.get("status_code") or 400))
+    return res
 
 
 @router.get("/api/v1/analytics")

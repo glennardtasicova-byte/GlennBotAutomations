@@ -48,15 +48,16 @@ def create_resilient_http_session(pool_size: int = 128) -> requests.Session:
     return session
 
 
-HTTP_SESSION = create_resilient_http_session(pool_size=32)
+HTTP_SESSION = create_resilient_http_session(pool_size=64)
 # Dedicated isolated HTTP connection pool strictly for outbound n8n webhook executions
 # so simultaneous comment/message bursts never contend with Zernio, Composio, or Cloudinary sockets.
-N8N_HTTP_SESSION = create_resilient_http_session(pool_size=32)
+N8N_HTTP_SESSION = create_resilient_http_session(pool_size=64)
 
-# Dedicated High-Concurrency Thread Pools right-sized for 512MB cloud containers so n8n workflows,
-# webhooks, AI calls, and background syncs execute in parallel without exhausting container RAM.
-N8N_WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="glennbot_n8n_wh")
-BG_SYNC_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="glennbot_bg_sync")
+# Dedicated High-Concurrency Thread Pools so multiple simultaneous webhook triggers
+# (e.g., 4+ simultaneous post comments or DMs on the same workflow) execute concurrently in parallel like n8n.
+N8N_WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=24, thread_name_prefix="glennbot_n8n_wh")
+AUTOMATIONS_WORKFLOW_EXECUTOR = ThreadPoolExecutor(max_workers=24, thread_name_prefix="glennbot_auto_wf")
+BG_SYNC_EXECUTOR = ThreadPoolExecutor(max_workers=12, thread_name_prefix="glennbot_bg_sync")
 
 # Concurrency locks & fast in-memory DB read caches so simultaneous webhooks + 2s UI polling never hang Python
 COMMENTS_STORE_LOCK = threading.RLock()

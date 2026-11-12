@@ -32,8 +32,8 @@ else:
         connect_args=_DB_CONNECT_ARGS,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=8,
-        max_overflow=12,
+        pool_size=14,
+        max_overflow=24,
         pool_timeout=30
     )
 
@@ -401,9 +401,14 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
     except Exception as e:
         print(f"[SupabaseCommentQueue] Enqueue insert warning: {e}")
 
-    # 3. Acquire FIFO turn so comments & replies are processed strictly one-by-one
+    # 3. Acquire Concurrency-Aware Per-Thread FIFO Turn:
+    #    - Comments on DIFFERENT threads (`thread_id`) run concurrently in parallel (up to MAX_CONCURRENT_COMMENT_WORKERS = 8 at once, just like n8n!)
+    #    - Comments within the EXACT SAME thread (`thread_id`) are ordered strictly FIFO so their '|' conversation history in Conversations.xlsx never races!
+    MAX_CONCURRENT_COMMENT_WORKERS = 8
+    norm_my_tid = str(raw_tid or raw_cid or "").split("_")[-1].strip()
     effective_timeout = 2.0 if is_test_run else max(5.0, min(max_wait_seconds, 240.0))
     deadline = time.time() + effective_timeout
+    active_parallel_workers = 1
 
     with SUPABASE_COMMENT_QUEUE_COND:
         while True:
@@ -424,30 +429,39 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
                     )
                     active_rows = conn.execute(
                         text("""
-                            SELECT queue_id, status
+                            SELECT queue_id, thread_id, comment_id, status
                             FROM glennbot_comment_automation_queue
                             WHERE status IN ('processing', 'queued')
                             ORDER BY queued_at ASC, queue_id ASC
-                            LIMIT 100
+                            LIMIT 120
                         """)
                     ).mappings().all()
 
                     pending_count = len(active_rows)
+                    my_index = len(active_rows)
                     for idx_r, r_item in enumerate(active_rows):
                         if str(r_item["queue_id"]) == queue_id:
                             queue_position = idx_r + 1
+                            my_index = idx_r
                             break
 
-                    any_other_processing = any(
-                        str(r_item["status"]) == "processing" and str(r_item["queue_id"]) != queue_id
-                        for r_item in active_rows
+                    other_processing_count = sum(
+                        1 for r_item in active_rows
+                        if str(r_item["status"]) == "processing" and str(r_item["queue_id"]) != queue_id
                     )
-                    head_queued_id = next(
-                        (str(r_item["queue_id"]) for r_item in active_rows if str(r_item["status"]) == "queued"),
-                        queue_id
-                    )
+                    # Check if an earlier comment in the EXACT SAME thread_id is currently processing or queued ahead of us
+                    same_thread_earlier_active = False
+                    if norm_my_tid:
+                        for idx_r in range(my_index):
+                            r_prev = active_rows[idx_r]
+                            if str(r_prev["queue_id"]) == queue_id:
+                                continue
+                            prev_tid = str(r_prev.get("thread_id") or r_prev.get("comment_id") or "").split("_")[-1].strip()
+                            if prev_tid and prev_tid == norm_my_tid:
+                                same_thread_earlier_active = True
+                                break
 
-                    if (not any_other_processing and head_queued_id == queue_id) or time.time() >= deadline:
+                    if (not same_thread_earlier_active and other_processing_count < MAX_CONCURRENT_COMMENT_WORKERS) or time.time() >= deadline:
                         conn.execute(
                             text("""
                                 UPDATE glennbot_comment_automation_queue
@@ -457,6 +471,7 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
                             """),
                             {"now_ts": now_check, "qid": queue_id}
                         )
+                        active_parallel_workers = other_processing_count + 1
                         can_acquire = True
             except Exception as e:
                 print(f"[SupabaseCommentQueue] FIFO check warning: {e}")
@@ -467,7 +482,7 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
             remaining = deadline - time.time()
             if remaining <= 0:
                 break
-            SUPABASE_COMMENT_QUEUE_COND.wait(timeout=min(0.4, remaining))
+            SUPABASE_COMMENT_QUEUE_COND.wait(timeout=min(0.06, remaining))
 
     waited_ms = int((time.time() - enqueue_t0) * 1000)
     db_engine_label = "sqlite_fallback" if DATABASE_URL.startswith("sqlite") else "supabase_postgresql"
@@ -477,6 +492,8 @@ def enqueue_and_acquire_supabase_comment_queue_turn(
         "queue_id": queue_id,
         "queueStatus": "processing",
         "queuePosition": queue_position,
+        "activeParallelWorkers": active_parallel_workers,
+        "maxConcurrentWorkers": MAX_CONCURRENT_COMMENT_WORKERS,
         "pendingInSupabaseQueue": pending_count,
         "queueWaitMs": waited_ms,
         "supabaseTable": "glennbot_comment_automation_queue",
