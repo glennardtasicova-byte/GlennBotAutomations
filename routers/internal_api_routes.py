@@ -419,16 +419,23 @@ def _auto_inject_credentials_into_workflow_json(
                 params["body"] = j_body_raw
         j_body = j_body_raw.lower()
 
+        is_spreadsheet_node = any(
+            k in raw_url.lower() or k in n_name or k in j_body
+            for k in ("spreadsheet", "workbook_id", "append-row", "append_row", "sheet_name", ".xlsx")
+        )
         is_ai_ask_node = (
-            "/api/ai/ask" in raw_url.lower()
-            or "/api/v1/ai/ask" in raw_url.lower()
-            or (
-                any(k in n_name for k in ("gemini", "ask ai", "ai answer", "ai reply", "generate ai"))
-                and "comment_id" not in j_body
-                and "from_email" not in j_body
-                and "conversation_id" not in j_body
+            not is_spreadsheet_node
+            and (
+                "/api/ai/ask" in raw_url.lower()
+                or "/api/v1/ai/ask" in raw_url.lower()
+                or (
+                    any(k in n_name for k in ("gemini", "ask ai", "ai answer", "ai reply", "generate ai"))
+                    and "comment_id" not in j_body
+                    and "from_email" not in j_body
+                    and "conversation_id" not in j_body
+                )
+                or ("\"topic\"" in j_body and "comment_id" not in j_body)
             )
-            or ("\"topic\"" in j_body and "comment_id" not in j_body)
         )
 
         # 1. Auto-detect or normalize the GlennBot API URL on this HTTP Request node

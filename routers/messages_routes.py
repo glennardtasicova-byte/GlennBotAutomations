@@ -2851,6 +2851,14 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
         now_disp = now_dt.strftime("%b %d, %Y • %I:%M %p")
         msg_id = f"msg_in_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
 
+        # Pre-seed existing message IDs BEFORE inserting `incoming_msg_obj` into CLOUDINARY_MESSAGES_STORE
+        # so a concurrent cold-start seed thread can never mark this first incoming DM as already dispatched!
+        try:
+            from routers.internal_api_routes import _seed_existing_message_ids_for_n8n
+            _seed_existing_message_ids_for_n8n(exclude_mid=msg_id)
+        except Exception:
+            pass
+
         incoming_msg_obj = {
             "id": msg_id,
             "platform_message_id": msg_id,

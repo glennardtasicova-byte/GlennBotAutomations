@@ -3759,8 +3759,9 @@ async def api_v1_append_spreadsheet_row(request: Request):
         return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
 
     wb_query = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or "").strip()
+    force_gd = bool(body.get("sync_gdrive", False)) or not bool(SPREADSHEETS_STORE.get("workbooks"))
     workbooks, _ = await run_in_threadpool(
-        lambda: _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=True, target_id=wb_query)
+        lambda: _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=force_gd, target_id=wb_query)
     )
     target_wb = _find_workbook_by_query(workbooks, wb_query)
     if not target_wb:
@@ -3818,6 +3819,22 @@ async def api_v1_append_spreadsheet_row(request: Request):
     explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
     if explicit_row_num >= 1:
         target_row = explicit_row_num
+    else:
+        # Support `match_column` + `match_value` upsert if explicit row_number was not passed
+        match_col = str(body.get("match_column") or "").strip().upper()
+        match_val = str(body.get("match_value") or "").strip()
+        if match_col and match_val:
+            norm_mv = match_val.split("_")[-1].strip() if not match_val.startswith(("fb_live_", "ig_live_", "portfolio_")) else match_val
+            for coord_k, cell_v in list(cells_map.items()):
+                parsed_c = _split_cell_coord(coord_k)
+                if not parsed_c:
+                    continue
+                c_let_k, _, r_num_k = parsed_c
+                if c_let_k == match_col and r_num_k >= 2:
+                    c_str = str(cell_v or "").strip()
+                    if c_str == match_val or c_str == norm_mv or (norm_mv and norm_mv in c_str):
+                        target_row = r_num_k
+                        break
 
     # Optional native thread grouping: if thread_id is passed (or [Thread: ...] in Column A),
     # find any existing row in cells_map that belongs to the same comment thread and update that row in-place!
@@ -3898,7 +3915,11 @@ async def api_v1_append_spreadsheet_row(request: Request):
         return JSONResponse({"status": "error", "message": "No row values provided. Pass 'row': {'A': '...', 'B': '...'} or top-level 'client_name', 'email_address', 'platform', 'status'."}, status_code=400)
 
     target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), target_row + 5)
-    await run_in_threadpool(lambda: _sync_updated_workbook_to_cloudinary(target_wb))
+    target_wb["last_local_save_ts"] = time.time()
+    target_wb["last_edit_source"] = "glennbot"
+    target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
+    _save_spreadsheets_store()
+    threading.Thread(target=_sync_updated_workbook_to_cloudinary, args=(target_wb,), daemon=True).start()
 
     return {
         "status": "success",
@@ -3909,7 +3930,7 @@ async def api_v1_append_spreadsheet_row(request: Request):
         "sheet_name": target_sheet.get("name"),
         "appended_row_number": target_row,
         "written_cells": written_cells,
-        "message": f"Appended row #{target_row} ({len(written_cells)} cell(s)) to '{target_wb.get('title')}' [{target_sheet.get('name')}] and synced to Google Drive!"
+        "message": f"Appended row #{target_row} ({len(written_cells)} cell(s)) to '{target_wb.get('title')}' [{target_sheet.get('name')}] and queued Google Drive sync!"
     }
 
 

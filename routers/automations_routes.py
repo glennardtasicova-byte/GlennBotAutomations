@@ -321,13 +321,25 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         return raw_rep
 
-    # Support GlennBot Automations + TikTok (@glennbot.automation) ternary account filter expression
-    if "glennbot.automation" in t and "account_name" in t:
+    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) ternary account filter expressions
+    if ("glennbot.automation" in t or "glennard.tasico.va" in t) and "account_name" in t:
         raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
+        raw_un = str(_deep_get_path(current_json, "body.username") or _deep_get_path(current_json, "username") or "").strip()
+        raw_aid = str(_deep_get_path(current_json, "body.account_id") or _deep_get_path(current_json, "account_id") or "").strip()
+        raw_cid = str(_deep_get_path(current_json, "body.conversation_id") or _deep_get_path(current_json, "conversation_id") or "").strip()
+        raw_plat = str(_deep_get_path(current_json, "body.platform") or _deep_get_path(current_json, "platform") or "").strip().lower()
         raw_rec = str(_deep_get_path(current_json, "body.record_id") or _deep_get_path(current_json, "record_id") or "").strip()
         raw_pid = str(_deep_get_path(current_json, "body.post_id") or _deep_get_path(current_json, "post_id") or "").strip()
         if "glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901":
             return "GlennBot Automations (@glennbot.automation)"
+        if (
+            "glennard.tasico.va" in raw_acc.lower()
+            or "glennard.tasico.va" in raw_un.lower()
+            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6")
+            or raw_cid.startswith(("ig_live_", "fb_live_", "portfolio_"))
+            or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
+        ):
+            return "GlennBot Automations (@glennard.tasico.va)"
         return raw_acc
 
     return t
@@ -622,17 +634,32 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
 
     # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
     node_name_low = str(node.get("name") or "").lower()
+    is_custom_pipe_or_dm_code = any(
+        k in js_code for k in (
+            "colAThreadId",
+            "colBConversation",
+            "dmThreadId",
+            "pipeConversation",
+            "aiContextPrompt",
+            "shouldAiReply",
+            "aiReplyText",
+            "colBWithAiReply"
+        )
+    )
     is_thread_grouping_code = (
-        any(k in js_code for k in (
-            "targetRowNumber",
-            "matchedRow",
-            "target_row",
-            "[Thread:",
-            "thread_transcript",
-            "updated_existing_thread_row",
-            "created_new_thread_row"
-        ))
-        or ("thread" in node_name_low and "row" in node_name_low)
+        not is_custom_pipe_or_dm_code
+        and (
+            any(k in js_code for k in (
+                "targetRowNumber",
+                "matchedRow",
+                "target_row",
+                "[Thread:",
+                "thread_transcript",
+                "updated_existing_thread_row",
+                "created_new_thread_row"
+            ))
+            or ("thread" in node_name_low and "row" in node_name_low)
+        )
     )
     if is_thread_grouping_code:
         wh_data = (
@@ -1091,16 +1118,46 @@ def _execute_n8n_workflow_json_natively(
                                 if isinstance(bp, dict) and bp.get("name"):
                                     req_body_obj[str(bp["name"])] = _resolve_n8n_parameter_value(bp.get("value"), curr_input, node_outputs)
 
-                if target_url.startswith("http"):
+                api_path_matched = m_api_path.group(1) if m_api_path else ""
+                if method_str == "POST" and api_path_matched.split("?")[0] in ("/api/v1/ai/ask", "/api/ai/ask"):
+                    body_dict = req_body_obj if isinstance(req_body_obj, dict) else {}
+                    u_topic = str(
+                        body_dict.get("topic")
+                        or body_dict.get("prompt")
+                        or body_dict.get("question")
+                        or body_dict.get("message")
+                        or body_dict.get("comment")
+                        or body_dict.get("query")
+                        or ""
+                    ).strip()
+                    ai_res = _execute_glennbot_ask_ai_core(
+                        user_topic=u_topic,
+                        tone_str=str(body_dict.get("tone") or "engaging").strip(),
+                        lang_str=str(body_dict.get("language") or "taglish").strip(),
+                        post_type_str=str(body_dict.get("post_type") or "dm_reply").strip(),
+                        platforms_list=body_dict.get("platforms") if isinstance(body_dict.get("platforms"), list) else None,
+                        force_reply_mode=True,
+                        use_search=bool(body_dict.get("use_search", False))
+                    )
+                    if isinstance(ai_res, dict):
+                        out_json = ai_res
+                        step_status = "success"
+                        step_detail = f"POST {api_path_matched} -> HTTP 200 (In-Process FastPath)"
+                    else:
+                        out_json = {"status": "error", "reply": ""}
+                        step_status = "error"
+                        step_detail = f"POST {api_path_matched} -> Error"
+                    node_outputs[curr_name] = out_json
+                elif target_url.startswith("http"):
                     if method_str == "GET":
-                        r_http = HTTP_SESSION.get(target_url, headers=req_headers, timeout=20)
+                        r_http = HTTP_SESSION.get(target_url, headers=req_headers, timeout=30)
                     else:
                         r_http = HTTP_SESSION.request(
                             method_str,
                             target_url,
                             headers=req_headers,
                             json=req_body_obj if req_body_obj is not None else {},
-                            timeout=45
+                            timeout=90
                         )
                     try:
                         out_json = r_http.json() if r_http.content else {"status_code": r_http.status_code}
@@ -1138,7 +1195,11 @@ def _execute_n8n_workflow_json_natively(
             "output_preview": json.dumps(out_json, ensure_ascii=False)[:360]
         })
 
-        if step_status == "error":
+        allow_continue_on_err = bool(
+            node.get("continueOnFail")
+            or str(node.get("onError") or "").startswith("continue")
+        )
+        if step_status == "error" and not allow_continue_on_err:
             break
 
         # Enqueue connected downstream nodes on `selected_branch_index`
@@ -1172,6 +1233,8 @@ def _execute_n8n_workflow_json_natively(
         hist.insert(0, summary_record)
         AUTOMATIONS_CANVAS_STATE["execution_history"] = hist[:40]
 
+    threading.Thread(target=_save_automations_canvas_state, daemon=True).start()
+
     with INTERNAL_API_LOCK:
         logs = list(INTERNAL_API_STATE.get("recent_logs") or [])
         logs.insert(0, {
@@ -1199,7 +1262,7 @@ def _execute_active_dashboard_automations_for_event(event_type: str, data: Dict[
 
         # Also include any active n8n workflows that have a full workflow_json graph so they work natively in-dashboard too
         for nw in (api_state.get("n8n_workflows") or []):
-            if not isinstance(nw, dict) or not nw.get("active", False):
+            if not isinstance(nw, dict) or not (nw.get("active", False) or nw.get("enabled", False)):
                 continue
             nw_json = nw.get("workflow_json")
             if isinstance(nw_json, dict) and isinstance(nw_json.get("nodes"), list):
@@ -1209,23 +1272,26 @@ def _execute_active_dashboard_automations_for_event(event_type: str, data: Dict[
                     seen_wf_names.add(nw_name)
 
         for wf in workflows:
-            if not isinstance(wf, dict) or not wf.get("active", False):
+            if not isinstance(wf, dict) or not (wf.get("active", False) or wf.get("enabled", False)):
                 continue
             wf_json = wf.get("workflow_json")
             if not isinstance(wf_json, dict) or not isinstance(wf_json.get("nodes"), list):
                 continue
             evts = wf.get("events") if isinstance(wf.get("events"), dict) else {}
+            has_explicit_evts = any(bool(v) for v in evts.values())
             is_sms_evt = event_type in ("sms.sent", "sms.received")
             raw_wf_low = json.dumps(wf_json, ensure_ascii=False).lower()
-            is_comment_wf = event_type == "comment.received" and any(
-                k in raw_wf_low for k in ("comment", "author_name", "author_id", "savvy finds", "conversations")
+            is_comment_wf = (
+                not has_explicit_evts
+                and event_type == "comment.received"
+                and any(k in raw_wf_low for k in ("comment", "author_name", "author_id", "savvy finds"))
             )
             if (
                 event_type == "n8n.test"
                 or evts.get(event_type, False)
                 or (is_sms_evt and evts.get("message.received", False))
                 or is_comment_wf
-                or not any(evts.values())
+                or not has_explicit_evts
             ):
                 _execute_n8n_workflow_json_natively(wf_json, event_type, data, is_test_run=False)
     except Exception as e:
