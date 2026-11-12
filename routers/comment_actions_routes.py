@@ -123,8 +123,6 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
         if force:
             sync_all_connected_posts_to_cloudinary(force_refresh=True, target_record_id=clean_active_rec)
         else:
-            if clean_active_rec:
-                sync_all_connected_posts_to_cloudinary(force_refresh=False, target_record_id=clean_active_rec)
             trigger_auto_youtube_and_active_sync(active_record_id=clean_active_rec, min_interval=2.5)
 
         seen_ids = _get_cached_seen_comment_ids(ttl_sec=3.0)

@@ -3839,11 +3839,57 @@
                 ? await applyGlennBotPopoutModeIfPresent()
                 : false;
 
-            if (window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') {
+            if (
+                window.gbActivePopoutMode === 'comment_thread' ||
+                window.gbActivePopoutMode === 'message_thread' ||
+                window.gbActivePopoutMode === 'spreadsheet' ||
+                window.gbActivePopoutMode === 'email_view' ||
+                window.gbActivePopoutMode === 'new_sms' ||
+                window.gbActivePopoutMode === 'compose_email' ||
+                window.gbActivePopoutMode === 'files_vault' ||
+                window.gbActivePopoutMode === 'modal_popout'
+            ) {
                 return;
             }
 
-            // Initialize real-time email webhook sequence baseline
+            // Focused Workspace Popout (?popout_mode=workspace_view&tab=...): only load data required for the active workspace tab!
+            if (window.gbActivePopoutMode === 'workspace_view') {
+                const targetTab = String((window.gbActivePopoutParams && window.gbActivePopoutParams.tab) || activeTab || 'scheduler').trim();
+                if (targetTab === 'scheduler') {
+                    await fetchSocialAccounts();
+                    fetchVaultFiles(false);
+                } else if (targetTab === 'queue') {
+                    await Promise.allSettled([
+                        fetchScheduledPosts(),
+                        fetchSocialAccounts()
+                    ]);
+                } else if (targetTab === 'calendar') {
+                    await Promise.allSettled([
+                        fetchScheduledPosts(),
+                        fetchSocialAccounts(),
+                        typeof fetchComposioCalendarAccounts === 'function' ? fetchComposioCalendarAccounts(false) : Promise.resolve(),
+                        typeof fetchComposioCalendarEvents === 'function' ? fetchComposioCalendarEvents(false) : Promise.resolve()
+                    ]);
+                } else if (targetTab === 'email') {
+                    await pollRealtimeEmailWebhookEvents();
+                    await fetchEmailAccounts(false);
+                } else if (targetTab === 'comments') {
+                    await fetchComments(false);
+                } else if (targetTab === 'messages') {
+                    await fetchConversations(false);
+                } else if (targetTab === 'analytics') {
+                    await fetchAnalyticsData(false);
+                } else if (targetTab === 'contacts') {
+                    await fetchCrmContacts(false);
+                } else if (targetTab === 'files') {
+                    await fetchVaultFiles(false);
+                } else if (targetTab === 'spreadsheet') {
+                    await fetchSavedSpreadsheets(false);
+                }
+                return;
+            }
+
+            // Full Dashboard Mode: Initialize real-time email webhook sequence baseline
             await pollRealtimeEmailWebhookEvents();
             // Load initial dashboard data in parallel so Analytics, Comments, Messages, Email, Contacts, Files, and Spread Sheet never block each other
             fetchAnalyticsData(false);
@@ -3912,6 +3958,7 @@
             // Quota-Safe Background Email Inbox Sync (every 15s) + Fast Webhook Event Queue Listener (every 3s)
             setInterval(async () => {
                 if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') return;
+                if (window.gbActivePopoutMode === 'workspace_view' && activeTab !== 'email') return;
                 if (!activeEmailAccountId && Array.isArray(emailAccountsList) && emailAccountsList.length > 0) {
                     activeEmailAccountId = emailAccountsList[0].id;
                 }
@@ -3922,10 +3969,11 @@
 
             setInterval(async () => {
                 if (!window.gbCurrentAuthUser || window.gbActivePopoutMode === 'comment_thread' || window.gbActivePopoutMode === 'message_thread') return;
+                if (window.gbActivePopoutMode === 'workspace_view' && activeTab !== 'email') return;
                 await pollRealtimeEmailWebhookEvents();
             }, 3000);
 
-            // Fast Non-Blocking Real-Time Polling for Comments & Messages across ALL tabs (guarded by in-flight locks so UI never freezes while n8n executes)
+            // Fast Non-Blocking Real-Time Polling for Comments & Messages (scoped in Popout Windows so hidden tabs never saturate proxy bandwidth)
             let lastActivityPollTs = Date.now();
             setInterval(() => {
                 if (!window.gbCurrentAuthUser) return;
@@ -3933,10 +3981,21 @@
                 const intervalMs = 2000;
                 if (now - lastActivityPollTs >= intervalMs) {
                     lastActivityPollTs = now;
-                    if (window.gbActivePopoutMode !== 'message_thread') {
+                    const mode = window.gbActivePopoutMode || '';
+                    const shouldPollComments = (
+                        mode === 'comment_thread' ||
+                        (mode === 'workspace_view' && activeTab === 'comments') ||
+                        !mode
+                    );
+                    const shouldPollMessages = (
+                        mode === 'message_thread' ||
+                        (mode === 'workspace_view' && activeTab === 'messages') ||
+                        !mode
+                    );
+                    if (shouldPollComments) {
                         fetchComments(false);
                     }
-                    if (window.gbActivePopoutMode !== 'comment_thread') {
+                    if (shouldPollMessages) {
                         fetchConversations(false);
                     }
                 }
@@ -3946,17 +4005,28 @@
                 if (!window.gbCurrentAuthUser) return;
                 if (document.visibilityState === 'visible') {
                     lastActivityPollTs = Date.now();
-                    if (window.gbActivePopoutMode !== 'message_thread') {
+                    const mode = window.gbActivePopoutMode || '';
+                    const shouldPollComments = (
+                        mode === 'comment_thread' ||
+                        (mode === 'workspace_view' && activeTab === 'comments') ||
+                        !mode
+                    );
+                    const shouldPollMessages = (
+                        mode === 'message_thread' ||
+                        (mode === 'workspace_view' && activeTab === 'messages') ||
+                        !mode
+                    );
+                    if (shouldPollComments) {
                         fetchComments(false);
                     }
-                    if (window.gbActivePopoutMode !== 'comment_thread') {
+                    if (shouldPollMessages) {
                         fetchConversations(false);
-                        if (window.gbActivePopoutMode !== 'message_thread') {
-                            if (activeEmailAccountId) {
-                                refreshActiveEmailInbox(false, true);
-                            }
-                            pollRealtimeEmailWebhookEvents();
+                    }
+                    if (!mode || (mode === 'workspace_view' && activeTab === 'email') || mode === 'email_view') {
+                        if (activeEmailAccountId) {
+                            refreshActiveEmailInbox(false, true);
                         }
+                        pollRealtimeEmailWebhookEvents();
                     }
                 }
             });

@@ -1854,7 +1854,7 @@ def _fetch_imap_folder_messages(acc: dict, folder: str = "inbox", query_str: str
 
 @router.get("/api/email/messages")
 def api_get_single_account_emails(
-    account_id: str,
+    account_id: str = "",
     folder: str = "inbox",
     q: str = "",
     page_token: str = "",
@@ -1867,22 +1867,28 @@ def api_get_single_account_emails(
     """
     _load_email_hub_state()
     clean_acc_id = str(account_id or "").strip()
-    if not clean_acc_id:
-        return JSONResponse({"status": "error", "message": "account_id is required."}, status_code=400)
 
     target_acc = None
-    for a in EMAIL_HUB_STATE["accounts"]:
-        if str(a.get("id")) == clean_acc_id:
-            target_acc = a
-            break
-
-    if not target_acc:
-        # Try discovering once in case it was just connected
-        _discover_composio_email_accounts()
+    if clean_acc_id:
         for a in EMAIL_HUB_STATE["accounts"]:
             if str(a.get("id")) == clean_acc_id:
                 target_acc = a
                 break
+    elif EMAIL_HUB_STATE["accounts"]:
+        target_acc = EMAIL_HUB_STATE["accounts"][0]
+        clean_acc_id = str(target_acc.get("id") or "").strip()
+
+    if not target_acc:
+        # Try discovering once in case it was just connected
+        _discover_composio_email_accounts()
+        if clean_acc_id:
+            for a in EMAIL_HUB_STATE["accounts"]:
+                if str(a.get("id")) == clean_acc_id:
+                    target_acc = a
+                    break
+        elif EMAIL_HUB_STATE["accounts"]:
+            target_acc = EMAIL_HUB_STATE["accounts"][0]
+            clean_acc_id = str(target_acc.get("id") or "").strip()
 
     if not target_acc:
         return JSONResponse({"status": "error", "message": "Selected email account not found."}, status_code=404)

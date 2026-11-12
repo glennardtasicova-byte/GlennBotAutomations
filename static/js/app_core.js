@@ -1436,7 +1436,7 @@
         }
 
         // --- TAB NAVIGATION ---
-        function switchTab(tabName) {
+        function switchTab(tabName, skipAutoFetch = false) {
             activeTab = tabName;
             hidePostTooltip();
             const tabs = ['scheduler', 'calendar', 'queue', 'messages', 'comments', 'analytics', 'email', 'contacts', 'files', 'spreadsheet', 'automations'];
@@ -1446,6 +1446,7 @@
                 if (viewEl) viewEl.classList.toggle('hidden', t !== tabName);
                 if (btnEl) btnEl.classList.toggle('active', t === tabName);
             });
+            if (skipAutoFetch) return;
             if (tabName === 'calendar' || tabName === 'queue') {
                 fetchScheduledPosts();
                 if (tabName === 'calendar') {
@@ -2675,15 +2676,6 @@
                     'Focused on Post Media, Original Caption, Comment Thread & Direct Reply',
                     'fa-comments'
                 );
-                switchTab('comments');
-                document.getElementById('comments-top-filter-bar')?.classList.add('hidden');
-                document.getElementById('comments-left-column')?.classList.add('hidden');
-                const cDetail = document.getElementById('comment-detail-panel');
-                if (cDetail) {
-                    cDetail.classList.remove('lg:w-7/12');
-                    cDetail.classList.add('w-full', 'lg:w-full', 'flex-1');
-                }
-
                 let targetRecordId = String(params.record_id || '').trim();
                 let cachedDraft = '';
                 try {
@@ -2705,7 +2697,16 @@
                     selectedCommentId = String(params.comment_id);
                 }
 
-                // Fetch live Zernio-reconciled comments for this post first so stale/deleted comments never flash from cache
+                switchTab('comments', true);
+                document.getElementById('comments-top-filter-bar')?.classList.add('hidden');
+                document.getElementById('comments-left-column')?.classList.add('hidden');
+                const cDetail = document.getElementById('comment-detail-panel');
+                if (cDetail) {
+                    cDetail.classList.remove('lg:w-7/12');
+                    cDetail.classList.add('w-full', 'lg:w-full', 'flex-1');
+                }
+
+                // Fetch live Zernio-reconciled comments for this post once with selectedRecordId already set
                 if (typeof fetchComments === 'function') {
                     await fetchComments(false);
                 }
@@ -2762,7 +2763,7 @@
 
             // 3. EMAIL VIEW EXPANDED WINDOW
             if (cleanMode === 'email_view') {
-                switchTab('email');
+                switchTab('email', true);
                 let targetAccId = String(params.account_id || '').trim();
                 let targetMsgId = String(params.message_id || '').trim();
                 let cachedMsg = null;
@@ -2830,7 +2831,7 @@
 
             // 4. MESSAGE THREAD EXPANDED WINDOW
             if (cleanMode === 'message_thread') {
-                switchTab('messages');
+                switchTab('messages', true);
                 document.getElementById('messages-top-filter-bar')?.classList.add('hidden');
                 document.getElementById('messages-left-column')?.classList.add('hidden');
                 const mDetail = document.getElementById('message-detail-panel');
@@ -3054,7 +3055,7 @@
                     'Dedicated Standalone File Manager & Python File ID Generator',
                     'fa-folder-open'
                 );
-                switchTab('files');
+                switchTab('files', true);
                 document.getElementById('btn-files-expanded-view')?.classList.add('hidden');
 
                 let searchVal = String(params.search || '').trim();
@@ -3155,6 +3156,15 @@
             return true;
         }
 
+        function applyInstantPopoutChromeHideIfPresent() {
+            const parsed = getUrlPopoutParams();
+            if (!parsed || !parsed.mode) return;
+            window.gbActivePopoutMode = String(parsed.mode || '').trim();
+            window.gbActivePopoutParams = parsed.params || {};
+            document.getElementById('main-dashboard-header')?.classList.add('hidden');
+            document.getElementById('left-nav-sidebar')?.classList.add('hidden');
+        }
+
         // Double-Click Expanded View Listener — ONLY on Left Sidebar Navigation Menu Buttons (#left-nav-sidebar)
         function initGlennBotDoubleClickExpandedView() {
             if (window.gbDblClickExpandedInitialized) return;
@@ -3184,11 +3194,11 @@
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => {
                 initGlennBotDoubleClickExpandedView();
-                applyGlennBotPopoutModeIfPresent();
+                applyInstantPopoutChromeHideIfPresent();
             });
         } else {
             initGlennBotDoubleClickExpandedView();
-            applyGlennBotPopoutModeIfPresent();
+            applyInstantPopoutChromeHideIfPresent();
         }
 
 
