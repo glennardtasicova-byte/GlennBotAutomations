@@ -2815,8 +2815,13 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                         wb["obsolete_replaced_sigs"] = obsolete_sigs
 
                         # When syncing the active target workbook (target_clean), ALWAYS pull live bytes
-                        # because Google Sheets web editor buffers edits before Drive metadata modifiedTime updates!
-                        should_download_live = bool(target_clean) or is_meta_modified
+                        # UNLESS GlennBot just wrote to this workbook locally within the last 60s and Drive metadata hasn't changed outside GlennBot!
+                        recent_glennbot_write = (
+                            str(wb.get("last_edit_source") or "") == "glennbot"
+                            and (now_ts - last_local_save_ts) < 60.0
+                            and not is_meta_modified
+                        )
+                        should_download_live = (bool(target_clean) or is_meta_modified) and not recent_glennbot_write
                         if should_download_live:
                             wb_title_str = str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx")
                             fresh_sheets = _download_and_parse_gdrive_spreadsheet(
@@ -3459,8 +3464,33 @@ def _build_sheet_structured_rows(sheet_obj: Dict[str, Any]) -> Tuple[Dict[str, s
             headers_by_col[col_let] = eval_v.strip()
         rows_by_num.setdefault(row_num, {})[col_let] = eval_v
 
+    # Determine whether Row 1 is a genuine header row or a data row (e.g. Q&A or Conversation written into Row 1)
+    row1_is_header = False
+    if headers_by_col:
+        r1_a = str(headers_by_col.get("A") or "").strip().lower()
+        r1_b = str(headers_by_col.get("B") or "").strip().lower()
+        known_headers = {
+            "thread id", "thread_id", "conversation id", "conversation_id", "conversations", "conversation",
+            "question", "questions", "keyword", "keywords", "key sentence", "key sentences", "key phrases",
+            "answer", "answers", "script", "reply", "replies", "response", "column a", "column b",
+            "name", "client name", "email", "phone", "platform", "status", "id", "author", "tanong", "sagot"
+        }
+        if r1_a in known_headers or r1_b in known_headers:
+            row1_is_header = True
+        elif (
+            len(rows_by_num) > 1
+            and "|" not in r1_a
+            and "|" not in r1_b
+            and ":" not in r1_b
+            and len(r1_a) <= 32
+            and len(r1_b) <= 32
+            and not r1_a.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_", "dm_"))
+            and not r1_a.isdigit()
+        ):
+            row1_is_header = True
+
     structured_rows: List[Dict[str, Any]] = []
-    start_row = 2 if (headers_by_col and len(rows_by_num) > 1) else 1
+    start_row = 2 if (row1_is_header and len(rows_by_num) > 1) else 1
     for r_num in sorted(rows_by_num.keys()):
         if r_num < start_row:
             continue
@@ -3468,9 +3498,10 @@ def _build_sheet_structured_rows(sheet_obj: Dict[str, Any]) -> Tuple[Dict[str, s
         row_obj: Dict[str, Any] = {"_row_number": r_num}
         for c_let, val_str in col_vals.items():
             row_obj[c_let] = val_str
-            hdr_name = headers_by_col.get(c_let)
-            if hdr_name and hdr_name not in row_obj:
-                row_obj[hdr_name] = val_str
+            if row1_is_header:
+                hdr_name = headers_by_col.get(c_let)
+                if hdr_name and hdr_name not in row_obj:
+                    row_obj[hdr_name] = val_str
         structured_rows.append(row_obj)
 
     return headers_by_col, structured_rows, evaluated_cells
@@ -3853,6 +3884,7 @@ async def api_v1_append_spreadsheet_row(request: Request):
             target_sheet = sheets_list[0]
 
     cells_map: Dict[str, str] = target_sheet.setdefault("cells", {})
+    prev_sig_before_append = _compute_sheets_signature(target_wb.get("sheets"))
     headers_by_col, target_row = _extract_sheet_headers_and_next_row(target_sheet)
     header_name_to_col = {str(h_val).strip().lower(): c_let for c_let, h_val in headers_by_col.items() if h_val}
 
@@ -3864,25 +3896,36 @@ async def api_v1_append_spreadsheet_row(request: Request):
         }
     written_cells: Dict[str, str] = {}
 
-    explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
-    if explicit_row_num >= 1:
-        target_row = explicit_row_num
-    else:
-        # Support `match_column` + `match_value` upsert if explicit row_number was not passed
-        match_col = str(body.get("match_column") or "").strip().upper()
-        match_val = str(body.get("match_value") or "").strip()
-        if match_col and match_val:
-            norm_mv = match_val.split("_")[-1].strip() if not match_val.startswith(("fb_live_", "ig_live_", "portfolio_")) else match_val
-            for coord_k, cell_v in list(cells_map.items()):
-                parsed_c = _split_cell_coord(coord_k)
-                if not parsed_c:
+    # Always check if match_column + match_value matches an existing row first (even if row_number was passed)
+    # so we never accidentally create duplicate rows for the same thread or overwrite the wrong row!
+    match_col = str(body.get("match_column") or "A").strip().upper()
+    match_val = str(
+        body.get("match_value")
+        or (raw_row_data.get("A") if isinstance(raw_row_data, dict) and "conversation" in str(target_wb.get("title") or "").lower() else "")
+        or ""
+    ).strip()
+    matched_existing_row: Optional[int] = None
+    if match_col and match_val:
+        norm_mv = match_val.split("_")[-1].strip() if not match_val.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else match_val
+        for coord_k, cell_v in list(cells_map.items()):
+            parsed_c = _split_cell_coord(coord_k)
+            if not parsed_c:
+                continue
+            c_let_k, _, r_num_k = parsed_c
+            if c_let_k == match_col and r_num_k >= 1:
+                c_str = str(cell_v or "").strip()
+                if r_num_k == 1 and c_str.lower() in ("thread id", "thread_id", "conversation id", "questions", "question", "keywords"):
                     continue
-                c_let_k, _, r_num_k = parsed_c
-                if c_let_k == match_col and r_num_k >= 2:
-                    c_str = str(cell_v or "").strip()
-                    if c_str == match_val or c_str == norm_mv or (norm_mv and norm_mv in c_str):
-                        target_row = r_num_k
-                        break
+                norm_c_str = c_str.split("_")[-1].strip() if not c_str.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")) else c_str
+                if c_str == match_val or c_str == norm_mv or (norm_mv and (norm_c_str == norm_mv or norm_mv in c_str)):
+                    matched_existing_row = r_num_k
+                    break
+
+    explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
+    if matched_existing_row is not None:
+        target_row = matched_existing_row
+    elif explicit_row_num >= 1:
+        target_row = explicit_row_num
 
     # Optional native thread grouping: if thread_id is passed (or [Thread: ...] in Column A),
     # find any existing row in cells_map that belongs to the same comment thread and update that row in-place!
@@ -3905,12 +3948,38 @@ async def api_v1_append_spreadsheet_row(request: Request):
                         break
     if existing_thread_row is not None:
         target_row = existing_thread_row
-        if isinstance(raw_row_data, dict) and "B" in raw_row_data and f"B{target_row}" in cells_map:
-            prev_b = str(cells_map.get(f"B{target_row}") or "").strip()
-            new_b = str(raw_row_data.get("B") or "").strip()
-            if prev_b and new_b and new_b not in prev_b:
-                raw_row_data = dict(raw_row_data)
-                raw_row_data["B"] = f"{prev_b}\n{new_b}"
+
+    # If updating an existing row in Conversations.xlsx, preserve all earlier '|' pipe segments so history is never lost!
+    if "conversation" in str(target_wb.get("title") or "").lower() and isinstance(raw_row_data, dict) and "B" in raw_row_data and f"B{target_row}" in cells_map:
+        prev_b = str(cells_map.get(f"B{target_row}") or "").strip()
+        new_b = str(raw_row_data.get("B") or "").strip()
+        if prev_b and new_b and prev_b != new_b:
+            merged_pipe_segs: List[str] = []
+            def _add_pipe_seg(seg_str: str) -> None:
+                s_clean = re.sub(r"\s+", " ", str(seg_str or "")).strip()
+                if not s_clean:
+                    return
+                s_low = s_clean.lower()
+                s_msg_only = s_clean.split(":", 1)[1].strip().lower() if ":" in s_clean else s_low
+                for idx_s, ex_s in enumerate(merged_pipe_segs):
+                    ex_low = ex_s.lower()
+                    if ex_low == s_low:
+                        return
+                    if ":" not in ex_s and ":" in s_clean and ex_low == s_msg_only:
+                        merged_pipe_segs[idx_s] = s_clean
+                        return
+                    if ":" in ex_s and ":" not in s_clean and ex_s.split(":", 1)[1].strip().lower() == s_low:
+                        return
+                merged_pipe_segs.append(s_clean)
+
+            for part_p in prev_b.split("|"):
+                for sub_p in part_p.splitlines():
+                    _add_pipe_seg(sub_p)
+            for part_n in new_b.split("|"):
+                for sub_n in part_n.splitlines():
+                    _add_pipe_seg(sub_n)
+            raw_row_data = dict(raw_row_data)
+            raw_row_data["B"] = " | ".join(merged_pipe_segs)
 
     if isinstance(raw_row_data, list):
         for col_idx, val in enumerate(raw_row_data):
@@ -3963,7 +4032,14 @@ async def api_v1_append_spreadsheet_row(request: Request):
         return JSONResponse({"status": "error", "message": "No row values provided. Pass 'row': {'A': '...', 'B': '...'} or top-level 'client_name', 'email_address', 'platform', 'status'."}, status_code=400)
 
     target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), target_row + 5)
-    target_wb["last_local_save_ts"] = time.time()
+    now_append_ts = time.time()
+    if prev_sig_before_append:
+        obs_map = target_wb.get("obsolete_replaced_sigs")
+        if not isinstance(obs_map, dict):
+            obs_map = {}
+        obs_map[prev_sig_before_append] = now_append_ts
+        target_wb["obsolete_replaced_sigs"] = obs_map
+    target_wb["last_local_save_ts"] = now_append_ts
     target_wb["last_edit_source"] = "glennbot"
     target_wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
     _save_spreadsheets_store()

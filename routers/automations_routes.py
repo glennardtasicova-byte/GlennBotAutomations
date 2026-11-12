@@ -221,10 +221,12 @@ def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
                 else:
                     ex_w = wf_list[existing_idx]
                     ex_json_str = json.dumps(ex_w.get("workflow_json") or {}, ensure_ascii=False)
-                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs or rootBody.data unnesting
+                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs, rootBody.data unnesting, or updated Sheet1/Sheet2 pipe memory nodes
                     if (
                         "6adda70399e7b30829e8859c" not in ex_json_str
                         or "rootBody.data" not in ex_json_str
+                        or ("dm-thread-ai-agent" in ex_json_str and "SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS" not in ex_json_str)
+                        or ("comment-thread-ai-agent" in ex_json_str and "Save Bot Response to Conversations.xlsx Sheet1" not in ex_json_str)
                     ):
                         ex_w["workflow_json"] = seed_json
                         ex_w["name"] = target_name
@@ -1139,24 +1141,27 @@ const $ = (name) => {
                 wb.get("account_id")
                 or ("6adda70399e7b30829e8859c" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
             ).strip()
-            acc_name = "HappyFinds Hub (+63 995 260 1753)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
+            acc_name = "GlennBot Automations (+63 995 260 1753)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
             is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", False)))
             raw_text = str(wb.get("text") or wb.get("message") or "").strip()
             clean_msg = re.sub(r"\s+", " ", raw_text.replace("|", "/")).strip()
-            dm_thread_id = conv_id or (f"dm_{participant_id}" if participant_id else f"dm_{msg_id}")
-            speaker = "GlennBot Automations" if is_own_msg else participant_name
+            def _norm_tid(val_str: str) -> str:
+                s_v = str(val_str or "").strip()
+                if s_v.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
+                    return s_v
+                return s_v.split("_")[-1].strip() if "_" in s_v else s_v
+
+            dm_thread_id = _norm_tid(conv_id or participant_id) or f"dm_{msg_id}"
+            speaker = acc_name if is_own_msg else participant_name
             new_entry = f"{speaker}: {clean_msg}" if clean_msg else ""
 
             matched_row_idx: Optional[int] = None
             existing_pipe = ""
+            cand_tids = {dm_thread_id, conv_id, _norm_tid(conv_id), participant_id, _norm_tid(participant_id)} - {""}
             for pr in parsed_conv_rows:
-                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "conversation_id"):
+                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "conversation_id", "conversation id"):
                     continue
-                if pr["colA"] and (
-                    pr["colA"] == dm_thread_id
-                    or (conv_id and pr["colA"] == conv_id)
-                    or (participant_id and pr["colA"] == f"dm_{participant_id}")
-                ):
+                if pr["colA"] and (pr["colA"] in cand_tids or _norm_tid(pr["colA"]) in cand_tids):
                     matched_row_idx = pr["rowNum"]
                     existing_pipe = pr["colB"]
                     break
@@ -1166,25 +1171,38 @@ const $ = (name) => {
                 next_empty = 2
             target_row_idx = matched_row_idx if matched_row_idx is not None else next_empty
 
-            pipe_conv = existing_pipe
+            segments_list: List[str] = []
+            def _add_dm_seg(s_raw: str) -> None:
+                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+                if not sc:
+                    return
+                sc_low = sc.lower()
+                for ex_s in segments_list:
+                    if ex_s.lower() == sc_low:
+                        return
+                segments_list.append(sc)
+
+            if existing_pipe:
+                for pt in existing_pipe.split("|"):
+                    for sl in pt.splitlines():
+                        _add_dm_seg(sl)
+            raw_dm_tr = str(wb.get("dm_transcript") or "").strip()
+            if raw_dm_tr:
+                for sl in raw_dm_tr.splitlines():
+                    for pt in sl.split("|"):
+                        _add_dm_seg(pt)
             if new_entry:
-                if not pipe_conv:
-                    pipe_conv = new_entry
-                else:
-                    segments = [sg.strip() for sg in pipe_conv.split("|") if sg.strip()]
-                    last_seg = segments[-1] if segments else ""
-                    if last_seg.lower() != new_entry.lower():
-                        segments.append(new_entry)
-                    pipe_conv = " | ".join(segments)
+                _add_dm_seg(new_entry)
+            pipe_conv = " | ".join(segments_list)
 
             # Match against Script.xlsx QA pairs
             qa_pairs = [
                 {"question": sr["colA"], "answer": sr["colB"]}
                 for sr in parsed_script_rows
-                if sr["colA"] and sr["colB"] and sr["colA"].lower() not in ("questions", "question", "thread id")
+                if sr["colA"] and sr["colB"] and sr["colA"].lower() not in ("questions", "question", "thread id", "keywords")
             ]
             faq_block = "\n".join(
-                f"Q{idx_q + 1}: {qp['question']}\nA{idx_q + 1}: {qp['answer']}"
+                f"Row {idx_q + 1} | Column A (Keywords / Questions): \"{qp['question']}\" -> Column B (Reference Answer): \"{qp['answer']}\""
                 for idx_q, qp in enumerate(qa_pairs)
             )
             plat_label = (
@@ -1192,21 +1210,29 @@ const $ = (name) => {
                 else ("Instagram (@glennard.tasico.va)" if is_ig else "Facebook Page (GlennBot Automations)")
             )
             ai_prompt = (
-                f"Write a natural, helpful 1-to-3 sentence direct message reply as Glennard (speaking in first-person 'I' / 'ko' / 'akin') to {participant_name} on {plat_label}.\n\n"
-                f"Official Q&A Reference (Script.xlsx):\n{faq_block or 'Use general knowledge as Glennard Tasico (AI Automation Specialist & Industrial Engineer).'}\n\n"
-                f"Conversation Thread History:\n{pipe_conv}\n\n"
-                f"Latest DM from {participant_name}: \"{clean_msg}\"\n\n"
-                f"Reply directly to {participant_name} in matching language (English, Tagalog, or Taglish):"
+                f"You are replying directly in a Private Direct Message via {plat_label} as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin') through \"{acc_name}\".\n\n"
+                f"SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet2 & \"Script.xlsx\" Sheet1):\n"
+                f"1. Read the Full DM Conversation History in Sheet2 (separated by '|') carefully so you remember the ongoing topic and context.\n"
+                f"2. Match the client's Latest Direct Message (\"{clean_msg}\") against Column A of Script.xlsx (Sheet1) and use Column B as your factual guide to construct your own natural reply (do NOT copy-paste Column B verbatim).\n\n"
+                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block or '(Use general knowledge as Glennard Tasico, AI Automation Specialist & Industrial Engineer)'}\n\n"
+                f"Conversation ID: {dm_thread_id}\n"
+                f"Full DM Conversation History in Sheet2 (separated by |):\n{pipe_conv}\n\n"
+                f"Latest Direct Message from {participant_name}: \"{clean_msg}\"\n\n"
+                f"Reply directly to {participant_name} in the exact same language as their latest message:"
             )
             return {
                 "sheetRowIdx": target_row_idx,
+                "targetRowNumber": target_row_idx,
                 "isExistingThread": matched_row_idx is not None,
+                "dmThreadId": dm_thread_id,
                 "colAThreadId": dm_thread_id,
+                "pipeConversation": pipe_conv,
                 "colBConversation": pipe_conv,
-                "conversationId": conv_id,
+                "conversationId": conv_id or dm_thread_id,
                 "accountId": acc_id,
                 "accountName": acc_name,
-                "participantId": participant_id,
+                "pageName": acc_name,
+                "participantId": participant_id or dm_thread_id,
                 "participantName": participant_name,
                 "messageId": msg_id,
                 "latestMessage": clean_msg,

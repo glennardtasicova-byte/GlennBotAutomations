@@ -843,6 +843,24 @@ def _fetch_conversations_for_connected_account(acc_item: Dict[str, Any], seen_co
         )
         ts_info = parse_meta_timestamp(raw_updated_ts, fallback_offset_seconds=order_idx)
 
+        if not parsed_msgs and last_text and last_text != "Start a conversation":
+            dir_hint = str(item.get("lastMessageDirection") or item.get("direction") or "").strip().lower()
+            synth_raw = dict(item)
+            synth_raw["text"] = last_text
+            synth_raw["createdAt"] = raw_updated_ts or ts_info["iso"]
+            if dir_hint in ("outbound", "sent", "outgoing"):
+                synth_raw["direction"] = "outbound"
+                synth_raw["isOwn"] = True
+            synth_msg = _parse_single_message_item(
+                synth_raw,
+                effective_z_acc_id,
+                acc_name,
+                platform,
+                participant_fallback_name=p_info["participant_name"],
+                participant_fallback_avatar=p_info["participant_avatar"]
+            )
+            parsed_msgs.append(synth_msg)
+
         conv_key = f"{db_acc_id}_{conv_id}"
         last_seen_iso = seen_conv_map.get(conv_key) or seen_conv_map.get(conv_id) or ""
         api_unread = int(item.get("unreadCount") or item.get("unread_count") or 0)
@@ -1358,17 +1376,21 @@ def sync_all_messages_to_cloudinary(force_refresh: bool = False) -> bool:
                             incoming_filtered = _filter_out_deleted_messages(prev_c, fc.get("messages") or [])
                             had_count = len(prev_msgs)
                             has_new_incoming = False
+                            new_incoming_msgs: List[Dict[str, Any]] = []
                             for nm in incoming_filtered:
                                 if not any(_are_messages_duplicate(ex_m, nm) for ex_m in prev_msgs):
                                     if not nm.get("is_own"):
                                         has_new_incoming = True
-                                        if "_notify_n8n_new_message" in globals():
-                                            _notify_n8n_new_message(prev_c, nm, is_background_sync=True)
+                                        new_incoming_msgs.append(nm)
 
                             merged_msgs = _filter_out_deleted_messages(prev_c, _deduplicate_messages_list(prev_msgs + incoming_filtered))
                             if len(merged_msgs) != had_count:
                                 any_change = True
                             prev_c["messages"] = merged_msgs
+
+                            if new_incoming_msgs and "_notify_n8n_new_message" in globals():
+                                # Trigger Auto DM with the full merged thread history on the latest incoming message
+                                _notify_n8n_new_message(prev_c, new_incoming_msgs[-1], is_background_sync=True)
 
                             if fc.get("participant_name") and fc["participant_name"] not in ("User", "Facebook User", "Instagram User", "TikTok User"):
                                 prev_c["participant_name"] = fc["participant_name"]
@@ -1811,7 +1833,7 @@ def get_conversation_messages_thread(
                 target_conv["alternate_conversation_ids"] = alt_list
 
             if all_fetched_raw_msgs:
-                existing_msgs = list(target_conv.get("messages") or [])
+                existing_msgs = _filter_out_deleted_messages(target_conv, list(target_conv.get("messages") or []))
                 new_parsed_list = []
                 for m_raw in all_fetched_raw_msgs:
                     if not isinstance(m_raw, dict):
@@ -1826,7 +1848,14 @@ def get_conversation_messages_thread(
                     )
                     new_parsed_list.append(pm)
 
-                merged_msgs = _filter_out_deleted_messages(target_conv, _deduplicate_messages_list(existing_msgs + new_parsed_list))
+                filtered_new_parsed = _filter_out_deleted_messages(target_conv, new_parsed_list)
+                newly_discovered_incoming: List[Dict[str, Any]] = []
+                if existing_msgs:
+                    for pm in filtered_new_parsed:
+                        if not pm.get("is_own") and not any(_are_messages_duplicate(ex_m, pm) for ex_m in existing_msgs):
+                            newly_discovered_incoming.append(pm)
+
+                merged_msgs = _filter_out_deleted_messages(target_conv, _deduplicate_messages_list(existing_msgs + filtered_new_parsed))
                 target_conv["messages"] = merged_msgs
                 if merged_msgs:
                     target_conv["last_message_text"] = merged_msgs[-1].get("message") or target_conv.get("last_message_text", "")
@@ -1834,6 +1863,9 @@ def get_conversation_messages_thread(
                     if _msg_iso_to_epoch(last_m_iso) >= _msg_iso_to_epoch(target_conv.get("updated_iso") or ""):
                         target_conv["updated_iso"] = last_m_iso
                         target_conv["display_time"] = merged_msgs[-1].get("display_time") or target_conv.get("display_time", "")
+                    # If the latest message in the thread is a newly discovered incoming client message, notify n8n so open-chat polling never swallows it!
+                    if newly_discovered_incoming and not merged_msgs[-1].get("is_own") and "_notify_n8n_new_message" in globals():
+                        _notify_n8n_new_message(target_conv, newly_discovered_incoming[-1], is_background_sync=False)
                 save_messages_store_async()
             else:
                 target_conv["messages"] = _filter_out_deleted_messages(target_conv, _deduplicate_messages_list(target_conv.get("messages") or []))
