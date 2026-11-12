@@ -2984,6 +2984,69 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
         except Exception as wh_err:
             print(f"[⚠️ PORTFOLIO LIVE DM WEBHOOK DISPATCH WARNING]: {wh_err}")
 
+        # Wait up to 12s for the asynchronous DM automation workflow to append the AI reply (`is_own=True`)
+        # so the Portfolio caller receives BOTH the user message and the AI reply in a single response!
+        def _has_ai_reply_after_incoming() -> bool:
+            curr_msgs = list(target_conv.get("messages") or [])
+            seen_in = False
+            for m_item in curr_msgs:
+                if not isinstance(m_item, dict):
+                    continue
+                if str(m_item.get("id") or "") == msg_id:
+                    seen_in = True
+                    continue
+                if seen_in and bool(m_item.get("is_own")) and str(m_item.get("message") or "").strip():
+                    return True
+            return False
+
+        fallback_triggered = False
+        for step_idx in range(80):
+            if _has_ai_reply_after_incoming():
+                break
+            if step_idx == 40 and not fallback_triggered:
+                fallback_triggered = True
+                try:
+                    import os
+                    from routers.automations_routes import _execute_n8n_workflow_json_natively
+                    dm_wf_path = os.path.join(os.getcwd(), "Auto_reply_to_dm_GlennBot_Automations.json")
+                    if os.path.isfile(dm_wf_path):
+                        with open(dm_wf_path, "r", encoding="utf-8") as f_wf:
+                            dm_wf_json = json.load(f_wf)
+                        transcript_lines = []
+                        for m_h in (target_conv.get("messages") or []):
+                            if isinstance(m_h, dict) and str(m_h.get("message") or "").strip():
+                                sp_lbl = eff_acc_name if m_h.get("is_own") else str(m_h.get("sender_name") or eff_part_name)
+                                transcript_lines.append(f"{sp_lbl}: {str(m_h.get('message')).strip()}")
+                        acc_uname = (
+                            "+63 917 549 7760" if eff_plat == "whatsapp"
+                            else ("glennard.tasico.va" if eff_plat == "instagram" else "")
+                        )
+                        _execute_n8n_workflow_json_natively(
+                            dm_wf_json,
+                            "message.received",
+                            {
+                                "platform": eff_plat,
+                                "account_id": eff_acc_id,
+                                "account_name": eff_acc_name,
+                                "username": acc_uname,
+                                "conversation_id": clean_cid,
+                                "participant_id": eff_part_id,
+                                "participant_name": eff_part_name,
+                                "text": msg_text,
+                                "message_text": msg_text,
+                                "is_own": False,
+                                "is_own_message": False,
+                                "dm_transcript": " | ".join(transcript_lines),
+                                "message": dict(incoming_msg_obj, text=msg_text),
+                            },
+                            False,
+                        )
+                        if _has_ai_reply_after_incoming():
+                            break
+                except Exception as fb_err:
+                    print(f"[⚠️ PORTFOLIO LIVE DM FALLBACK EXEC WARNING]: {fb_err}")
+            time.sleep(0.15)
+
         return {
             "status": "success",
             "conversation_key": conv_key,

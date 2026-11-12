@@ -2201,7 +2201,7 @@
                 const msgIdSafe = escapeHTML(m.id || '');
                 const isPortfolioThread = Boolean(
                     (window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled)
-                    || (activeConversationObj && (activeConversationObj.is_portfolio_live_dm || /^(fb_live_|ig_live_|portfolio_)/.test(String(activeConversationObj.conversation_id || ''))))
+                    || (activeConversationObj && (activeConversationObj.is_portfolio_live_dm || /^(fb_live_|ig_live_|wa_live_|portfolio_)/.test(String(activeConversationObj.conversation_id || ''))))
                 );
                 const deleteMsgBtnHTML = (msgIdSafe && !isPortfolioThread)
                     ? `<button type="button" onclick="promptDeleteSingleChatMessage('${msgIdSafe}', event)" class="px-1.5 py-0.5 rounded bg-rose-950/60 hover:bg-rose-600 border border-rose-500/40 text-rose-300 hover:text-white text-[9px] font-semibold transition-all inline-flex items-center gap-1" title="Delete this message"><i class="fas fa-trash-alt text-[8px]"></i></button>`
@@ -2242,7 +2242,7 @@
             const hideShowcaseAdminBtns = Boolean(
                 (window._gbPopoutAutoLatestConfig && window._gbPopoutAutoLatestConfig.enabled)
                 || c.is_portfolio_live_dm
-                || /^(fb_live_|ig_live_|portfolio_)/.test(String(c.conversation_id || ''))
+                || /^(fb_live_|ig_live_|wa_live_|portfolio_)/.test(String(c.conversation_id || ''))
             );
             const avatarHTML = c.participant_avatar
                 ? `<img src="${c.participant_avatar}" class="w-10 h-10 rounded-full object-cover border border-gb-cyan/50 shrink-0" onerror="this.outerHTML='<div class=\\'w-10 h-10 rounded-full bg-slate-800 border border-gb-cyan/50 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0\\'><i class=\\'fas fa-user\\'></i></div>'">`
@@ -2762,4 +2762,29 @@
                 console.error("Mark all messages read error:", e);
             }
         }
+
+        // Listen for live DM sync signals from the Portfolio Split-Screen Showcase parent window
+        window.addEventListener('message', (event) => {
+            try {
+                const payload = event && event.data;
+                if (!payload || typeof payload !== 'object') return;
+                if (payload.type === 'gb_live_dm_updated') {
+                    const incomingConvId = String(payload.conv_id || selectedConversationId || '').trim();
+                    const incomingAccId = String(payload.account_id || selectedConversationAccountId || '').trim();
+                    const incomingConvKey = String(payload.conv_key || selectedConversationKey || (incomingAccId && incomingConvId ? `${incomingAccId}_${incomingConvId}` : '')).trim();
+                    if (!incomingConvId) return;
+                    if (!selectedConversationId || String(selectedConversationId) !== incomingConvId) {
+                        selectMessageConversation(incomingConvKey, incomingConvId, incomingAccId);
+                    } else {
+                        refreshOpenConversationSilently(incomingConvId, incomingAccId);
+                    }
+                    setTimeout(() => {
+                        refreshOpenConversationSilently(incomingConvId, incomingAccId);
+                    }, 900);
+                }
+            } catch (err) {
+                console.warn('gb_live_dm_updated listener warning:', err);
+            }
+        });
+
 
