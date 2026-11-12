@@ -769,6 +769,13 @@ def _fetch_conversations_for_connected_account(acc_item: Dict[str, Any], seen_co
         z_internal_conv_id = str(item.get("id") or item.get("conversationId") or item.get("_id") or conv_id).strip()
 
         p_info = _extract_participant_from_conversation_obj(item, effective_z_acc_id, acc_name, platform)
+        if p_info.get("participant_avatar") and (p_info.get("participant_id") or p_info.get("participant_handle") or p_info.get("participant_name")):
+            remember_author_identity(
+                p_info.get("participant_id") or p_info.get("participant_handle") or p_info.get("participant_name", ""),
+                p_info.get("participant_name") or p_info.get("participant_handle", ""),
+                p_info.get("participant_handle", ""),
+                p_info.get("participant_avatar", "")
+            )
 
         # Extract embedded messages or lastMessage
         inline_msgs_raw = extract_list_from_api_payload(item.get("messages")) or []

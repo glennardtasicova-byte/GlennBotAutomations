@@ -569,8 +569,12 @@
                     ? `<span class="inline-flex items-center gap-1"><span class="px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-bold shadow-[0_0_8px_#f43f5e]">${g.unread_count} new</span></span>`
                     : `<span class="w-2 h-2 rounded-full bg-slate-700 shrink-0" title="All Read"></span>`;
 
-                const avatarHTML = displayAvatar
-                    ? `<img src="${displayAvatar}" class="w-9 h-9 rounded-full object-cover border border-slate-600 shrink-0" onerror="this.outerHTML='<div class=\\'w-9 h-9 rounded-full bg-slate-800 border border-slate-600 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0\\'><i class=\\'fas fa-user\\'></i></div>'">`
+                const displayAuthorId = showCommenterReply ? (latestRep.author_id || c.author_id || '') : (c.author_id || '');
+                const displayAuthorHandle = c.author_handle || '';
+                const fallbackResolverUrl = `/api/comments/avatar?platform=${encodeURIComponent(g.platform || '')}&author_id=${encodeURIComponent(displayAuthorId)}&handle=${encodeURIComponent(displayAuthorHandle)}&name=${encodeURIComponent(displayAuthor || '')}`;
+                const initialAvatarSrc = displayAvatar || ((g.platform === 'instagram' || g.platform === 'facebook') && (displayAuthorId || displayAuthorHandle || displayAuthor) ? fallbackResolverUrl : '');
+                const avatarHTML = initialAvatarSrc
+                    ? `<img src="${initialAvatarSrc}" class="w-9 h-9 rounded-full object-cover border border-slate-600 shrink-0" onerror="if(!this.dataset.retried && '${displayAvatar ? '1' : ''}'==='1'){this.dataset.retried='1';this.src='${fallbackResolverUrl}&refresh=1';}else{this.outerHTML='<div class=\\'w-9 h-9 rounded-full bg-slate-800 border border-slate-600 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0\\'><i class=\\'fas fa-user\\'></i></div>';}">`
                     : `<div class="w-9 h-9 rounded-full bg-slate-800 border border-slate-600 flex items-center justify-center text-xs font-bold text-gb-cyan shrink-0"><i class="fas fa-user"></i></div>`;
 
                 const actionVerbHTML = showCommenterReply
@@ -831,10 +835,13 @@
                             <!-- TOP ROW: AUTHOR INFO & TIMESTAMP ON LEFT, EXTERNAL LINK & DELETE ICON ON RIGHT -->
                             <div class="flex items-start justify-between gap-3 mb-2">
                                 <div class="flex items-center gap-2.5 min-w-0">
-                                    ${c.author_avatar
-                                        ? `<img src="${c.author_avatar}" class="w-8 h-8 rounded-full object-cover border border-gb-cyan/50 shrink-0" onerror="this.outerHTML='<span class=\\'w-8 h-8 rounded-full bg-gb-cyan/20 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan text-xs font-bold shrink-0\\'><i class=\\'fas fa-user\\'></i></span>'">`
-                                        : `<span class="w-8 h-8 rounded-full bg-gb-cyan/20 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan text-xs font-bold shrink-0"><i class="fas fa-user"></i></span>`
-                                    }
+                                    ${(() => {
+                                        const cFallbackUrl = `/api/comments/avatar?platform=${encodeURIComponent(platLower)}&author_id=${encodeURIComponent(c.author_id || '')}&handle=${encodeURIComponent(c.author_handle || '')}&name=${encodeURIComponent(c.author_name || '')}`;
+                                        const cInitSrc = c.author_avatar || ((platLower === 'instagram' || platLower === 'facebook') && (c.author_id || c.author_handle || c.author_name) ? cFallbackUrl : '');
+                                        return cInitSrc
+                                            ? `<img src="${cInitSrc}" class="w-8 h-8 rounded-full object-cover border border-gb-cyan/50 shrink-0" onerror="if(!this.dataset.retried && '${c.author_avatar ? '1' : ''}'==='1'){this.dataset.retried='1';this.src='${cFallbackUrl}&refresh=1';}else{this.outerHTML='<span class=\\'w-8 h-8 rounded-full bg-gb-cyan/20 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan text-xs font-bold shrink-0\\'><i class=\\'fas fa-user\\'></i></span>';}">`
+                                            : `<span class="w-8 h-8 rounded-full bg-gb-cyan/20 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan text-xs font-bold shrink-0"><i class="fas fa-user"></i></span>`;
+                                    })()}
                                     <div class="min-w-0">
                                         <div class="flex items-center gap-1.5 flex-wrap">
                                             <span class="text-xs sm:text-sm font-bold text-white leading-tight">${escapeHTML(c.author_name)}</span>

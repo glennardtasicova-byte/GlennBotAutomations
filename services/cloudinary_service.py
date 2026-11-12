@@ -17,6 +17,7 @@ from core.config import (
     CLOUDINARY_API_KEY,
     CLOUDINARY_API_SECRET,
     ENV_EXTERNAL_API_KEY,
+    ZERNIO_BASE_URL,
     ZERNIO_CLOUDINARY_PUBLIC_ID,
     CLOUDINARY_COMMENTS_PUBLIC_ID,
     CLOUDINARY_MESSAGES_PUBLIC_ID,
@@ -175,41 +176,351 @@ CLOUDINARY_COMMENTS_STORE: Dict[str, Any] = {
 CLOUDINARY_COMMENTS_LOCK = threading.Lock()
 
 
+def _extract_meta_oe_score(url: str) -> int:
+    u = str(url or "").strip()
+    if not u or not u.startswith(("http://", "https://")):
+        return 0
+    m = re.search(r"[?&]oe=([0-9A-Fa-f]{6,12})", u)
+    if m:
+        try:
+            return int(m.group(1), 16)
+        except Exception:
+            return 1
+    if "cdninstagram.com" in u or "fbcdn.net" in u:
+        return 1
+    return 0xFFFFFFFF
+
+
+def _pick_freshest_avatar_url(*urls: str) -> str:
+    best_url = ""
+    best_score = 0
+    for raw in urls:
+        u = str(raw or "").strip()
+        if not u:
+            continue
+        sc = _extract_meta_oe_score(u)
+        if sc > best_score:
+            best_score = sc
+            best_url = u
+    return best_url
+
+
+def _normalize_social_handle_token(val: str) -> str:
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    m_paren = re.search(r"\(@([A-Za-z0-9._-]+)\)", s)
+    if m_paren:
+        return m_paren.group(1).strip().lower()
+    return s.lstrip("@").strip().lower()
+
+
+IG_PARTICIPANT_AVATAR_CACHE: Dict[str, Any] = {
+    "last_fetched": 0.0,
+    "refreshing": False,
+    "by_id": {},
+    "by_handle": {},
+}
+_IG_AVATAR_CACHE_LOCK = threading.Lock()
+
+
 def remember_author_identity(author_id: str, author_name: str, author_handle: str = "", author_avatar: str = ""):
     aid = str(author_id or "").strip()
     nm = str(author_name or "").strip()
-    if not aid or not nm or nm in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User"):
-        return
-    authors_map = CLOUDINARY_COMMENTS_STORE.setdefault("authors", {})
-    prev = authors_map.get(aid) or {}
-    authors_map[aid] = {
-        "name": nm,
-        "handle": str(author_handle or prev.get("handle") or "").strip(),
-        "avatar": str(author_avatar or prev.get("avatar") or "").strip()
-    }
+    generic_set = {"", "User", "TikTok User", "Facebook User", "Instagram User", "YouTube User", "Portfolio Client", "Visitor", "Website Visitor"}
+    clean_hdl = _normalize_social_handle_token(author_handle or (nm if nm and not nm.startswith("User") and " " not in nm else ""))
+    av = str(author_avatar or "").strip()
+
+    if aid and nm and nm not in generic_set:
+        authors_map = CLOUDINARY_COMMENTS_STORE.setdefault("authors", {})
+        prev = authors_map.get(aid) or {}
+        best_av = _pick_freshest_avatar_url(av, prev.get("avatar", ""))
+        best_hdl = str(author_handle or prev.get("handle") or (f"@{clean_hdl}" if clean_hdl else "")).strip()
+        authors_map[aid] = {
+            "name": nm,
+            "handle": best_hdl,
+            "avatar": best_av
+        }
+        if best_av:
+            prev_id_entry = IG_PARTICIPANT_AVATAR_CACHE["by_id"].get(aid) or {}
+            IG_PARTICIPANT_AVATAR_CACHE["by_id"][aid] = {
+                "id": aid,
+                "name": nm,
+                "handle": best_hdl,
+                "avatar": _pick_freshest_avatar_url(best_av, prev_id_entry.get("avatar", ""))
+            }
+
+    if clean_hdl and clean_hdl not in {g.lower() for g in generic_set} and av:
+        prev_h = IG_PARTICIPANT_AVATAR_CACHE["by_handle"].get(clean_hdl) or {}
+        IG_PARTICIPANT_AVATAR_CACHE["by_handle"][clean_hdl] = {
+            "id": aid or prev_h.get("id", ""),
+            "name": (nm if nm not in generic_set else "") or prev_h.get("name") or clean_hdl,
+            "handle": f"@{clean_hdl}",
+            "avatar": _pick_freshest_avatar_url(av, prev_h.get("avatar", ""))
+        }
 
 
-def lookup_known_author_identity(author_id: str, record_id: str = "") -> Optional[Dict[str, str]]:
+def _do_refresh_social_participant_avatars():
+    try:
+        all_keys = get_all_zernio_keys()
+        if not all_keys:
+            return
+        updated_store = False
+        for k in all_keys:
+            headers = {"Authorization": f"Bearer {k.strip()}", "Content-Type": "application/json"}
+            try:
+                acc_resp = HTTP_SESSION.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=12)
+                if acc_resp.status_code == 200:
+                    acc_data = acc_resp.json()
+                    acc_list = acc_data.get("accounts") if isinstance(acc_data, dict) else (acc_data if isinstance(acc_data, list) else [])
+                    for a in (acc_list or []):
+                        if not isinstance(a, dict):
+                            continue
+                        a_id = str(a.get("platformAccountId") or a.get("platformId") or a.get("_id") or a.get("id") or "").strip()
+                        a_uname = _normalize_social_handle_token(a.get("username") or a.get("handle") or "")
+                        a_name = str(a.get("displayName") or a.get("name") or a_uname or "").strip()
+                        a_pic = str(a.get("profilePicture") or a.get("avatar") or a.get("picture") or "").strip()
+                        if a_pic and (a_id or a_uname):
+                            remember_author_identity(a_id or a_uname, a_name or a_uname, f"@{a_uname}" if a_uname else "", a_pic)
+                        a_z_id = str(a.get("_id") or a.get("id") or "").strip()
+                        a_plat = str(a.get("platform") or "").strip().lower()
+                        if a_z_id and a_plat in ("instagram", "facebook"):
+                            try:
+                                conv_resp = HTTP_SESSION.get(
+                                    f"{ZERNIO_BASE_URL}/inbox/conversations",
+                                    params={"accountId": a_z_id},
+                                    headers=headers,
+                                    timeout=12
+                                )
+                                if conv_resp.status_code == 200:
+                                    c_json = conv_resp.json()
+                                    c_list = c_json.get("data") if isinstance(c_json, dict) else (c_json if isinstance(c_json, list) else [])
+                                    if isinstance(c_list, dict):
+                                        c_list = c_list.get("conversations") or c_list.get("items") or []
+                                    convs_store = CLOUDINARY_MESSAGES_STORE.get("conversations") or {}
+                                    for cv in (c_list or []):
+                                        if not isinstance(cv, dict):
+                                            continue
+                                        p_id = str(cv.get("participantId") or cv.get("senderId") or "").strip()
+                                        p_uname = _normalize_social_handle_token(cv.get("participantUsername") or cv.get("participantHandle") or cv.get("username") or "")
+                                        p_name = str(cv.get("participantName") or p_uname or "").strip()
+                                        p_pic = str(cv.get("participantPicture") or cv.get("participantAvatar") or "").strip()
+                                        if p_pic and (p_id or p_uname):
+                                            remember_author_identity(p_id or p_uname, p_name or p_uname, f"@{p_uname}" if p_uname else "", p_pic)
+                                            for st_conv in convs_store.values():
+                                                if not isinstance(st_conv, dict):
+                                                    continue
+                                                st_pid = str(st_conv.get("participant_id") or "").strip()
+                                                st_phdl = _normalize_social_handle_token(st_conv.get("participant_handle") or "")
+                                                if (p_id and st_pid == p_id) or (p_uname and st_phdl == p_uname):
+                                                    best_conv_av = _pick_freshest_avatar_url(p_pic, st_conv.get("participant_avatar", ""))
+                                                    if best_conv_av and st_conv.get("participant_avatar") != best_conv_av:
+                                                        st_conv["participant_avatar"] = best_conv_av
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+        # Also heal any active comments in CLOUDINARY_COMMENTS_STORE whose avatar was missing or expired
+        posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+        for p_entry in posts_store.values():
+            if not isinstance(p_entry, dict):
+                continue
+            for c_obj in (p_entry.get("comments") or {}).values():
+                if not isinstance(c_obj, dict):
+                    continue
+                c_aid = str(c_obj.get("author_id") or "").strip()
+                c_hdl = str(c_obj.get("author_handle") or "").strip()
+                c_nm = str(c_obj.get("author_name") or "").strip()
+                known = lookup_known_author_identity(c_aid, author_handle=c_hdl, author_name=c_nm, _skip_bg_trigger=True)
+                if known and known.get("avatar"):
+                    best_c_av = _pick_freshest_avatar_url(known["avatar"], c_obj.get("author_avatar", ""))
+                    if best_c_av and c_obj.get("author_avatar") != best_c_av:
+                        c_obj["author_avatar"] = best_c_av
+                        updated_store = True
+                for rep in (c_obj.get("replies") or []):
+                    if not isinstance(rep, dict) or rep.get("is_own"):
+                        continue
+                    r_aid = str(rep.get("author_id") or "").strip()
+                    r_nm = str(rep.get("author_name") or "").strip()
+                    r_known = lookup_known_author_identity(r_aid, author_name=r_nm, _skip_bg_trigger=True)
+                    if r_known and r_known.get("avatar"):
+                        best_r_av = _pick_freshest_avatar_url(r_known["avatar"], rep.get("author_avatar", ""))
+                        if best_r_av and rep.get("author_avatar") != best_r_av:
+                            rep["author_avatar"] = best_r_av
+                            updated_store = True
+        if updated_store:
+            save_comments_store_async()
+        IG_PARTICIPANT_AVATAR_CACHE["last_fetched"] = time.time()
+    except Exception as e:
+        print(f"[⚠️ IG PARTICIPANT AVATAR REFRESH WARNING]: {e}")
+    finally:
+        IG_PARTICIPANT_AVATAR_CACHE["refreshing"] = False
+
+
+def refresh_social_participant_avatars_cache(force: bool = False, background: bool = True):
+    now_ts = time.time()
+    with _IG_AVATAR_CACHE_LOCK:
+        if IG_PARTICIPANT_AVATAR_CACHE.get("refreshing"):
+            return
+        min_ttl = 20.0 if force else 600.0
+        if (now_ts - float(IG_PARTICIPANT_AVATAR_CACHE.get("last_fetched") or 0.0)) < min_ttl:
+            return
+        IG_PARTICIPANT_AVATAR_CACHE["refreshing"] = True
+
+    if background:
+        threading.Thread(target=_do_refresh_social_participant_avatars, daemon=True).start()
+    else:
+        _do_refresh_social_participant_avatars()
+
+
+def lookup_known_author_identity(
+    author_id: str,
+    record_id: str = "",
+    author_handle: str = "",
+    author_name: str = "",
+    _skip_bg_trigger: bool = False
+) -> Optional[Dict[str, str]]:
+    if not _skip_bg_trigger:
+        refresh_social_participant_avatars_cache(force=False, background=True)
+
     aid = str(author_id or "").strip()
-    if not aid:
-        return None
-    authors_map = CLOUDINARY_COMMENTS_STORE.get("authors") or {}
-    if aid in authors_map and authors_map[aid].get("name"):
-        return authors_map[aid]
+    generic_names = {"", "User", "TikTok User", "Facebook User", "Instagram User", "YouTube User", "Portfolio Client", "Visitor", "Website Visitor"}
+    generic_lower = {g.lower() for g in generic_names}
 
+    clean_handle = _normalize_social_handle_token(author_handle)
+    clean_name_token = _normalize_social_handle_token(author_name) if author_name and author_name not in generic_names else ""
+    handle_candidates = {h for h in (clean_handle, clean_name_token, _normalize_social_handle_token(aid) if aid and not aid.isdigit() else "") if h and h not in generic_lower}
+
+    if not aid and not handle_candidates:
+        return None
+
+    best_name = str(author_name or "").strip() if str(author_name or "").strip() not in generic_names else ""
+    best_handle = str(author_handle or "").strip()
+    best_avatar = ""
+
+    # 1. Check live IG_PARTICIPANT_AVATAR_CACHE
+    if aid and aid in IG_PARTICIPANT_AVATAR_CACHE["by_id"]:
+        hit = IG_PARTICIPANT_AVATAR_CACHE["by_id"][aid]
+        if not best_name and hit.get("name") not in generic_names:
+            best_name = hit.get("name", "")
+        if not best_handle and hit.get("handle"):
+            best_handle = hit.get("handle", "")
+        best_avatar = _pick_freshest_avatar_url(best_avatar, hit.get("avatar", ""))
+
+    for h_cand in handle_candidates:
+        if h_cand in IG_PARTICIPANT_AVATAR_CACHE["by_handle"]:
+            hit_h = IG_PARTICIPANT_AVATAR_CACHE["by_handle"][h_cand]
+            if not best_name and hit_h.get("name") not in generic_names:
+                best_name = hit_h.get("name", "")
+            if not best_handle and hit_h.get("handle"):
+                best_handle = hit_h.get("handle", "")
+            best_avatar = _pick_freshest_avatar_url(best_avatar, hit_h.get("avatar", ""))
+
+    # 2. Check CLOUDINARY_COMMENTS_STORE["authors"]
+    authors_map = CLOUDINARY_COMMENTS_STORE.get("authors") or {}
+    if aid and aid in authors_map:
+        a_hit = authors_map[aid] or {}
+        if not best_name and a_hit.get("name") not in generic_names:
+            best_name = str(a_hit.get("name") or "")
+        if not best_handle and a_hit.get("handle"):
+            best_handle = str(a_hit.get("handle") or "")
+        best_avatar = _pick_freshest_avatar_url(best_avatar, a_hit.get("avatar", ""))
+
+    if handle_candidates:
+        for a_k, a_val in authors_map.items():
+            if not isinstance(a_val, dict):
+                continue
+            av_hdl = _normalize_social_handle_token(a_val.get("handle") or "")
+            av_nm = _normalize_social_handle_token(a_val.get("name") or "")
+            if (av_hdl and av_hdl in handle_candidates) or (av_nm and av_nm in handle_candidates):
+                if not best_name and a_val.get("name") not in generic_names:
+                    best_name = str(a_val.get("name") or "")
+                if not best_handle and a_val.get("handle"):
+                    best_handle = str(a_val.get("handle") or "")
+                best_avatar = _pick_freshest_avatar_url(best_avatar, a_val.get("avatar", ""))
+
+    # 3. Check CLOUDINARY_MESSAGES_STORE["conversations"] (where Instagram/Facebook DM participant avatars are stored!)
+    convs_store = CLOUDINARY_MESSAGES_STORE.get("conversations") or {}
+    for conv in convs_store.values():
+        if not isinstance(conv, dict):
+            continue
+        c_pid = str(conv.get("participant_id") or "").strip()
+        c_pname = str(conv.get("participant_name") or "").strip()
+        c_phdl = _normalize_social_handle_token(conv.get("participant_handle") or "")
+        c_pname_tok = _normalize_social_handle_token(c_pname)
+        c_pav = str(conv.get("participant_avatar") or "").strip()
+        if not c_pav and not (c_pname and c_pname not in generic_names):
+            continue
+        id_match = bool(aid and c_pid and c_pid == aid)
+        hdl_match = bool(handle_candidates and ((c_phdl and c_phdl in handle_candidates) or (c_pname_tok and c_pname_tok in handle_candidates)))
+        if id_match or hdl_match:
+            if not best_name and c_pname and c_pname not in generic_names:
+                best_name = c_pname
+            if not best_handle and c_phdl:
+                best_handle = f"@{c_phdl}"
+            best_avatar = _pick_freshest_avatar_url(best_avatar, c_pav)
+
+    # 4. Check connected accounts cache (in case commenter is one of the user's connected accounts e.g. @glenntasico)
+    try:
+        import sys as _sys
+        z_mod = _sys.modules.get("services.zernio_service")
+        if z_mod is not None:
+            z_accs = (getattr(z_mod, "ZERNIO_ACCOUNTS_CACHE", {}) or {}).get("accounts") or []
+            for za in z_accs:
+                if not isinstance(za, dict):
+                    continue
+                za_id = str(za.get("platformAccountId") or za.get("platformId") or za.get("_id") or za.get("id") or "").strip()
+                za_uname = _normalize_social_handle_token(za.get("username") or za.get("handle") or "")
+                za_name = str(za.get("displayName") or za.get("name") or "").strip()
+                za_pic = str(za.get("profilePicture") or za.get("avatar") or za.get("picture") or "").strip()
+                if (aid and za_id == aid) or (za_uname and za_uname in handle_candidates):
+                    if not best_name and za_name not in generic_names:
+                        best_name = za_name
+                    if not best_handle and za_uname:
+                        best_handle = f"@{za_uname}"
+                    best_avatar = _pick_freshest_avatar_url(best_avatar, za_pic)
+            conn_items = (getattr(z_mod, "CONNECTED_ACCOUNTS_CACHE", {}) or {}).get("items") or []
+            for ci in conn_items:
+                if not isinstance(ci, dict):
+                    continue
+                ci_id = str(ci.get("account_id") or "").strip()
+                ci_uname = _normalize_social_handle_token(ci.get("username") or "")
+                ci_pic = str(ci.get("avatar_url") or ci.get("profile_picture") or "").strip()
+                if (aid and ci_id == aid) or (ci_uname and ci_uname in handle_candidates):
+                    best_avatar = _pick_freshest_avatar_url(best_avatar, ci_pic)
+    except Exception:
+        pass
+
+    # 5. Check CLOUDINARY_COMMENTS_STORE["posts"]
     posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
     for rid, p_entry in posts_store.items():
+        if not isinstance(p_entry, dict):
+            continue
         for cid, c_obj in (p_entry.get("comments") or {}).items():
+            if not isinstance(c_obj, dict):
+                continue
             c_aid = str(c_obj.get("author_id") or "").strip()
             c_nm = str(c_obj.get("author_name") or "").strip()
-            if c_aid == aid and c_nm and c_nm not in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User"):
-                res = {
-                    "name": c_nm,
-                    "handle": str(c_obj.get("author_handle") or "").strip(),
-                    "avatar": str(c_obj.get("author_avatar") or "").strip()
-                }
-                remember_author_identity(aid, res["name"], res["handle"], res["avatar"])
-                return res
+            c_hdl = _normalize_social_handle_token(c_obj.get("author_handle") or "")
+            c_nm_tok = _normalize_social_handle_token(c_nm)
+            c_av = str(c_obj.get("author_avatar") or "").strip()
+            if (aid and c_aid == aid) or (handle_candidates and ((c_hdl and c_hdl in handle_candidates) or (c_nm_tok and c_nm_tok in handle_candidates))):
+                if not best_name and c_nm and c_nm not in generic_names:
+                    best_name = c_nm
+                if not best_handle and c_hdl:
+                    best_handle = f"@{c_hdl}"
+                best_avatar = _pick_freshest_avatar_url(best_avatar, c_av)
+
+    if best_name or best_avatar:
+        res = {
+            "name": best_name or (f"@{clean_handle}" if clean_handle else "User"),
+            "handle": best_handle or (f"@{clean_handle}" if clean_handle else ""),
+            "avatar": best_avatar
+        }
+        if aid and res["name"] not in generic_names:
+            remember_author_identity(aid, res["name"], res["handle"], res["avatar"])
+        return res
     return None
 
 
@@ -559,7 +870,8 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
         return False
 
     generic_names = {"", "User", "TikTok User", "Facebook User", "Instagram User", "YouTube User"}
-    needs_repair = False
+    needs_name_repair = False
+    repaired_any = False
 
     known_commenters_in_post: List[Dict[str, str]] = []
     for cid, c_obj in c_map.items():
@@ -568,18 +880,36 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
         c_hdl = str(c_obj.get("author_handle") or "").strip()
         c_av = str(c_obj.get("author_avatar") or "").strip()
         if c_nm not in generic_names and not c_obj.get("is_own_comment"):
+            known_id = lookup_known_author_identity(c_aid, author_handle=c_hdl, author_name=c_nm)
+            if known_id and known_id.get("avatar"):
+                best_av = _pick_freshest_avatar_url(known_id["avatar"], c_av)
+                if best_av and best_av != c_av:
+                    c_obj["author_avatar"] = best_av
+                    c_av = best_av
+                    repaired_any = True
             remember_author_identity(c_aid, c_nm, c_hdl, c_av)
             known_commenters_in_post.append({"name": c_nm, "handle": c_hdl, "avatar": c_av, "id": c_aid})
-        else:
-            needs_repair = True
+        elif not c_obj.get("is_own_comment"):
+            needs_name_repair = True
 
         for rep in (c_obj.get("replies") or []):
+            if rep.get("is_own"):
+                continue
             r_nm = str(rep.get("author_name") or "").strip()
-            if r_nm in generic_names and not rep.get("is_own"):
-                needs_repair = True
+            r_aid = str(rep.get("author_id") or "").strip()
+            r_av = str(rep.get("author_avatar") or "").strip()
+            if r_nm in generic_names:
+                needs_name_repair = True
+            else:
+                r_known = lookup_known_author_identity(r_aid, author_name=r_nm)
+                if r_known and r_known.get("avatar"):
+                    best_r_av = _pick_freshest_avatar_url(r_known["avatar"], r_av)
+                    if best_r_av and best_r_av != r_av:
+                        rep["author_avatar"] = best_r_av
+                        repaired_any = True
 
-    if not needs_repair:
-        return False
+    if not needs_name_repair:
+        return repaired_any
 
     tikwm_lookup: Dict[str, Dict[str, str]] = {}
     platform = (p_entry.get("platform") or (db_post or {}).get("platform") or "").strip().lower()
@@ -598,15 +928,15 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
         if tk_vid_id:
             tikwm_lookup = fetch_tikwm_comments_lookup(tk_vid_id)
 
-    repaired_any = False
     for cid, c_obj in c_map.items():
         c_nm = str(c_obj.get("author_name") or "").strip()
         c_aid = str(c_obj.get("author_id") or "").strip()
+        c_hdl = str(c_obj.get("author_handle") or "").strip()
         c_txt = (c_obj.get("message") or "").strip().lower()
 
         if c_nm in generic_names and not c_obj.get("is_own_comment"):
             resolved = (
-                lookup_known_author_identity(c_aid)
+                lookup_known_author_identity(c_aid, author_handle=c_hdl, author_name=c_nm)
                 or tikwm_lookup.get(f"id:{cid}")
                 or (tikwm_lookup.get(f"txt:{c_txt}") if c_txt else None)
             )
@@ -616,8 +946,8 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
                 c_obj["author_name"] = resolved["name"]
                 if resolved.get("handle"):
                     c_obj["author_handle"] = resolved["handle"]
-                if resolved.get("avatar") and not c_obj.get("author_avatar"):
-                    c_obj["author_avatar"] = resolved["avatar"]
+                if resolved.get("avatar"):
+                    c_obj["author_avatar"] = _pick_freshest_avatar_url(resolved["avatar"], c_obj.get("author_avatar", ""))
                 remember_author_identity(c_aid, c_obj["author_name"], c_obj.get("author_handle", ""), c_obj.get("author_avatar", ""))
                 repaired_any = True
 
@@ -634,7 +964,7 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
                 r_txt = (rep.get("message") or "").strip().lower()
 
                 r_resolved = (
-                    lookup_known_author_identity(r_aid)
+                    lookup_known_author_identity(r_aid, author_name=r_nm)
                     or tikwm_lookup.get(f"id:{r_id}")
                     or (tikwm_lookup.get(f"txt:{r_txt}") if r_txt else None)
                 )
@@ -645,8 +975,8 @@ def repair_unknown_authors_in_post_entry(p_entry: Dict[str, Any], db_post: Optio
 
                 if r_resolved and r_resolved.get("name"):
                     rep["author_name"] = r_resolved["name"]
-                    if r_resolved.get("avatar") and not rep.get("author_avatar"):
-                        rep["author_avatar"] = r_resolved["avatar"]
+                    if r_resolved.get("avatar"):
+                        rep["author_avatar"] = _pick_freshest_avatar_url(r_resolved["avatar"], rep.get("author_avatar", ""))
                     repaired_any = True
 
     return repaired_any

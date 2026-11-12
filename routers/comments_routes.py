@@ -78,6 +78,7 @@ from services.cloudinary_service import *
 from services.cloudinary_service import (
     _make_key_id,
     _mask_api_key,
+    _pick_freshest_avatar_url,
     _is_message_deleted_for_conversation,
     _filter_out_deleted_messages,
     _CLOUDINARY_COMMENTS_UPLOAD_LOCK,
@@ -548,14 +549,15 @@ def _parse_single_zernio_reply(rep: Dict[str, Any], clean_user: str, account_nam
         if (r_nick and r_handle and r_nick.lower() != r_handle.lower())
         else (r_nick or (f"@{r_handle}" if r_handle else (account_name if r_is_own else "User")))
     )
-    if r_name == "User" and r_aid:
-        known = lookup_known_author_identity(r_aid)
-        if known and known.get("name"):
-            r_name = known["name"]
-            if not r_avatar and known.get("avatar"):
-                r_avatar = known["avatar"]
-    elif r_name not in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User") and r_aid and not r_is_own:
-        remember_author_identity(r_aid, r_name, f"@{r_handle}" if r_handle else "", r_avatar)
+    if not r_is_own and (r_aid or r_handle or r_name):
+        known = lookup_known_author_identity(r_aid, author_handle=r_handle, author_name=r_name)
+        if known:
+            if r_name == "User" and known.get("name"):
+                r_name = known["name"]
+            if known.get("avatar"):
+                r_avatar = _pick_freshest_avatar_url(r_avatar, known["avatar"])
+        if r_name not in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User") and (r_aid or r_handle):
+            remember_author_identity(r_aid or r_handle, r_name, f"@{r_handle}" if r_handle else "", r_avatar)
 
     r_ts = parse_meta_timestamp(
         rep.get("CreatedAt") or rep.get("createdAt") or rep.get("created_at") or rep.get("timestamp") or rep.get("createdTime") or "",
@@ -1450,14 +1452,15 @@ def fetch_zernio_comments_for_post(
                         or (is_reply_flag and not explicit_not_own and account_name and u_name and u_name.lower() == account_name.strip().lstrip("@").lower())
                     )
 
-                    if commenter_name not in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User") and u_aid and not is_own:
-                        remember_author_identity(u_aid, commenter_name, f"@{u_handle}" if u_handle else "", u_avatar)
-                    elif commenter_name == "User" and u_aid:
-                        known = lookup_known_author_identity(u_aid, record_id)
-                        if known and known.get("name"):
-                            commenter_name = known["name"]
-                            if not u_avatar and known.get("avatar"):
-                                u_avatar = known["avatar"]
+                    if not is_own and (u_aid or u_handle or commenter_name):
+                        known = lookup_known_author_identity(u_aid, record_id, author_handle=u_handle, author_name=commenter_name)
+                        if known:
+                            if commenter_name == "User" and known.get("name"):
+                                commenter_name = known["name"]
+                            if known.get("avatar"):
+                                u_avatar = _pick_freshest_avatar_url(u_avatar, known["avatar"])
+                        if commenter_name not in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User") and (u_aid or u_handle):
+                            remember_author_identity(u_aid or u_handle, commenter_name, f"@{u_handle}" if u_handle else "", u_avatar)
 
                     if not is_reply_flag and is_own:
                         raw_own_msg = str(c.get("Text") or c.get("text") or c.get("message") or c.get("content") or "").strip()
@@ -2292,10 +2295,14 @@ def update_cloudinary_store_for_post(
                     fc["author_name"] = prev_c["author_name"]
                     if prev_c.get("author_handle"):
                         fc["author_handle"] = prev_c["author_handle"]
-                    if prev_c.get("author_avatar"):
-                        fc["author_avatar"] = prev_c["author_avatar"]
                 elif prev_c.get("author_name") in generic_names and fc.get("author_name") not in generic_names:
                     changed = True
+
+                best_fc_av = _pick_freshest_avatar_url(fc.get("author_avatar", ""), prev_c.get("author_avatar", ""))
+                if best_fc_av and fc.get("author_avatar") != best_fc_av:
+                    fc["author_avatar"] = best_fc_av
+                    if prev_c.get("author_avatar") != best_fc_av:
+                        changed = True
 
                 new_reps = [
                     r for r in (fc.get("replies") or [])
@@ -2393,8 +2400,10 @@ def update_cloudinary_store_for_post(
                         existing_r["can_reply"] = True
                         if existing_r.get("author_name") in generic_names and nr.get("author_name") not in generic_names:
                             existing_r["author_name"] = nr["author_name"]
-                            if nr.get("author_avatar"):
-                                existing_r["author_avatar"] = nr["author_avatar"]
+                            changed = True
+                        best_r_av = _pick_freshest_avatar_url(nr.get("author_avatar", ""), existing_r.get("author_avatar", ""))
+                        if best_r_av and existing_r.get("author_avatar") != best_r_av:
+                            existing_r["author_avatar"] = best_r_av
                             changed = True
                         if nr.get("is_liked") and not existing_r.get("is_liked"):
                             existing_r["is_liked"] = True

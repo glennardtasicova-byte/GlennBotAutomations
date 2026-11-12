@@ -299,6 +299,39 @@ def get_all_comments(force: bool = False, active_record_id: str = ""):
         }
 
 
+@router.get("/api/comments/avatar")
+def get_comment_author_avatar(
+    platform: str = "",
+    author_id: str = "",
+    handle: str = "",
+    name: str = "",
+    refresh: int = 0
+):
+    try:
+        if not CLOUDINARY_COMMENTS_STORE.get("loaded"):
+            load_comments_store_from_cloudinary()
+        if not CLOUDINARY_MESSAGES_STORE.get("loaded"):
+            load_messages_store_from_cloudinary()
+
+        known = lookup_known_author_identity(author_id, author_handle=handle, author_name=name)
+        av_url = str((known or {}).get("avatar") or "").strip()
+
+        if refresh or not av_url:
+            refresh_social_participant_avatars_cache(force=True, background=False)
+            known = lookup_known_author_identity(author_id, author_handle=handle, author_name=name, _skip_bg_trigger=True)
+            av_url = str((known or {}).get("avatar") or "").strip()
+
+        if av_url and av_url.startswith(("http://", "https://")):
+            return RedirectResponse(
+                url=av_url,
+                status_code=302,
+                headers={"Cache-Control": "public, max-age=600"}
+            )
+    except Exception:
+        pass
+    return Response(status_code=404)
+
+
 @router.get("/api/posts/{record_id}/live_details")
 def get_live_post_details(record_id: str):
     now_ts = time.time()
