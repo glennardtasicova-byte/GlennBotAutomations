@@ -1203,9 +1203,32 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             "at", "ay", "may", "para", "kung", "kapag", "pag", "nga", "daw", "raw", "pala", "muna"
         }
 
+        tagalog_to_english_kw = {
+            "magkano": ["pricing", "rates", "cost", "quote"],
+            "presyo": ["pricing", "rates", "cost"],
+            "bayad": ["pricing", "cost"],
+            "serbisyo": ["services", "offer"],
+            "alok": ["services", "offer"],
+            "gawa": ["build", "services"],
+            "paano": ["inquire", "started", "contact"],
+            "pano": ["inquire", "started", "contact"],
+            "tawag": ["call", "schedule", "meeting"],
+            "usap": ["call", "contact", "inquire"],
+            "katagal": ["timeline", "turnaround", "long"],
+            "araw": ["timeline", "days"],
+        }
+
         def _tokenize_py(txt: str) -> List[str]:
             words = re.sub(r"[^a-z0-9\u00c0-\u024f]+", " ", str(txt or "").lower()).strip().split()
-            return [w for w in words if len(w) >= 2 and w not in stop_words_py]
+            tokens: List[str] = []
+            for w in words:
+                if w in tagalog_to_english_kw:
+                    for eq_w in tagalog_to_english_kw[w]:
+                        if eq_w not in tokens:
+                            tokens.append(eq_w)
+                if len(w) >= 2 and w not in stop_words_py and w not in tokens:
+                    tokens.append(w)
+            return tokens
 
         def _stem_py(w: str) -> str:
             return re.sub(r"(?:ing|ed|es|s)$", "", str(w or "").lower())

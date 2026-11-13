@@ -2168,6 +2168,140 @@ def _is_unsaved_legacy_default_workbook(wb: Dict[str, Any]) -> bool:
     return False
 
 
+DEFAULT_ENGLISH_SCRIPT_XLSX_CELLS: Dict[str, str] = {
+    "A1": "Keywords / Possible Client Questions",
+    "B1": "Reference Script / Core Answer (First-Person as Glennard R. Tasico)",
+    "A2": "who are you, about you, tell me about yourself, introduce yourself, background, glennard tasico, profile, bio, creator, owner",
+    "B2": "I am Glennard R. Tasico, an AI Automation Specialist, Full-Stack Web Application Developer, and Industrial Process Engineer from Malvar, Batangas. I architected and built GlennBot Automations—an all-in-one AI and operations platform—and I also bring over 11 years of solid experience as an Industrial Engineer and Mold Control Supervisor at EPSON Precision.",
+    "A3": "services, what do you offer, what services do you provide, what do you build, offer, help, how can you help my business, what can you do, freelance, tech va, virtual assistant",
+    "B3": "I build 24/7 AI & Webhook Automations (using n8n, custom REST APIs, and Google Gemini AI), Custom Full-Stack Web Dashboards & CRMs (Python FastAPI + JavaScript + PostgreSQL), Omnichannel Social Media Schedulers & Smart Auto-Responders (Facebook, Instagram, TikTok, YouTube, WhatsApp, Email, and SMS), Automated Calendar Booking Pipelines, and Two-Way Google Drive/Spreadsheet Cloud Sync systems to eliminate manual, repetitive work in your business.",
+    "A4": "price, pricing, rate, rates, how much, cost, payment, quote, quotation, budget, package, fee, hourly rate, project rate, hm, service fee",
+    "B4": "My rates depend on the scope and complexity of the workflow or web dashboard you need—available as a fixed per-project package or a retainer/hourly setup. I offer a free discovery call to assess your current workflow first and give you an exact quotation tailored to your budget and business ROI. You can message me here or book directly via the Calendar widget on my portfolio.",
+    "A5": "contact, how to contact, how to reach you, email, phone, number, whatsapp, viber, linkedin, upwork, reach out, message, dm, call, hire, where can we talk",
+    "B5": "You can contact me directly via email at glennardtasico@gmail.com, on WhatsApp/mobile at +63 917 549 7760, or on LinkedIn (linkedin.com/in/glennard-tasico-8235a312a). You can also use the Send a DM, Send an Email, or Calendar Booking widgets directly on my portfolio at https://glennard-tasico-rdqz.onrender.com/.",
+    "A6": "what is glennbot, about glennbot, glennbot automations, dashboard, platform, system overview, what is inside glennbot, all-in-one platform, glennbot features",
+    "B6": "GlennBot Automations is a full-stack, all-in-one AI and operations platform that I built from scratch using Python (FastAPI), PostgreSQL, Cloudinary, and Google Gemini 3.5 Flash. It unifies 11 core modules: Social Media Scheduler, Dual Calendar & Meeting Hub, Launch Queue, Unified Comments Hub, Omnichannel DM & SMS Inbox, Multi-Account Email Command Center, Contacts & Lead CRM, Social Analytics, Google Drive Files Vault, Built-in Cloud Spreadsheet (.xlsx) Editor, and Native Visual n8n Workflow Engine.",
+    "A7": "tech stack, technology, tools, programming language, what tech do you use, stack, backend, frontend, database, framework, python, fastapi, javascript",
+    "B7": "On the backend and database side, I use Python, FastAPI, SQLAlchemy, PostgreSQL (Supabase), and Cloudinary. On the frontend, I use modern JavaScript (ES6+), HTML5, Tailwind CSS, and Jinja2. For AI and automation, I use the Google Gemini 3.5 Flash API, n8n Webhooks, APScheduler, and custom REST APIs (/api/v1). It is also integrated with Zernio Social APIs, Composio (Google Calendar/Meet/Zoom/Gmail), Google Drive API v3, and TextBee SMS Gateway, and deployed on Render.",
+    "A8": "portfolio, website, demo, sample work, sample projects, live widget, try me, interactive widget, where can I see your work, showcase, live demo",
+    "B8": "You can test the systems I built live on my portfolio: https://glennard-tasico-rdqz.onrender.com/. It is not just static screenshots—it features 4 live interactive showcases where you can test the AI Post Scheduler, comment or send a DM/Email, book a Calendar meeting, and test live Cloud Spreadsheet synchronization.",
+    "A9": "project 1, sys-01, social scheduler, create post, auto post, schedule post, multi-platform posting, facebook, instagram, tiktok, youtube, reels, video upload, caption generator",
+    "B9": "In my AI Content & Omnichannel Social Scheduler module (SYS-01), the system generates brand-calibrated captions and hashtags using Gemini 3.5 Flash (complete with live web search and custom presets), and publishes or schedules simultaneously across Facebook, Instagram, TikTok, and YouTube—including Reels, large chunked video uploads, and images synced with APScheduler and the Zernio API.",
+    "A10": "project 2, sys-02, omnichannel inbox, auto reply, auto responder, smart reply, unified inbox, messages, dm, messenger, instagram dm, whatsapp dm, tiktok dm, triage",
+    "B10": "The Unified Omnichannel Inbox & Smart Auto-Responder (SYS-02) consolidates all messages from Facebook Messenger, Instagram DMs, WhatsApp, TikTok DMs, TextBee SMS, and Email into a single dashboard. It features <2.5s AI triage and an auto-responder that replies naturally to comments and DMs while saving the conversation history to PostgreSQL and Cloud Spreadsheets.",
+    "A11": "comments, comment automation, auto reply to comment, comment hub, notifications, facebook comments, tiktok comments, instagram comments, youtube comments, private dm from comment",
+    "B11": "In GlennBot's Comments & Notifications Hub, comments from live Facebook, Instagram, TikTok, and YouTube posts arrive in real time via webhook and live post sync. It automatically replies to comment threads using Gemini 3.5 Flash based on your custom Script.xlsx and Conversations.xlsx, can like, hide, or delete comments, and can even send a Private DM directly to the commenter.",
+    "A12": "language, english, tagalog, taglish, bisaya, cebuano, spanish, japanese, korean, multilingual, translate, what languages can it speak, does it support multiple languages",
+    "B12": "Yes! My AI workflow has built-in automatic language detection. If a client comments or messages in pure English, it replies in pure English; if the client uses Taglish, Tagalog, Bisaya/Cebuano, Spanish, Japanese, or Korean, the AI automatically adapts to their exact language while still following your core reference script.",
+    "A13": "project 3, sys-03, calendar, booking, schedule meeting, appointment, consultation, discovery call, google meet, zoom, composio, reschedule, cancel meeting",
+    "B13": "My Automated Calendar Booking & n8n Orchestrator (SYS-03) is a zero-touch scheduling system. It checks my Google Calendar availability in real time via Composio, automatically generates a Google Meet or Zoom link, sends calendar email invites, logs the lead in the CRM, and triggers automated SMS reminders.",
+    "A14": "project 4, sys-04, spreadsheet, excel, xlsx, google sheets, google drive sync, 2-way sync, conversations.xlsx, script.xlsx, supplier capacity, database sync",
+    "B14": "GlennBot has its own built-in Cloud Spreadsheet (.xlsx) Editor with real-time 2-way sync to Google Drive and Cloudinary. You can edit Excel files like Conversations.xlsx and Script.xlsx in the browser or in Google Drive, and n8n workflows can read and write to them in real time via /api/v1/spreadsheets/read and /append-row.",
+    "A15": "n8n, workflow, automations tab, visual canvas, json workflow, webhook trigger, ai workflow architect, is a separate n8n server required, native n8n",
+    "B15": "One of GlennBot's most unique features is View 11: Automations Visual Canvas and Native n8n Engine. It can import, edit, and execute .JSON n8n workflows directly inside the GlennBot Python backend even without a separate n8n server, and it includes a built-in Ask AI Workflow Architect that generates JSON workflows for you.",
+    "A16": "api, rest api, internal api, endpoints, webhook, webhooks, integration, x-api-key, developer api, connect external apps, zapier, make",
+    "B16": "GlennBot includes a complete Internal REST API (/api/v1/*) protected by X-API-Key authentication. It provides endpoints for AI (/api/v1/ai/ask), Comments (/api/v1/comments/reply), Messages (/api/v1/messages/send), SMS (/api/v1/sms/send), Email (/api/v1/email/send), Contacts CRM, Calendar Booking, Files Vault, and Spreadsheets—making it easy to integrate with n8n, Make, Zapier, or any external application.",
+    "A17": "email hub, email automation, gmail, imap, smtp, business email, auto email, email webhook, send email, inbox",
+    "B17": "In GlennBot's Client Email Command Center, you can connect multiple Gmail accounts (via Composio OAuth) and custom business emails (via IMAP/SMTP). You can read, reply, attach files, and configure real-time email.received webhook triggers for automated AI email triage and replies.",
+    "A18": "sms, text message, textbee, android sms gateway, sms automation, send sms, sms alert, sms reminder, text blast",
+    "B18": "GlennBot is integrated with the TextBee.dev SMS Gateway so it can send and receive real-time SMS directly through your Android phone—ideal for instant lead alerts, OTPs, meeting reminders, and two-way SMS auto-replies.",
+    "A19": "crm, contacts, leads, lead generation, customer database, google contacts, client management, lead tracking",
+    "B19": "GlennBot features a built-in Contacts & Lead CRM module synced with PostgreSQL and equipped with 1-click Google Contacts OAuth2 import. It automatically saves lead details from comments, DMs, emails, and bookings so you never miss a prospect.",
+    "A20": "files vault, google drive, cloud storage, file id, media storage, video streaming, upload files",
+    "B20": "The Files Vault module integrates with Google Drive API v3 and assigns a unique Automation File ID to every uploaded image, video, or spreadsheet document so it can be referenced directly in scheduled posts and automation workflows.",
+    "A21": "analytics, metrics, insights, performance, followers, engagement, reach, views, reports, social media stats",
+    "B21": "In GlennBot's Analytics module, you can monitor performance metrics, follower growth, engagement, and post reach across all your connected Facebook, Instagram, TikTok, and YouTube pages in a single unified view.",
+    "A22": "security, is it secure, rbac, login, admin, client access, roles, permissions, api key rotation, multi-key pool",
+    "B22": "GlennBot features a Role-Based Access Control (RBAC) Login Gate that separates Administrator access from Client access, along with encrypted session tokens and X-API-Key validation. It also includes a Multi-Key Gemini API Pool that automatically rotates API keys to prevent rate limits and maintain 99.9% uptime.",
+    "A23": "work experience, epson, industrial engineer, supervisor, mold control, kaizen, iso 14001, supplier audit, manufacturing, engineering background, years of experience",
+    "B23": "I have over 11 years of experience at EPSON Precision (Philippines) Inc. (from April 2015 to present)—starting in Incoming Quality Assurance, advancing to Senior Engineer in Parts Engineering, and currently serving as Supervisor of the Mold Control Group managing 30+ external suppliers. I also served as Top Kaizen Coordinator and ISO 14001 Coordinator, bringing Kaizen process optimization discipline into every software and automation system I build.",
+    "A24": "education, school, college, degree, course, where did you graduate, university, faith, industrial engineering",
+    "B24": "I earned my Bachelor of Science in Industrial Engineering from First Asia Institute of Technology and Humanities (FAITH) in Batangas (2010–2015).",
+    "A25": "location, where are you from, where are you located, address, timezone, remote, work from home, international clients, availability, full time, part time, freelance",
+    "B25": "I am based in Malvar, Batangas, Philippines (GMT+8), and I work remotely with both local and international clients across any timezone—whether for project-based, retainer, part-time, or full-time automation and web development engagements.",
+    "A26": "how long, timeline, turnaround time, how long does it take to build, how many days, delivery time, how fast",
+    "B26": "For standard AI and webhook automations (such as comment/DM auto-responders, CRM sync, or booking workflows), I can set up and deploy them within 1 to 3 days. For full custom web dashboards or multi-module systems, turnaround is typically 1 to 3 weeks depending on the required integrations.",
+    "A27": "why hire you, why work with you, advantage, what makes you different, why choose you, strength, edge",
+    "B27": "My core advantage is combining 11+ years of real-world Industrial Engineering and Kaizen operations leadership at EPSON with full-stack Python/FastAPI and AI engineering. I do not just connect basic Zaps—I analyze the root cause of bottlenecks in your operations and build your own scalable web system and 24/7 automation without expensive monthly per-task fees.",
+    "A28": "how does this work, how does this reply work, is this ai, is this a bot, test, testing, sample comment, can i comment here, does this work",
+    "B28": "Yes, what you are experiencing right now is a live test! When you comment on a post or send a DM, my GlennBot Automations backend receives it via webhook, logs our conversation thread in Conversations.xlsx, checks my reference guide in Script.xlsx, and replies using Gemini 3.5 Flash in the exact language you used.",
+    "A29": "custom dashboard, web app, web development, portal, admin panel, internal tool, system development, do you build websites",
+    "B29": "Yes, I build custom web dashboards, client portals, executive analytics hubs, and bespoke CRM systems using Python (FastAPI), PostgreSQL, JavaScript, and Tailwind CSS—fast, mobile-responsive, and equipped with their own REST API and AI integrations.",
+    "A30": "support, maintenance, after-sales, training, documentation, what if something breaks, bug fix, warranty, handoff",
+    "B30": "Every project I deliver includes clean documentation, a live walkthrough/training session, and post-launch support to ensure your system runs smoothly. We can also set up ongoing maintenance or a retainer if you want me to continuously manage and expand your automations.",
+    "A31": "hello, hi, hey, how are you, good morning, good afternoon, good evening, greetings, boss, sir glenn",
+    "B31": "Hello and thank you for reaching out! I am Glennard, the creator of GlennBot Automations. If you have any questions about AI automations, custom web dashboards, or how I can help automate your business workflows, just let me know!",
+    "A32": "awesome, amazing, nice, cool, great job, solid, impressive, great portfolio, congrats, thank you, thanks",
+    "B32": "Thank you so much, I truly appreciate it! I built GlennBot Automations and these live portfolio widgets so visitors can experience firsthand how real-time AI and webhook automation works. Feel free to test anything or ask any questions!",
+}
+
+_TAGLISH_DETECTION_RE = re.compile(
+    r"\b("
+    r"ako\s+si|nagbi-build|nag-o-offer|depende\s+ang\s+rate|pwede\s+mo\s+akong|"
+    r"ang\s+glennbot\s+automations\s+ay|mahigit\s+11\s+years|maraming\s+salamat|"
+    r"magkano|kumusta\s+po|paano\s+mag-inquire|ang\s+project\s+rate\s+ko|"
+    r"para\s+sa\s+negosyo|sabihin\s+mo\s+lang|itatanong\s+sa\s+akin"
+    r")\b",
+    re.I,
+)
+
+
+def _ensure_script_xlsx_all_english(wb: Dict[str, Any]) -> bool:
+    """
+    Ensures 'Script.xlsx' in the Files Modal / Spread Sheet Modal / Google Drive
+    contains 100% English content across all 32 rows (A1:B32).
+    Returns True if any cell in 'Script.xlsx' was updated to English.
+    """
+    if not isinstance(wb, dict):
+        return False
+    title_low = str(wb.get("title") or wb.get("gdrive_file_name") or "").strip().lower()
+    if title_low not in ("script.xlsx", "script.xls", "script"):
+        return False
+
+    sheets = wb.get("sheets")
+    if not isinstance(sheets, list) or not sheets:
+        wb["sheets"] = [
+            {
+                "id": "sheet_1",
+                "name": "Sheet1",
+                "row_count": 32,
+                "col_count": 10,
+                "cells": dict(DEFAULT_ENGLISH_SCRIPT_XLSX_CELLS),
+            }
+        ]
+        return True
+
+    sheet1 = sheets[0] if isinstance(sheets[0], dict) else None
+    if not isinstance(sheet1, dict):
+        return False
+
+    cells = sheet1.setdefault("cells", {})
+    changed = False
+
+    # 1. Detect if Script.xlsx still has the old 7-row placeholder header or Taglish phrases,
+    #    and upgrade A1:B32 to the canonical 32-row 100% English reference script.
+    needs_full_english_upgrade = (
+        str(cells.get("B1") or "").strip() == "Reference Script / Core Answer"
+        or any(_TAGLISH_DETECTION_RE.search(str(v or "")) for v in cells.values())
+    )
+    for def_coord, def_val in DEFAULT_ENGLISH_SCRIPT_XLSX_CELLS.items():
+        cur_v = str(cells.get(def_coord) or "").strip()
+        if not cur_v or needs_full_english_upgrade or _TAGLISH_DETECTION_RE.search(cur_v):
+            if cur_v != def_val:
+                cells[def_coord] = def_val
+                changed = True
+
+    if int(sheet1.get("row_count") or 0) < 32:
+        sheet1["row_count"] = 32
+        changed = True
+
+    if changed:
+        wb["last_local_save_ts"] = time.time()
+        wb["last_edit_source"] = "glennbot"
+        wb["updated_at"] = datetime.now(manila_tz).strftime("%b %d, %Y %I:%M %p")
+    return changed
+
+
 def _load_spreadsheets_store(force_cloud: bool = False) -> Dict[str, Any]:
     with SPREADSHEETS_LOCK:
         # Once loaded in memory, keep the live in-memory state as the source of truth
@@ -2175,6 +2309,7 @@ def _load_spreadsheets_store(force_cloud: bool = False) -> Dict[str, Any]:
         if SPREADSHEETS_STORE.get("loaded"):
             for w in (SPREADSHEETS_STORE.get("workbooks") or []):
                 _sanitize_workbook_sheets_cells(w)
+                _ensure_script_xlsx_all_english(w)
             return SPREADSHEETS_STORE
 
         workbooks: List[Dict[str, Any]] = []
@@ -2212,6 +2347,7 @@ def _load_spreadsheets_store(force_cloud: bool = False) -> Dict[str, Any]:
         for w in workbooks:
             if isinstance(w, dict) and not _is_unsaved_legacy_default_workbook(w):
                 _sanitize_workbook_sheets_cells(w)
+                _ensure_script_xlsx_all_english(w)
                 clean_workbooks.append(w)
 
         SPREADSHEETS_STORE["workbooks"] = clean_workbooks
@@ -3051,6 +3187,14 @@ def _sync_spreadsheets_with_gdrive_and_vault(
             except Exception as gd_sync_err:
                 print(f"[⚠️ SPREADSHEET GDRIVE FOLDER SYNC WARNING]: {gd_sync_err}")
 
+        for wb_check in workbooks:
+            if _ensure_script_xlsx_all_english(wb_check):
+                any_changed = True
+                try:
+                    _schedule_debounced_workbook_cloud_sync(wb_check, delay_seconds=0.25)
+                except Exception:
+                    pass
+
         if vault_changed:
             with FILES_VAULT_LOCK:
                 FILES_VAULT_STORE["files"] = vault_files
@@ -3861,7 +4005,7 @@ def _read_spreadsheet_cells_sync(
             default_cells_init: Dict[str, str] = (
                 {"A1": "Thread ID", "B1": "Conversations"}
                 if "conversation" in clean_title.lower()
-                else {"A1": "Keywords / Possible Questions", "B1": "Reference Script / Core Answer"}
+                else dict(DEFAULT_ENGLISH_SCRIPT_XLSX_CELLS)
             )
             with SPREADSHEETS_LOCK:
                 existing_again = _find_workbook_by_query(SPREADSHEETS_STORE.get("workbooks") or workbooks, q_wb)
