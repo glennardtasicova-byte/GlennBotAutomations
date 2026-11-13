@@ -332,10 +332,28 @@ def _deep_get_path(obj: Any, path_str: str) -> Any:
     clean = re.sub(r'\["([^"]+)"\]', r".\1", clean)
     parts = [p for p in clean.split(".") if p != ""]
     curr = obj
-    for p in parts:
+    for idx_p, p in enumerate(parts):
         if isinstance(curr, dict):
             if p in curr:
+                # If `body.<subkey>` is requested on an email event where `curr["body"]` is the email body string,
+                # resolve `<subkey>` from the top-level event dict `curr` (or `curr["data"]`) instead of failing on str.
+                if idx_p == 0 and p == "body" and len(parts) > 1 and not isinstance(curr[p], dict):
+                    continue
                 curr = curr[p]
+            elif idx_p == 0 and p in ("from_email", "from_name", "body_text", "to_email"):
+                alias_map = {
+                    "from_email": "sender_email",
+                    "from_name": "sender_name",
+                    "body_text": "body",
+                    "to_email": "account_email",
+                }
+                alt_k = alias_map.get(p, "")
+                if alt_k and alt_k in curr:
+                    curr = curr[alt_k]
+                elif isinstance(curr.get("data"), dict) and (p in curr["data"] or (alt_k and alt_k in curr["data"])):
+                    curr = curr["data"].get(p) if p in curr["data"] else curr["data"].get(alt_k)
+                else:
+                    return None
             else:
                 return None
         elif isinstance(curr, list) and p.isdigit():
@@ -1143,7 +1161,11 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
         or "format ai reply" in node_name_low
         or "format email reply" in node_name_low
     ):
-        email_pipe_node = node_outputs.get("Build Email Thread ID & Pipe Conversation")
+        email_pipe_node = (
+            node_outputs.get("Build Email Thread ID & Pipe Conversation")
+            or node_outputs.get("Build Email Thread ID & Pipe Conversation + Match Script.xlsx")
+            or next((v for k, v in node_outputs.items() if "build email thread" in k.lower()), None)
+        )
         pipe_node = (
             email_pipe_node
             or node_outputs.get("Build DM Thread ID & Pipe Conversation")
@@ -1262,6 +1284,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             "emailThreadId" in js_code
             or "build email thread" in node_name_low
             or "Read Conversations.xlsx Sheet3" in js_code
+            or "Sheet3" in js_code
         )
         is_dm_workflow = (
             not is_email_workflow
@@ -1272,12 +1295,23 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             )
         )
         if is_email_workflow:
-            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet3") or {}
+            conv_sheet = (
+                node_outputs.get("Read Conversations.xlsx Sheet3")
+                or node_outputs.get("Read Conversations.xlsx (Sheet3 - Files Modal)")
+                or next((v for k, v in node_outputs.items() if "conversations.xlsx" in k.lower() and "read" in k.lower()), None)
+                or {}
+            )
         elif is_dm_workflow:
             conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
         else:
             conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet1") or {}
-        script_sheet = node_outputs.get("Read Script.xlsx Sheet1") or current_json or {}
+        script_sheet = (
+            node_outputs.get("Read Script.xlsx Sheet1")
+            or node_outputs.get("Read Script.xlsx (Files Modal Knowledge Base)")
+            or next((v for k, v in node_outputs.items() if "script.xlsx" in k.lower() and "read" in k.lower()), None)
+            or current_json
+            or {}
+        )
 
         conv_rows = conv_sheet.get("rows") if isinstance(conv_sheet.get("rows"), list) else []
         conv_cells = conv_sheet.get("cells") if isinstance(conv_sheet.get("cells"), dict) else {}
@@ -3810,6 +3844,7 @@ def _execute_v1_send_email_inprocess(body: Dict[str, Any], is_test_run: bool = F
     ).strip().lower()
     raw_to_in = (
         body.get("to")
+        or body.get("to_email")
         or body.get("recipient_email")
         or body.get("primary_guest_email")
         or body.get("attendee_email")
@@ -3821,10 +3856,12 @@ def _execute_v1_send_email_inprocess(body: Dict[str, Any], is_test_run: bool = F
     else:
         raw_to = str(raw_to_in or "").strip()
     body["to"] = raw_to
-    msg_id_in = str(body.get("message_id") or "").strip()
+    msg_id_in = str(body.get("message_id") or body.get("reply_to_email_id") or body.get("in_reply_to") or "").strip()
     thread_id_in = str(body.get("thread_id") or "").strip()
+    if msg_id_in and not body.get("message_id"):
+        body["message_id"] = msg_id_in
     subj_in = str(body.get("subject") or "Re: INQUIRY").strip()
-    body_text = _sanitize_outbound_social_or_email_text(body.get("body") or body.get("message") or body.get("text") or "Thank you for sending me a message") or "Thank you for sending me a message"
+    body_text = _sanitize_outbound_social_or_email_text(body.get("body") or body.get("body_text") or body.get("message") or body.get("text") or "Thank you for sending me a message") or "Thank you for sending me a message"
     body["body"] = body_text
     body["subject"] = subj_in
 
