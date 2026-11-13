@@ -162,6 +162,13 @@ def _canonical_automation_slot(wf_obj_or_name: Any) -> str:
 
     norm = re.sub(r"[^a-z0-9]+", " ", raw_name).strip()
     if (
+        raw_id == "auto_wf_glennbot_email_default"
+        or "auto reply to email" in norm
+        or "auto reply from email" in norm
+        or "email-thread-ai-agent" in wf_json_str
+    ):
+        return "glennbot_email_auto_reply"
+    if (
         raw_id == "auto_wf_glennbot_dm_default"
         or "auto reply to dm" in norm
         or "auto reply from dm" in norm
@@ -488,6 +495,42 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
         ):
             return "GlennBot Automations (Facebook / Instagram / WhatsApp Glennard Tasico +63 917 549 7760)"
         return raw_acc
+
+    # Support Email account filter expression for glennard.tasico.va@gmail.com (`email_gmail_ca_svlaQjI-x1S7`)
+    if "glennard.tasico.va@gmail.com" in t and ("account_email" in t or "sender_email" in t or "email_gmail_ca_" in t):
+        raw_acc_em = str(
+            _deep_get_path(current_json, "body.account_email")
+            or _deep_get_path(current_json, "account_email")
+            or _deep_get_path(current_json, "body.to")
+            or _deep_get_path(current_json, "to")
+            or ""
+        ).strip().lower()
+        raw_acc_id_em = str(
+            _deep_get_path(current_json, "body.account_id")
+            or _deep_get_path(current_json, "account_id")
+            or ""
+        ).strip()
+        raw_sender_em = str(
+            _deep_get_path(current_json, "body.sender_email")
+            or _deep_get_path(current_json, "sender_email")
+            or _deep_get_path(current_json, "body.sender")
+            or _deep_get_path(current_json, "sender")
+            or ""
+        ).strip().lower()
+        raw_mid_em = str(
+            _deep_get_path(current_json, "body.message_id")
+            or _deep_get_path(current_json, "message_id")
+            or ""
+        ).strip()
+        if "glennard.tasico.va@gmail.com" in raw_sender_em and not raw_mid_em.startswith("test_"):
+            return "self_email_excluded"
+        if (
+            "glennard.tasico.va@gmail.com" in raw_acc_em
+            or raw_acc_id_em in ("email_gmail_ca_svlaQjI-x1S7", "email_gmail_glennard")
+            or raw_mid_em.startswith("test_")
+        ):
+            return "glennard.tasico.va@gmail.com"
+        return raw_acc_em
 
     return t
 
@@ -817,6 +860,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
     if (
         "node-supabase-fifo-comment-queue" in node_id_low
         or "node-supabase-fifo-dm-queue" in node_id_low
+        or "node-supabase-fifo-email-queue" in node_id_low
         or ("supabase" in node_name_low and ("enqueue" in node_name_low or "fifo" in node_name_low or "acquire" in node_name_low))
         or "SUPABASE_QUEUE_ACTION = 'enqueue_and_acquire'" in js_code
     ):
@@ -831,18 +875,25 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
     if (
         "node-supabase-complete-comment-queue" in node_id_low
         or "node-supabase-complete-dm-queue" in node_id_low
+        or "node-supabase-complete-email-queue" in node_id_low
         or ("supabase" in node_name_low and ("complete" in node_name_low or "release" in node_name_low or "dequeue" in node_name_low))
         or "SUPABASE_QUEUE_ACTION = 'complete_and_release'" in js_code
     ):
         q_node = (
             node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
             or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
+            or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
             or node_outputs.get("Build Thread ID & Pipe Conversation")
             or node_outputs.get("Build DM Thread ID & Pipe Conversation")
+            or node_outputs.get("Build Email Thread ID & Pipe Conversation")
             or current_json
             or {}
         )
-        fmt_node = node_outputs.get("Format AI Reply & Update Pipe History") or {}
+        fmt_node = (
+            node_outputs.get("Format AI Reply & Update Pipe History")
+            or node_outputs.get("Format Email Reply & Update Sheet3 Pipe History")
+            or {}
+        )
         wh_data = node_outputs.get("Webhook Trigger") or {}
         wh_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
         qid = str(
@@ -857,13 +908,16 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             or q_node.get("targetCommentId")
             or q_node.get("messageId")
             or q_node.get("dmThreadId")
+            or q_node.get("emailThreadId")
             or wh_body.get("comment_id")
             or wh_body.get("message_id")
+            or wh_body.get("thread_id")
             or wh_body.get("conversation_id")
             or ""
         ).strip()
         ai_rep = str(
             fmt_node.get("aiReplyText")
+            or fmt_node.get("emailBodyText")
             or fmt_node.get("reply")
             or current_json.get("aiReplyText")
             or current_json.get("reply")
@@ -888,10 +942,12 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             "colAThreadId",
             "colBConversation",
             "dmThreadId",
+            "emailThreadId",
             "pipeConversation",
             "aiContextPrompt",
             "shouldAiReply",
             "aiReplyText",
+            "emailBodyText",
             "colBWithAiReply"
         )
     )
@@ -1077,13 +1133,28 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
         }
 
     # 2. Native In-Memory Python Fast-Path (<0.4ms) for `Format AI Reply & Update Pipe History`,
-    # `Build Thread ID & Pipe Conversation`, and `Build DM Thread ID & Pipe Conversation`
+    # `Format Email Reply & Update Sheet3 Pipe History`, `Build Thread ID & Pipe Conversation`,
+    # `Build DM Thread ID & Pipe Conversation`, and `Build Email Thread ID & Pipe Conversation`
     # so 4+ simultaneous workflow executions NEVER spawn OS Node.js subprocesses!
-    if "aiReplyText" in js_code or "colBWithAiReply" in js_code or "format ai reply" in node_name_low:
+    if (
+        "aiReplyText" in js_code
+        or "emailBodyText" in js_code
+        or "colBWithAiReply" in js_code
+        or "format ai reply" in node_name_low
+        or "format email reply" in node_name_low
+    ):
+        email_pipe_node = node_outputs.get("Build Email Thread ID & Pipe Conversation")
         pipe_node = (
-            node_outputs.get("Build DM Thread ID & Pipe Conversation")
+            email_pipe_node
+            or node_outputs.get("Build DM Thread ID & Pipe Conversation")
             or node_outputs.get("Build Thread ID & Pipe Conversation")
             or {}
+        )
+        is_email_fmt = bool(
+            email_pipe_node
+            or "format email reply" in node_name_low
+            or "emailBodyText" in js_code
+            or str(pipe_node.get("platform") or "").lower() == "email"
         )
         raw_reply = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
         raw_reply = re.sub(r"^[\"'\u201c\u201d\u2018\u2019]+|[\"'\u201c\u201d\u2018\u2019]+$", "", raw_reply).strip()
@@ -1093,6 +1164,55 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             raw_reply,
             flags=re.I
         ).strip()
+
+        if is_email_fmt:
+            sender_name_val = str(pipe_node.get("senderName") or pipe_node.get("participantName") or "Valued Client").strip() or "Valued Client"
+            # Strip any duplicate leading "Dear ...," and trailing "Regards, Glennard" so we wrap cleanly in Email Format
+            body_core = raw_reply.replace("\r\n", "\n").strip()
+            body_core = re.sub(r"^dear\s+[^\n,]+[,:]?\s*\n*", "", body_core, flags=re.I).strip()
+            body_core = re.sub(
+                r"\n*(?:best\s+regards|warm\s+regards|kind\s+regards|regards|sincerely|best|cheers)[,:]?\s*\n+glennard(?:\s+r\.?\s+tasico|\s+tasico)?\s*$",
+                "",
+                body_core,
+                flags=re.I
+            ).strip()
+            if not body_core or "apologies for the brief delay" in body_core.lower():
+                guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
+                lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
+                if guide:
+                    body_core = guide
+                elif "tagalog" in lang_low or "taglish" in lang_low:
+                    body_core = (
+                        "Maraming salamat sa pag-email! Nandito ako para tumulong sa inyong Automation at Web App Projects "
+                        "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
+                        "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
+                    )
+                else:
+                    body_core = (
+                        "Thank you for reaching out via email! I am ready to help with your Automation and Web App Projects—"
+                        "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
+                        "What specific automation or web app project can I help you build?"
+                    )
+            formatted_email_reply = f"Dear {sender_name_val},\n\n{body_core}\n\nRegards,\nGlennard"
+            single_line_email = re.sub(r"\s+", " ", formatted_email_reply.replace("|", "/")).strip()
+            page_label = str(pipe_node.get("pageName") or "Glennard (glennard.tasico.va@gmail.com)").strip()
+            prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
+            reply_entry = f"{page_label}: {single_line_email}"
+            updated_pipe = prev_pipe
+            if single_line_email:
+                last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
+                if not prev_pipe:
+                    updated_pipe = reply_entry
+                elif body_core[:40].lower() not in last_seg_low:
+                    updated_pipe = f"{prev_pipe} | {reply_entry}"
+            return {
+                **pipe_node,
+                "aiReplyText": formatted_email_reply,
+                "emailBodyText": formatted_email_reply,
+                "colBWithAiReply": updated_pipe,
+                "pipeConversationWithReply": updated_pipe,
+            }
+
         clean_reply = re.sub(r"\s+", " ", raw_reply.replace("|", "/")).strip()
         if not clean_reply or "apologies for the brief delay" in clean_reply.lower():
             guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
@@ -1138,12 +1258,22 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
         root_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
         wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
 
-        is_dm_workflow = (
-            "dmThreadId" in js_code
-            or "build dm thread" in node_name_low
-            or "Read Conversations.xlsx Sheet2" in js_code
+        is_email_workflow = (
+            "emailThreadId" in js_code
+            or "build email thread" in node_name_low
+            or "Read Conversations.xlsx Sheet3" in js_code
         )
-        if is_dm_workflow:
+        is_dm_workflow = (
+            not is_email_workflow
+            and (
+                "dmThreadId" in js_code
+                or "build dm thread" in node_name_low
+                or "Read Conversations.xlsx Sheet2" in js_code
+            )
+        )
+        if is_email_workflow:
+            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet3") or {}
+        elif is_dm_workflow:
             conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
         else:
             conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet1") or {}
@@ -1328,6 +1458,163 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                 scored_list.append({**ent, "score": sc})
             scored_list.sort(key=lambda x: x["score"], reverse=True)
             return valid_entries, [s for s in scored_list if s["score"] >= 8][:3]
+
+        if is_email_workflow:
+            sb_em_q = node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)") or {}
+            msg_nested_em = wb.get("message") if isinstance(wb.get("message"), dict) else {}
+            acc_id_em = str(wb.get("account_id") or "email_gmail_ca_svlaQjI-x1S7").strip()
+            acc_email_em = str(wb.get("account_email") or wb.get("to") or msg_nested_em.get("to") or "glennard.tasico.va@gmail.com").strip()
+            msg_id_em = str(wb.get("message_id") or wb.get("id") or msg_nested_em.get("id") or "").strip()
+            thread_id_em = str(wb.get("thread_id") or msg_nested_em.get("thread_id") or msg_id_em or "").strip()
+            subject_em = str(wb.get("subject") or msg_nested_em.get("subject") or "Inquiry").strip() or "Inquiry"
+            reply_subject_em = subject_em if subject_em.lower().startswith("re:") else f"Re: {subject_em}"
+
+            raw_sender_str = str(wb.get("sender") or msg_nested_em.get("sender") or "").strip()
+            raw_s_name = str(wb.get("sender_name") or msg_nested_em.get("sender_name") or "").strip()
+            raw_s_email = str(wb.get("sender_email") or msg_nested_em.get("sender_email") or "").strip()
+            m_em = re.match(r'^"?([^"<]+)"?\s*<([^>]+)>$', raw_sender_str)
+            if m_em:
+                if not raw_s_name or "@" in raw_s_name:
+                    raw_s_name = m_em.group(1).strip()
+                if not raw_s_email:
+                    raw_s_email = m_em.group(2).strip()
+            if not raw_s_email:
+                found_ems = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", f"{raw_sender_str} {raw_s_name}")
+                raw_s_email = found_ems[0] if found_ems else ""
+
+            clean_sender_name = re.sub(r"<[^>]+>", "", raw_s_name).strip().strip('"').strip("'")
+            if not clean_sender_name or "@" in clean_sender_name:
+                local_part = (raw_s_email.split("@")[0] if "@" in raw_s_email else clean_sender_name).strip()
+                local_words = [w.capitalize() for w in re.split(r"[._\-+\d]+", local_part) if len(w) >= 2]
+                clean_sender_name = " ".join(local_words) if local_words else "Valued Client"
+
+            raw_body_em = str(
+                wb.get("body")
+                or msg_nested_em.get("body")
+                or wb.get("snippet")
+                or msg_nested_em.get("snippet")
+                or (wb.get("message") if isinstance(wb.get("message"), str) else "")
+                or ""
+            ).strip()
+            # Strip quoted email reply chains ("On ... wrote:", "-----Original Message-----", "> ...")
+            body_lines_clean: List[str] = []
+            for ln in raw_body_em.splitlines():
+                ln_s = ln.strip()
+                if re.match(r"^on\s+.+wrote:\s*$", ln_s, re.I) or ln_s.startswith("-----Original Message-----") or ln_s.startswith("From: "):
+                    break
+                if ln_s.startswith(">"):
+                    continue
+                body_lines_clean.append(ln_s)
+            latest_email_body = re.sub(r"\s+", " ", " ".join(body_lines_clean).replace("|", "/")).strip()
+            if not latest_email_body:
+                latest_email_body = re.sub(r"\s+", " ", raw_body_em.replace("|", "/")).strip() or subject_em
+
+            email_thread_id = thread_id_em or msg_id_em or raw_s_email or "email_thread"
+            is_own_email = bool(
+                wb.get("is_own")
+                or (raw_s_email and "glennard.tasico.va@gmail.com" in raw_s_email.lower() and not msg_id_em.startswith("test_"))
+            )
+            speaker_em = "Glennard (glennard.tasico.va@gmail.com)" if is_own_email else f"{clean_sender_name} ({raw_s_email})"
+            new_entry_em = f"{speaker_em} [Subject: {subject_em}]: {latest_email_body}" if latest_email_body else ""
+
+            matched_row_idx_em: Optional[int] = None
+            existing_pipe_em = ""
+            cand_em_tids = {email_thread_id, thread_id_em, msg_id_em, raw_s_email} - {""}
+            for pr in parsed_conv_rows:
+                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "email", "sender"):
+                    continue
+                if pr["colA"] and (pr["colA"] in cand_em_tids or any(cid_k in pr["colA"] for cid_k in cand_em_tids if len(cid_k) >= 6)):
+                    matched_row_idx_em = pr["rowNum"]
+                    existing_pipe_em = pr["colB"]
+                    break
+
+            next_empty_em = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+            if next_empty_em < 2:
+                next_empty_em = 2
+            target_row_idx_em = matched_row_idx_em if matched_row_idx_em is not None else next_empty_em
+
+            em_segments: List[str] = []
+            def _add_em_seg(s_raw: str) -> None:
+                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+                if not sc:
+                    return
+                if em_segments and em_segments[-1].lower() == sc.lower():
+                    return
+                em_segments.append(sc)
+
+            if existing_pipe_em:
+                for pt in existing_pipe_em.split("|"):
+                    for sl in pt.splitlines():
+                        _add_em_seg(sl)
+            if new_entry_em:
+                _add_em_seg(new_entry_em)
+            pipe_conv_em = " | ".join(em_segments)
+
+            query_for_script = f"{subject_em} {latest_email_body}".strip()
+            valid_scripts_em, top_matches_em = _score_script_rows_py(query_for_script, pipe_conv_em)
+            best_match_em = top_matches_em[0] if top_matches_em else None
+            has_match_em = bool(best_match_em and best_match_em.get("score", 0) >= 8)
+
+            faq_block_em = "\n".join(
+                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+                for s in valid_scripts_em
+            ) or "(No rows found in Script.xlsx Sheet1 yet)"
+            closest_block_em = "\n\n".join(
+                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+                for idx_m, m in enumerate(top_matches_em)
+            ) if has_match_em else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+
+            ai_prompt_em = (
+                f"You are replying to an incoming client Email sent to glennard.tasico.va@gmail.com as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin').\n\n"
+                f"SCRIPT-BASED EMAIL REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet3 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
+                f"1. Read the Full Email Thread History in Sheet3 (separated by '|') carefully so you remember the ongoing topic and context.\n"
+                f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match {clean_sender_name}'s Latest Email Subject (\"{subject_em}\") and Message (\"{latest_email_body}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
+                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom email reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
+                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the email is NOT related to any information in \"Script.xlsx\", warmly acknowledge their email and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
+                f"5. MANDATORY EMAIL FORMAT: Format your response as a complete email starting with:\n"
+                f"Dear {clean_sender_name},\n\n"
+                f"[Your custom helpful response in the sender's language]\n\n"
+                f"Regards,\n"
+                f"Glennard\n\n"
+                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block_em}\n\n"
+                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block_em}\n\n"
+                f"Email Thread ID: {email_thread_id}\n"
+                f"Full Email Thread History in Sheet3 (separated by |):\n{pipe_conv_em}\n\n"
+                f"Sender Name: {clean_sender_name} ({raw_s_email})\n"
+                f"Email Subject: \"{subject_em}\"\n"
+                f"Latest Email from {clean_sender_name} ({raw_s_email}): \"{latest_email_body}\"\n\n"
+                f"Write your custom email reply to {clean_sender_name} in the exact same language as their email, starting with 'Dear {clean_sender_name},' and ending with 'Regards,\\nGlennard':"
+            )
+            return {
+                "queueId": str(sb_em_q.get("queueId") or sb_em_q.get("queue_id") or ""),
+                "queuePosition": int(sb_em_q.get("queuePosition") or 1),
+                "sheetRowIdx": target_row_idx_em,
+                "targetRowNumber": target_row_idx_em,
+                "isExistingThread": matched_row_idx_em is not None,
+                "emailThreadId": email_thread_id,
+                "colAThreadId": email_thread_id,
+                "pipeConversation": pipe_conv_em,
+                "colBConversation": pipe_conv_em,
+                "threadId": thread_id_em or email_thread_id,
+                "messageId": msg_id_em,
+                "accountId": acc_id_em,
+                "accountEmail": acc_email_em,
+                "pageName": "Glennard (glennard.tasico.va@gmail.com)",
+                "senderName": clean_sender_name,
+                "senderEmail": raw_s_email,
+                "emailSubject": subject_em,
+                "replySubject": reply_subject_em,
+                "latestEmailBody": latest_email_body,
+                "isOwnEmail": is_own_email,
+                "shouldAiReply": (not is_own_email) and bool(raw_s_email) and len(latest_email_body) > 0,
+                "detectedLanguage": "Auto-Detect (Match Sender Language)",
+                "hasScriptMatch": has_match_em,
+                "matchedScriptRow": best_match_em["rowNumber"] if best_match_em else None,
+                "matchedScriptKeywords": best_match_em["keywordsRaw"] if best_match_em else "",
+                "matchedScriptGuide": best_match_em["answerGuide"] if best_match_em else "",
+                "aiContextPrompt": ai_prompt_em,
+                "platform": "email",
+            }
 
         if is_dm_workflow:
             sb_dm_q = node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)") or {}
@@ -2037,6 +2324,12 @@ def _execute_n8n_workflow_json_natively(
                     step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
                     node_outputs[curr_name] = out_json
 
+                elif method_str == "POST" and api_route_clean == "/api/v1/emails/send":
+                    out_json = _execute_v1_send_email_inprocess(body_dict, is_test_run=is_test_run)
+                    step_status = "success" if out_json.get("status") in ("success", "skipped") else "error"
+                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+                    node_outputs[curr_name] = out_json
+
                 elif target_url.startswith("http"):
                     def _do_http_req(u: str):
                         if method_str == "GET":
@@ -2116,6 +2409,7 @@ def _execute_n8n_workflow_json_natively(
     sb_enqueue_out = (
         node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
         or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
+        or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
     )
     sb_complete_out = node_outputs.get("Complete & Release Turn in Supabase Queue")
     if isinstance(sb_enqueue_out, dict) and sb_enqueue_out.get("queueId") and not sb_complete_out:
@@ -3498,36 +3792,13 @@ async def api_v1_get_emails(
     return await run_in_threadpool(_fetch_v1_emails_sync)
 
 
-@router.post("/api/v1/emails/send")
-async def api_v1_send_email(request: Request):
-    """
-    Sends a new email or replies to an existing email thread via n8n.
-    JSON Body:
-      - account_id (str, optional) or from_email (str, optional): Connected email account (uses primary account if omitted)
-      - to (str or list of str, required): Recipient email address(es)
-      - cc (str or list of str, optional): CC email address(es)
-      - subject (str, required): Email subject line
-      - body (str, required): Email body content
-      - thread_id (str, optional): If provided, replies to this email thread
-    """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
+def _execute_v1_send_email_inprocess(body: Dict[str, Any], is_test_run: bool = False) -> Dict[str, Any]:
+    _load_email_hub_state(force_cloud=False)
+    accounts = EMAIL_HUB_STATE.get("accounts") or []
+    if not accounts:
+        accounts = _discover_composio_email_accounts()
 
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    def _get_v1_email_accounts():
-        _load_email_hub_state(force_cloud=False)
-        accs = EMAIL_HUB_STATE.get("accounts") or []
-        if not accs:
-            accs = _discover_composio_email_accounts()
-        return accs
-
-    accounts = await run_in_threadpool(_get_v1_email_accounts)
-
+    body = dict(body or {})
     acc_id = str(body.get("account_id") or "").strip()
     from_em = str(
         body.get("from_email")
@@ -3557,7 +3828,6 @@ async def api_v1_send_email(request: Request):
     body["body"] = body_text
     body["subject"] = subj_in
 
-    # Merge any top-level file_id / attachment_file_id / file_ids (e.g. "file_3f5f4508e3d1") into body["attachments"]
     merged_attachments = _normalize_raw_attachments_with_file_ids(body)
     if merged_attachments:
         body["attachments"] = merged_attachments
@@ -3567,7 +3837,6 @@ async def api_v1_send_email(request: Request):
         if isinstance(att, dict) and att.get("file_id")
     ]
 
-    # Optional subject filter safeguard if passed by n8n
     req_kw = str(body.get("only_if_subject_contains") or "").strip().lower()
     orig_subj = str(body.get("original_subject") or subj_in).strip().lower()
     if req_kw and req_kw not in orig_subj:
@@ -3577,7 +3846,6 @@ async def api_v1_send_email(request: Request):
             "action": "no_reply_sent"
         }
 
-    # Optional message body filter safeguard if passed by n8n (e.g. "Please send me a picture")
     req_body_kw = str(body.get("only_if_body_contains") or body.get("only_if_message_contains") or "").strip().lower()
     orig_body_in = str(body.get("original_body") or body.get("original_message") or body.get("incoming_body") or "").strip().lower()
     if req_body_kw and orig_body_in and req_body_kw not in orig_body_in:
@@ -3587,7 +3855,6 @@ async def api_v1_send_email(request: Request):
             "action": "no_reply_sent"
         }
 
-    # Resolve the exact connected email account in the dashboard that received the email
     matched_acc = None
     if acc_id:
         matched_acc = next(
@@ -3605,15 +3872,18 @@ async def api_v1_send_email(request: Request):
             None
         )
     if not matched_acc and accounts:
-        matched_acc = accounts[0]
+        matched_acc = next(
+            (a for a in accounts if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower()),
+            accounts[0]
+        )
 
     if matched_acc:
         acc_id = str(matched_acc.get("id") or "")
         from_em = str(matched_acc.get("email_address") or from_em)
 
-    # Gracefully handle simulated n8n test email events so "Test step" in n8n returns 200 OK
     if (
-        msg_id_in.startswith("test_msg_")
+        is_test_run
+        or msg_id_in.startswith("test_msg_")
         or msg_id_in.startswith("test_email_")
         or thread_id_in.startswith("test_thread_")
         or "@example.com" in raw_to.lower()
@@ -3625,26 +3895,51 @@ async def api_v1_send_email(request: Request):
             "simulated": True,
             "action": "email_auto_reply_with_vault_attachment" if attached_file_ids else "gmail_auto_reply",
             "account_id": acc_id,
-            "from_email": from_em or "connected_dashboard_email@gmail.com",
+            "from_email": from_em or "glennard.tasico.va@gmail.com",
             "to": raw_to or "test.sender@example.com",
             "subject": subj_in if subj_in.lower().startswith("re:") else f"Re: {subj_in}",
             "sent_body": body_text,
             "attached_file_ids": attached_file_ids,
-            "message": f"Test Verified! In live production, receiving account '{from_em or 'connected_dashboard_email'}' will automatically reply '{body_text}'{att_info} to '{raw_to}'."
+            "message": f"Test Verified! In live production, receiving account '{from_em or 'glennard.tasico.va@gmail.com'}' will automatically reply '{body_text}'{att_info} to '{raw_to}'."
         }
 
     if not acc_id:
-        return JSONResponse({"status": "error", "message": "No connected email account found to send from."}, status_code=404)
+        return {"status": "error", "message": "No connected email account found to send from.", "status_code": 404}
 
     body["account_id"] = acc_id
-
-    class _ProxyReq:
-        async def json(self_inner):
-            return body
-
     if body.get("thread_id") or body.get("message_id"):
-        return await api_reply_single_account_email(_ProxyReq())
-    return await api_send_single_account_email(_ProxyReq())
+        res = _reply_single_account_email_sync(body)
+    else:
+        res = _send_single_account_email_sync(body)
+
+    if isinstance(res, JSONResponse):
+        try:
+            parsed_err = json.loads(res.body.decode("utf-8"))
+            parsed_err.setdefault("status_code", res.status_code)
+            return parsed_err
+        except Exception:
+            return {"status": "error", "message": "Email send failed.", "status_code": res.status_code}
+    return res if isinstance(res, dict) else {"status": "success", "data": res}
+
+
+@router.post("/api/v1/emails/send")
+async def api_v1_send_email(request: Request):
+    """
+    Sends a new email or replies to an existing email thread via n8n.
+    """
+    key_obj = _verify_internal_api_key(request)
+    if not key_obj:
+        return _unauthorized_v1_response()
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+
+    res = await run_in_threadpool(lambda: _execute_v1_send_email_inprocess(body, is_test_run=False))
+    if isinstance(res, dict) and res.get("status") == "error":
+        return JSONResponse(res, status_code=int(res.get("status_code") or 400))
+    return res
 
 
 @router.get("/api/v1/contacts")

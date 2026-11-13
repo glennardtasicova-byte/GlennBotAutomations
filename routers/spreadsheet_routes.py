@@ -3079,6 +3079,13 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                                         if isinstance(matched_old.get("row_heights"), dict):
                                             fs_item["row_heights"] = dict(matched_old["row_heights"])
                                 if new_sig != old_sig or is_meta_modified:
+                                    fresh_sheet_names_low = {str(s.get("name") or "").lower() for s in fresh_sheets if isinstance(s, dict)}
+                                    for old_sh in old_sheets_list:
+                                        if isinstance(old_sh, dict):
+                                            old_sh_name = str(old_sh.get("name") or "").strip()
+                                            if old_sh_name and old_sh_name.lower() not in fresh_sheet_names_low and old_sh.get("cells"):
+                                                fresh_sheets.append(old_sh)
+                                                fresh_sheet_names_low.add(old_sh_name.lower())
                                     wb["sheets"] = fresh_sheets
                                     wb["sheet_count"] = len(fresh_sheets)
                                     wb["obsolete_replaced_sigs"] = {}
@@ -3194,6 +3201,32 @@ def _sync_spreadsheets_with_gdrive_and_vault(
                     _schedule_debounced_workbook_cloud_sync(wb_check, delay_seconds=0.25)
                 except Exception:
                     pass
+            wb_title_low = str(wb_check.get("title") or "").strip().lower()
+            if "conversation" in wb_title_low:
+                wb_sh_list = list(wb_check.get("sheets") or [])
+                existing_sh_names = {str(s.get("name") or "").strip().lower() for s in wb_sh_list if isinstance(s, dict)}
+                added_conv_sheet = False
+                for req_sh_idx, req_sh_name in enumerate(("Sheet1", "Sheet2", "Sheet3"), start=1):
+                    if req_sh_name.lower() not in existing_sh_names:
+                        wb_sh_list.append({
+                            "id": f"sheet_{req_sh_idx}_{uuid.uuid4().hex[:4]}",
+                            "name": req_sh_name,
+                            "row_count": 25,
+                            "col_count": 10,
+                            "cells": {"A1": "Thread ID", "B1": "Conversations"},
+                        })
+                        existing_sh_names.add(req_sh_name.lower())
+                        added_conv_sheet = True
+                if added_conv_sheet:
+                    wb_check["sheets"] = wb_sh_list
+                    wb_check["sheet_count"] = len(wb_sh_list)
+                    wb_check["last_local_save_ts"] = time.time()
+                    wb_check["last_edit_source"] = "glennbot"
+                    any_changed = True
+                    try:
+                        _schedule_debounced_workbook_cloud_sync(wb_check, delay_seconds=0.35)
+                    except Exception:
+                        pass
 
         if vault_changed:
             with FILES_VAULT_LOCK:
@@ -4067,8 +4100,15 @@ def _read_spreadsheet_cells_sync(
                 }
                 sheets_list.append(target_sheet)
                 target_wb["sheets"] = sheets_list
+                target_wb["sheet_count"] = len(sheets_list)
+                target_wb["last_local_save_ts"] = time.time()
+                target_wb["last_edit_source"] = "glennbot"
                 SPREADSHEETS_STORE["workbooks"] = workbooks
                 save_spreadsheets_store_async()
+                try:
+                    _schedule_debounced_workbook_cloud_sync(target_wb, delay_seconds=0.35)
+                except Exception:
+                    pass
             else:
                 target_sheet = sheets_list[0]
 

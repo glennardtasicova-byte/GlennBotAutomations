@@ -2115,9 +2115,15 @@ def api_get_single_account_emails(
             is_first_inbox_seed = clean_acc_id not in EMAIL_HUB_STATE["seen_message_ids_by_account"]
             seen_set = EMAIL_HUB_STATE["seen_message_ids_by_account"].setdefault(clean_acc_id, set())
             if is_first_inbox_seed:
-                for nm in normalized_messages:
-                    if nm.get("id"):
-                        seen_set.add(str(nm["id"]))
+                for nm in reversed(normalized_messages):
+                    mid = str(nm.get("id") or "").strip()
+                    if not mid:
+                        continue
+                    msg_ts = float(nm.get("timestamp") or 0.0)
+                    if bool(nm.get("is_unread", True)) and msg_ts > 0 and 0 <= (time.time() - msg_ts) <= 180:
+                        _dispatch_signed_composio_webhook_for_email(target_acc, nm)
+                    else:
+                        seen_set.add(mid)
             else:
                 for nm in reversed(normalized_messages[:5]):
                     mid = str(nm.get("id") or "").strip()

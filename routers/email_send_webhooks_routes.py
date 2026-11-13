@@ -996,8 +996,15 @@ def _record_realtime_email_event(acc: dict, msg_obj: dict, source: str = "compos
         EMAIL_HUB_STATE["realtime_events"] = events_list
         # Dispatch to n8n if not an outbound self-email (prevents auto-reply infinite loops)
         is_self_sender = bool(acc_email_str and sender_email_str and acc_email_str.lower() in sender_email_str.lower() and not msg_id.startswith("test_"))
-        if "_dispatch_outbound_n8n_webhook_async" in globals() and not is_self_sender:
-            _dispatch_outbound_n8n_webhook_async("email.received", evt)
+        if not is_self_sender:
+            disp_fn = globals().get("_dispatch_outbound_n8n_webhook_async")
+            if not callable(disp_fn):
+                try:
+                    from routers.internal_api_routes import _dispatch_outbound_n8n_webhook_async as disp_fn
+                except Exception:
+                    disp_fn = None
+            if callable(disp_fn):
+                disp_fn("email.received", evt)
         return evt
 
 
@@ -1204,6 +1211,11 @@ def _poll_realtime_new_emails_background():
         if not accounts:
             return
 
+        # Prioritize glennard.tasico.va@gmail.com first so incoming portfolio chatbot emails trigger immediately
+        accounts.sort(
+            key=lambda a: 0 if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower() else 1
+        )
+
         for acc in accounts:
             acc_id = str(acc.get("id") or "").strip()
             provider = str(acc.get("provider") or "gmail").lower()
@@ -1322,7 +1334,7 @@ def _poll_realtime_new_emails_background():
         EMAIL_REALTIME_WATCH_STATE["running"] = False
 
 
-def _trigger_realtime_email_check_async(min_interval: float = 35.0):
+def _trigger_realtime_email_check_async(min_interval: float = 12.0):
     if EMAIL_REALTIME_WATCH_STATE.get("running"):
         return
     if (time.time() - float(EMAIL_REALTIME_WATCH_STATE.get("last_ts") or 0.0)) < min_interval:
@@ -1333,7 +1345,7 @@ def _trigger_realtime_email_check_async(min_interval: float = 35.0):
 def _dedicated_email_realtime_watcher_loop():
     """
     Dedicated, independent background thread that watches connected email inboxes
-    every 35 seconds (safe for Google Gmail per-user quota).
+    every 18 seconds (safe for Google Gmail per-user quota).
     """
     time.sleep(5)
     try:
@@ -1345,7 +1357,7 @@ def _dedicated_email_realtime_watcher_loop():
             _poll_realtime_new_emails_background()
         except Exception:
             pass
-        time.sleep(35)
+        time.sleep(18)
 
 
 threading.Thread(target=_dedicated_email_realtime_watcher_loop, daemon=True).start()
@@ -1357,7 +1369,7 @@ def api_get_email_realtime_events(since_seq: int = 0):
     Lightweight polling endpoint called by the frontend across tabs.
     """
     _load_email_hub_state()
-    _trigger_realtime_email_check_async(min_interval=35.0)
+    _trigger_realtime_email_check_async(min_interval=12.0)
     clean_since = int(since_seq or 0)
     all_events = list(EMAIL_HUB_STATE.get("realtime_events") or [])
     current_seq = int(EMAIL_HUB_STATE.get("realtime_seq") or 0)
