@@ -374,12 +374,12 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                 if len(plat_conns) == 1:
                     matched_acc = plat_conns[0]
                 elif plat_conns:
-                    # Prefer GlennBot Automations / @glennard.tasico.va / HappyFinds Hub if multiple accounts exist on the platform
+                    # Prefer GlennBot Automations / @glennard.tasico.va / Glennard Tasico (+63 917 549 7760) if multiple accounts exist on the platform
                     for p_acc in plat_conns:
                         p_aid = str(p_acc.get("account_id") or "").strip()
                         p_aname = str(p_acc.get("account_name") or "").strip().lower()
-                        if p_aid in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87", "6adda70399e7b30829e8859c") or any(
-                            k in p_aname for k in ("glennbot", "glennard.tasico", "happyfinds", "9952601753")
+                        if p_aid in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87", "6af6210fb722435238788b8f") or any(
+                            k in p_aname for k in ("glennbot", "glennard.tasico", "glennard tasico", "9175497760")
                         ):
                             matched_acc = p_acc
                             break
@@ -388,22 +388,22 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
 
             if not matched_acc and (incoming_plat in ("facebook", "instagram", "whatsapp") or incoming_acc_id):
                 fallback_plat = incoming_plat or (
-                    "whatsapp" if incoming_acc_id == "6adda70399e7b30829e8859c" else (
+                    "whatsapp" if incoming_acc_id in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c") else (
                         "instagram" if incoming_acc_id == "6ad9e9b2e5d470e468e58d87" else "facebook"
                     )
                 )
                 default_aid_map = {
                     "facebook": "6af0b109818eb5c88d1e87a6",
                     "instagram": "6ad9e9b2e5d470e468e58d87",
-                    "whatsapp": "6adda70399e7b30829e8859c",
+                    "whatsapp": "6af6210fb722435238788b8f",
                 }
                 default_aname_map = {
                     "facebook": "GlennBot Automations",
                     "instagram": "glennard.tasico.va",
-                    "whatsapp": "HappyFinds Hub",
+                    "whatsapp": "Glennard Tasico",
                 }
                 matched_acc = {
-                    "account_id": incoming_acc_id or default_aid_map.get(fallback_plat, "6af0b109818eb5c88d1e87a6"),
+                    "account_id": ("6af6210fb722435238788b8f" if incoming_acc_id == "6adda70399e7b30829e8859c" else incoming_acc_id) or default_aid_map.get(fallback_plat, "6af0b109818eb5c88d1e87a6"),
                     "account_name": raw_incoming_uname or default_aname_map.get(fallback_plat, "GlennBot Automations"),
                     "platform": fallback_plat,
                 }
@@ -579,7 +579,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         "platform": plat,
                         "account_id": db_acc_id,
                         "account_name": acc_name,
-                        "username": matched_acc.get("username") or ("+63 995 260 1753" if plat == "whatsapp" else ""),
+                        "username": matched_acc.get("username") or ("+63 917 549 7760" if plat == "whatsapp" else ""),
                         "conversation_id": conv_id,
                         "participant_id": part_id,
                         "participant_name": part_name,
@@ -590,7 +590,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
                         "platform": plat,
                         "account_id": db_acc_id,
                         "account_name": acc_name,
-                        "username": matched_acc.get("username") or ("+63 995 260 1753" if plat == "whatsapp" else ""),
+                        "username": matched_acc.get("username") or ("+63 917 549 7760" if plat == "whatsapp" else ""),
                         "conversation_id": conv_id,
                         "participant_id": part_id,
                         "participant_name": part_name,

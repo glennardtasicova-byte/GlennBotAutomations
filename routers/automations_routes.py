@@ -482,7 +482,7 @@ def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], nod
             or "9952601753" in compact_str
             or "happyfinds" in raw_acc.lower()
             or raw_plat == "whatsapp"
-            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6adda70399e7b30829e8859c")
+            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
             or raw_cid.startswith(("ig_live_", "fb_live_", "wa_live_", "portfolio_"))
             or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
         ):
@@ -1341,7 +1341,7 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
             compact_acc_dm = (raw_acc + " " + str(wb.get("username") or "") + " " + str(wb.get("recipient_phone") or "")).replace(" ", "")
             is_wa = (
                 raw_plat == "whatsapp"
-                or str(wb.get("account_id") or "").strip() == "6adda70399e7b30829e8859c"
+                or str(wb.get("account_id") or "").strip() in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
                 or conv_id.startswith("wa_live_")
                 or "glennard tasico" in raw_acc.lower()
                 or "happyfinds" in raw_acc.lower()
@@ -1357,10 +1357,14 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
                     or "glennard.tasico.va" in raw_acc.lower()
                 )
             )
-            acc_id = str(
-                wb.get("account_id")
-                or ("6adda70399e7b30829e8859c" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
-            ).strip()
+            raw_wb_aid = str(wb.get("account_id") or "").strip()
+            if is_wa and raw_wb_aid in ("", "6adda70399e7b30829e8859c", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87"):
+                acc_id = "6af6210fb722435238788b8f"
+            else:
+                acc_id = str(
+                    raw_wb_aid
+                    or ("6af6210fb722435238788b8f" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
+                ).strip()
             acc_name = "Glennard Tasico (+63 917 549 7760)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
             is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", msg_nested.get("is_own", False))))
             raw_text = str(

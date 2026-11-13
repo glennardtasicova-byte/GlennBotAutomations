@@ -184,22 +184,41 @@ def _parse_single_message_item(
     ).strip()
 
     acc_clean = (account_name or "").strip().lstrip("@").lower()
+    plat_low = (platform or "").strip().lower()
     direction = str(m_raw.get("direction") or m_raw.get("type") or "").strip().lower()
     sent_via = m_raw.get("sentVia")
+    explicit_inbound = (
+        direction in ("inbound", "received", "incoming")
+        or m_raw.get("isOwn") is False
+        or m_raw.get("fromMe") is False
+        or m_raw.get("isOwner") is False
+        or sender_obj.get("isOwn") is False
+    )
+    sender_digits = re.sub(r"\D", "", sender_id or "")
+    same_name_as_acc = bool(
+        acc_clean
+        and sender_name
+        and sender_name.lstrip("@").lower() == acc_clean
+        and not explicit_inbound
+        and plat_low != "whatsapp"
+        and (not sender_id or sender_id == str(account_id))
+    )
+    if plat_low == "whatsapp" and sender_digits and "9175497760" in sender_digits and not explicit_inbound:
+        same_name_as_acc = True
     is_own = bool(
-        m_raw.get("isOwn")
-        or m_raw.get("isOwner")
-        or m_raw.get("isOwnAccount")
-        or m_raw.get("fromOwner")
-        or m_raw.get("fromMe")
-        or m_raw.get("is_echo")
-        or sender_obj.get("isOwn")
-        or sender_obj.get("isOwner")
-        or sender_obj.get("isOwnAccount")
+        m_raw.get("isOwn") is True
+        or m_raw.get("isOwner") is True
+        or m_raw.get("isOwnAccount") is True
+        or m_raw.get("fromOwner") is True
+        or m_raw.get("fromMe") is True
+        or m_raw.get("is_echo") is True
+        or sender_obj.get("isOwn") is True
+        or sender_obj.get("isOwner") is True
+        or sender_obj.get("isOwnAccount") is True
         or direction in ("outbound", "sent", "outgoing", "reply")
         or (sent_via in ("api", "human", "broadcast", "sequence", "workflow", "comment_automation"))
         or (sender_id and account_id and sender_id == str(account_id))
-        or (acc_clean and sender_name and sender_name.lstrip("@").lower() == acc_clean)
+        or same_name_as_acc
     )
 
     if is_own and not sender_name:
@@ -547,7 +566,14 @@ def _extract_participant_from_conversation_obj(
             c_phone = str(cand.get("phone") or cand.get("phoneNumber") or cand.get("wa_id") or "").strip()
             c_email = str(cand.get("email") or cand.get("emailAddress") or "").strip()
             c_av = str(cand.get("avatar") or cand.get("avatarUrl") or cand.get("profilePictureUrl") or cand.get("picture") or "").strip()
-            if c_name.lstrip("@").lower() == acc_clean or (c_id and c_id == str(account_id)):
+            c_digits = re.sub(r"\D", (c_phone or c_id or ""), "")
+            is_distinct_wa_contact = bool(
+                (platform or "").strip().lower() == "whatsapp"
+                and c_digits
+                and "9175497760" not in c_digits
+                and c_id != str(account_id)
+            )
+            if (not is_distinct_wa_contact and c_name.lstrip("@").lower() == acc_clean) or (c_id and c_id == str(account_id)):
                 continue
             p_id = c_id or p_id
             p_name = c_name or p_name
@@ -580,13 +606,20 @@ def _extract_participant_from_conversation_obj(
                 c_phone = str(pt.get("phone") or pt.get("phoneNumber") or pt.get("wa_id") or "").strip()
                 c_email = str(pt.get("email") or pt.get("emailAddress") or "").strip()
                 c_av = str(pt.get("avatar") or pt.get("avatarUrl") or pt.get("profilePictureUrl") or pt.get("picture") or "").strip()
+                pt_digits = re.sub(r"\D", (c_phone or c_id or ""), "")
+                is_distinct_wa_pt = bool(
+                    (platform or "").strip().lower() == "whatsapp"
+                    and pt_digits
+                    and "9175497760" not in pt_digits
+                    and c_id != str(account_id)
+                )
                 is_owner = bool(
                     pt.get("isOwner")
                     or pt.get("isOwn")
                     or pt.get("isOwnAccount")
                     or (c_id and c_id == str(account_id))
-                    or (acc_clean and c_name and c_name.lstrip("@").lower() == acc_clean)
-                    or (acc_clean and c_uname and c_uname.lower() == acc_clean)
+                    or (not is_distinct_wa_pt and acc_clean and c_name and c_name.lstrip("@").lower() == acc_clean)
+                    or (not is_distinct_wa_pt and acc_clean and c_uname and c_uname.lower() == acc_clean)
                 )
                 if is_owner:
                     continue
@@ -844,13 +877,53 @@ def _fetch_conversations_for_connected_account(acc_item: Dict[str, Any], seen_co
         ts_info = parse_meta_timestamp(raw_updated_ts, fallback_offset_seconds=order_idx)
 
         if not parsed_msgs and last_text and last_text != "Start a conversation":
+            # For top recent conversations (especially WhatsApp where /inbox/conversations only returns summaries),
+            # fetch the latest messages from /inbox/conversations/{conv_id}/messages so real message IDs and directions are captured!
+            if order_idx < 4 and conv_id and used_api_key:
+                try:
+                    safe_c = requests.utils.quote(conv_id, safe="")
+                    m_resp = HTTP_SESSION.get(
+                        f"{ZERNIO_BASE_URL}/inbox/conversations/{safe_c}/messages",
+                        params={"accountId": effective_z_acc_id, "limit": 15},
+                        headers=get_zernio_headers(used_api_key),
+                        timeout=8
+                    )
+                    if m_resp.status_code == 200:
+                        m_list = extract_list_from_api_payload(m_resp.json() if m_resp.text else {}) or []
+                        for m_item in m_list:
+                            if isinstance(m_item, dict):
+                                parsed_msgs.append(
+                                    _parse_single_message_item(
+                                        m_item,
+                                        effective_z_acc_id,
+                                        acc_name,
+                                        platform,
+                                        participant_fallback_name=p_info["participant_name"],
+                                        participant_fallback_avatar=p_info["participant_avatar"]
+                                    )
+                                )
+                        parsed_msgs = _deduplicate_messages_list(parsed_msgs)
+                except Exception:
+                    pass
+
+        if not parsed_msgs and last_text and last_text != "Start a conversation":
             dir_hint = str(item.get("lastMessageDirection") or item.get("direction") or "").strip().lower()
             synth_raw = dict(item)
+            # CRITICAL: Never copy the conversation ID (`item["id"]`) as the message ID!
+            for id_k in ("id", "_id", "messageId", "platformMessageId", "mid"):
+                synth_raw.pop(id_k, None)
+            synth_hash = hashlib.md5(
+                f"{conv_id}:{raw_updated_ts or ts_info['iso']}:{last_text}".encode("utf-8", errors="ignore")
+            ).hexdigest()[:12]
+            synth_raw["id"] = f"msg_{synth_hash}"
             synth_raw["text"] = last_text
             synth_raw["createdAt"] = raw_updated_ts or ts_info["iso"]
             if dir_hint in ("outbound", "sent", "outgoing"):
                 synth_raw["direction"] = "outbound"
                 synth_raw["isOwn"] = True
+            else:
+                synth_raw["direction"] = "inbound"
+                synth_raw["isOwn"] = False
             synth_msg = _parse_single_message_item(
                 synth_raw,
                 effective_z_acc_id,
@@ -978,6 +1051,15 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
         c_acc_id = str(c_obj.get("account_id") or "").strip()
         c_acc_name = (c_obj.get("account_name") or "").strip()
         c_name_clean = c_acc_name.lstrip("@").lower()
+
+        # Purge leftover conversations from disconnected legacy WhatsApp account HappyFinds Hub (6adda70399e7b30829e8859c)
+        if (
+            (c_acc_id == "6adda70399e7b30829e8859c" or "happyfinds" in c_name_clean)
+            and "6adda70399e7b30829e8859c" not in acc_by_id
+        ):
+            convs_store.pop(ckey, None)
+            changed = True
+            continue
 
         matched_connected = acc_by_id.get(c_acc_id)
         if not matched_connected and c_plat and c_name_clean:
@@ -1514,17 +1596,14 @@ def get_inbox_conversations(
             c_acc_id = str(c_obj.get("account_id") or "").strip()
             c_plat = (c_obj.get("platform") or "").strip().lower()
             if c_acc_id and c_acc_id not in connected_by_acc_id and (
-                c_obj.get("opened_from_crm")
-                or c_acc_id == TEXTBEE_ACCOUNT_ID
-                or c_plat in ("sms", "whatsapp", "telegram")
+                c_acc_id == TEXTBEE_ACCOUNT_ID
+                or c_plat == "sms"
             ):
                 synth_acc = {
                     "account_id": c_acc_id,
                     "zernio_account_id": str(c_obj.get("zernio_account_id") or c_acc_id),
                     "platform": c_plat or "sms",
-                    "account_name": str(c_obj.get("account_name") or (
-                        "SMS Gateway (SIM 2)" if c_plat == "sms" else f"{c_plat.capitalize()} Direct"
-                    )),
+                    "account_name": str(c_obj.get("account_name") or "SMS Gateway (SIM 2)"),
                     "username": str(c_obj.get("account_username") or ""),
                     "avatar_url": ""
                 }
@@ -2254,21 +2333,27 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
                     conv_key = k
                     break
 
-        default_plat = "whatsapp" if str(payload.account_id).strip() == "6adda70399e7b30829e8859c" else (
-            "instagram" if str(payload.account_id).strip() == "6ad9e9b2e5d470e468e58d87" else "facebook"
+        req_aid_clean = str(payload.account_id or "").strip()
+        if req_aid_clean == "6adda70399e7b30829e8859c":
+            req_aid_clean = "6af6210fb722435238788b8f"
+            payload.account_id = "6af6210fb722435238788b8f"
+        default_plat = "whatsapp" if req_aid_clean in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c") else (
+            "instagram" if req_aid_clean == "6ad9e9b2e5d470e468e58d87" else "facebook"
         )
         platform = ((target_conv or {}).get("platform") or default_plat).strip().lower()
         default_acc_name = (
-            "HappyFinds Hub" if platform == "whatsapp" or str(payload.account_id).strip() == "6adda70399e7b30829e8859c"
+            "Glennard Tasico" if platform == "whatsapp" or req_aid_clean in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
             else (
-                "glennard.tasico.va" if str(payload.account_id).strip() == "6ad9e9b2e5d470e468e58d87"
+                "glennard.tasico.va" if req_aid_clean == "6ad9e9b2e5d470e468e58d87"
                 else (
-                    "GlennBot Automations" if str(payload.account_id).strip() == "6af0b109818eb5c88d1e87a6"
+                    "GlennBot Automations" if req_aid_clean == "6af0b109818eb5c88d1e87a6"
                     else platform.capitalize()
                 )
             )
         )
         acc_name = (target_conv or {}).get("account_name") or default_acc_name
+        if platform == "whatsapp" and "happyfinds" in acc_name.lower():
+            acc_name = "Glennard Tasico"
         stored_z_acc_id = str((target_conv or {}).get("zernio_account_id") or "").strip()
         pref_key = (target_conv or {}).get("zernio_api_key") or ""
         real_conv_id = str((target_conv or {}).get("conversation_id") or payload.conversation_id).strip()
@@ -2883,18 +2968,18 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
             or ("whatsapp" if clean_cid.startswith("wa_live_") else ("instagram" if clean_cid.startswith("ig_live_") else "facebook"))
         ).strip().lower()
         default_acc_id = (
-            "6adda70399e7b30829e8859c" if eff_plat == "whatsapp"
+            "6af6210fb722435238788b8f" if eff_plat == "whatsapp"
             else ("6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6")
         )
         raw_req_acc_id = str(payload.account_id or "").strip()
-        if eff_plat == "whatsapp" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87"):
-            eff_acc_id = "6adda70399e7b30829e8859c"
+        if eff_plat == "whatsapp" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87", "6adda70399e7b30829e8859c"):
+            eff_acc_id = "6af6210fb722435238788b8f"
         elif eff_plat == "instagram" and raw_req_acc_id in ("", "6af0b109818eb5c88d1e87a6"):
             eff_acc_id = "6ad9e9b2e5d470e468e58d87"
         else:
             eff_acc_id = raw_req_acc_id or default_acc_id
         default_acc_name = (
-            "Glennard Tasico (+63 917 549 7760)" if eff_plat == "whatsapp"
+            "Glennard Tasico" if eff_plat == "whatsapp"
             else ("GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations")
         )
         eff_acc_name = str(payload.account_name or default_acc_name).strip() or default_acc_name
