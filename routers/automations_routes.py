@@ -138,6 +138,45 @@ AUTOMATIONS_CANVAS_STATE: Dict[str, Any] = {
 }
 
 
+def _canonical_automation_slot(wf_obj_or_name: Any) -> str:
+    """
+    Normalizes workflow names/paths so variations like:
+      - 'Auto reply to post (GlennBot Automations)'
+      - 'Auto reply to post - GlennBot Automations'
+      - 'Auto_reply_to_post_GlennBot_Automations'
+    or DM equivalents always map to the same canonical slot ('glennbot_post_auto_reply' or 'glennbot_dm_auto_reply'),
+    preventing duplicate workflows when a user uploads a JSON in the Automations modal.
+    """
+    if isinstance(wf_obj_or_name, dict):
+        raw_name = str(
+            wf_obj_or_name.get("name")
+            or (wf_obj_or_name.get("workflow_json") or {}).get("name")
+            or ""
+        ).strip().lower()
+        raw_id = str(wf_obj_or_name.get("id") or "").strip().lower()
+        wf_json_str = json.dumps(wf_obj_or_name.get("workflow_json") or wf_obj_or_name, ensure_ascii=False).lower()
+    else:
+        raw_name = str(wf_obj_or_name or "").strip().lower()
+        raw_id = ""
+        wf_json_str = ""
+
+    norm = re.sub(r"[^a-z0-9]+", " ", raw_name).strip()
+    if (
+        raw_id == "auto_wf_glennbot_dm_default"
+        or "auto reply to dm" in norm
+        or "auto reply from dm" in norm
+        or "dm-thread-ai-agent" in wf_json_str
+    ):
+        return "glennbot_dm_auto_reply"
+    if (
+        raw_id == "auto_wf_glennbot_post_default"
+        or "auto reply to post" in norm
+        or "comment-thread-ai-agent" in wf_json_str
+    ):
+        return "glennbot_post_auto_reply"
+    return ""
+
+
 def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
     with AUTOMATIONS_CANVAS_LOCK:
         if AUTOMATIONS_CANVAS_STATE.get("loaded") and not force_cloud:
@@ -175,80 +214,22 @@ def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
             except Exception:
                 pass
 
-        # Auto-seed and auto-heal the two core GlennBot Automations workflows from repository JSON files
-        seed_specs = [
-            (
-                "Auto_reply_to_dm_GlennBot_Automations.json",
-                "Auto reply to DM (GlennBot Automations)",
-                "auto_wf_glennbot_dm_default",
-                {"message.received": True, "sms.received": True},
-            ),
-            (
-                "Auto_reply_to_post_GlennBot_Automations.json",
-                "Auto reply to post (GlennBot Automations)",
-                "auto_wf_glennbot_post_default",
-                {"comment.received": True},
-            ),
-        ]
+        # Deduplicate any duplicate Post or DM workflows (e.g. if user uploaded one in the Dashboard and another was seeded)
+        # Keep the first occurrence (which is the newest Dashboard-uploaded workflow since save inserts at index 0)
+        deduped_wf_list: List[Dict[str, Any]] = []
+        seen_slots: Set[str] = set()
         seeded_or_healed = False
-        now_seed_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
-        for seed_filename, default_wf_name, default_wf_id, default_evts in seed_specs:
-            seed_path = os.path.join(BASE_DIR, seed_filename)
-            if not os.path.exists(seed_path):
+        for w_item in wf_list:
+            if not isinstance(w_item, dict):
                 continue
-            try:
-                with open(seed_path, "r", encoding="utf-8") as sf:
-                    seed_json = json.load(sf)
-                if not isinstance(seed_json, dict) or not isinstance(seed_json.get("nodes"), list):
-                    continue
-                target_name = str(seed_json.get("name") or default_wf_name).strip()
-                existing_idx = next(
-                    (
-                        idx for idx, w in enumerate(wf_list)
-                        if isinstance(w, dict) and (
-                            str(w.get("id") or "") == default_wf_id
-                            or str(w.get("name") or "").strip().lower() == target_name.lower()
-                            or str((w.get("workflow_json") or {}).get("name") or "").strip().lower() == target_name.lower()
-                        )
-                    ),
-                    None
-                )
-                if existing_idx is None:
-                    wf_list.append({
-                        "id": default_wf_id,
-                        "name": target_name,
-                        "active": True,
-                        "events": dict(default_evts),
-                        "detected_conditions": [],
-                        "webhook_path": "",
-                        "workflow_json": seed_json,
-                        "updated_at": now_seed_str,
-                    })
+            slot = _canonical_automation_slot(w_item)
+            if slot:
+                if slot in seen_slots:
                     seeded_or_healed = True
-                else:
-                    ex_w = wf_list[existing_idx]
-                    ex_json_str = json.dumps(ex_w.get("workflow_json") or {}, ensure_ascii=False)
-                    # Heal outdated workflow JSON if missing WhatsApp/Instagram account IDs, rootBody.data unnesting, Supabase queue, or Script.xlsx fuzzy matching & pivot rules
-                    if (
-                        "6adda70399e7b30829e8859c" not in ex_json_str
-                        or "rootBody.data" not in ex_json_str
-                        or "UNMATCHED / OUT-OF-SCOPE PIVOT RULE" not in ex_json_str
-                        or "sync_gdrive=true" not in ex_json_str
-                        or ("dm-thread-ai-agent" in ex_json_str and "SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS" not in ex_json_str)
-                        or ("comment-thread-ai-agent" in ex_json_str and "Save Bot Response to Conversations.xlsx Sheet1" not in ex_json_str)
-                        or ("comment-thread-ai-agent" in ex_json_str and "node-supabase-fifo-comment-queue" not in ex_json_str)
-                    ):
-                        ex_w["workflow_json"] = seed_json
-                        ex_w["name"] = target_name
-                        ex_w["active"] = bool(ex_w.get("active", True))
-                        ex_evts = ex_w.get("events") if isinstance(ex_w.get("events"), dict) else {}
-                        for ek, ev in default_evts.items():
-                            ex_evts[ek] = ev
-                        ex_w["events"] = ex_evts
-                        ex_w["updated_at"] = now_seed_str
-                        seeded_or_healed = True
-            except Exception as seed_err:
-                print(f"[AutomationsCanvas] Seed check warning for {seed_filename}: {seed_err}")
+                    continue
+                seen_slots.add(slot)
+            deduped_wf_list.append(w_item)
+        wf_list = deduped_wf_list
 
         AUTOMATIONS_CANVAS_STATE["workflows"] = wf_list
         AUTOMATIONS_CANVAS_STATE["execution_history"] = exec_hist
@@ -2174,6 +2155,7 @@ def _execute_active_dashboard_automations_for_event(
         api_state = _load_internal_api_state(force_cloud=False)
         workflows: List[Dict[str, Any]] = list(state.get("workflows") or [])
         seen_wf_names = {str(w.get("name") or "").strip().lower() for w in workflows if isinstance(w, dict)}
+        seen_wf_slots = {_canonical_automation_slot(w) for w in workflows if isinstance(w, dict) and _canonical_automation_slot(w)}
 
         # Also include any active n8n workflows that have a full workflow_json graph so they work natively in-dashboard too
         for nw in (api_state.get("n8n_workflows") or []):
@@ -2182,9 +2164,14 @@ def _execute_active_dashboard_automations_for_event(
             nw_json = nw.get("workflow_json")
             if isinstance(nw_json, dict) and isinstance(nw_json.get("nodes"), list):
                 nw_name = str(nw.get("name") or nw_json.get("name") or "").strip().lower()
+                nw_slot = _canonical_automation_slot(nw)
+                if nw_slot and nw_slot in seen_wf_slots:
+                    continue
                 if nw_name and nw_name not in seen_wf_names:
                     workflows.append(nw)
                     seen_wf_names.add(nw_name)
+                    if nw_slot:
+                        seen_wf_slots.add(nw_slot)
 
         for wf in workflows:
             if not isinstance(wf, dict) or not (wf.get("active", False) or wf.get("enabled", False)):
@@ -2241,11 +2228,15 @@ async def api_get_automations_canvas_workflows(request: Request):
 
     canvas_wfs = list(canvas_state.get("workflows") or [])
     existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
+    existing_slots = {_canonical_automation_slot(w) for w in canvas_wfs if isinstance(w, dict) and _canonical_automation_slot(w)}
 
     # Also surface workflows from Internal API n8n list so user can load them into the Automations Canvas if desired
     for n8n_w in (api_state.get("n8n_workflows") or []):
         if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
             wid = str(n8n_w.get("id") or "")
+            wslot = _canonical_automation_slot(n8n_w)
+            if wslot and wslot in existing_slots:
+                continue
             if wid and wid not in existing_ids:
                 patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
                 canvas_wfs.append({
@@ -2257,6 +2248,8 @@ async def api_get_automations_canvas_workflows(request: Request):
                     "workflow_json": patched,
                     "updated_at": str(n8n_w.get("updated_at") or "")
                 })
+                if wslot:
+                    existing_slots.add(wslot)
 
     return {
         "status": "success",
@@ -2306,6 +2299,7 @@ async def api_save_automations_canvas_workflow(request: Request):
             "workflow_json": patched_json,
             "updated_at": now_str
         }
+        incoming_slot = _canonical_automation_slot(record)
 
         with AUTOMATIONS_CANVAS_LOCK:
             wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
@@ -2313,9 +2307,11 @@ async def api_save_automations_canvas_workflow(request: Request):
             for idx, existing in enumerate(wfs):
                 if not isinstance(existing, dict):
                     continue
+                existing_slot = _canonical_automation_slot(existing)
                 if (
                     str(existing.get("id")) == wf_id
                     or str(existing.get("name") or "").strip().lower() == wf_name.lower()
+                    or (incoming_slot and existing_slot == incoming_slot)
                 ):
                     record["id"] = str(existing.get("id") or wf_id)
                     wfs[idx] = record
