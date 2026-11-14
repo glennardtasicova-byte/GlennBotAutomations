@@ -980,6 +980,20 @@ def _format_bytes_label(num_bytes: int) -> str:
         return f"{b / 1024.0:.1f} KB"
     return f"{b} B"
 
+def _resolve_scheduled_datetime_manila(date_val: str, time_val: str, timezone_str: str = "Asia/Manila"):
+    manila_tz = pytz.timezone("Asia/Manila")
+    now_manila = datetime.now(manila_tz)
+    if not (date_val and time_val):
+        return now_manila + timedelta(seconds=10)
+    clean_tz = (timezone_str or "Asia/Manila").strip() or "Asia/Manila"
+    try:
+        source_tz = pytz.timezone(clean_tz)
+    except Exception:
+        source_tz = manila_tz
+    naive_dt = datetime.strptime(f"{date_val} {time_val[:5]}", "%Y-%m-%d %H:%M")
+    localized_dt = source_tz.localize(naive_dt)
+    return localized_dt.astimezone(manila_tz)
+
 def _schedule_chunked_init_sync(
     platform: str,
     post_type: str,
@@ -994,15 +1008,10 @@ def _schedule_chunked_init_sync(
     total_parts: int,
     thumb_bytes: Optional[bytes],
     thumb_filename: str,
-    vault_thumb_file_id: str = ""
+    vault_thumb_file_id: str = "",
+    timezone_str: str = "Asia/Manila"
 ):
-    manila_tz = pytz.timezone("Asia/Manila")
-    now_manila = datetime.now(manila_tz)
-
-    if date_val and time_val:
-        scheduled_time = manila_tz.localize(datetime.strptime(f"{date_val} {time_val}", "%Y-%m-%d %H:%M"))
-    else:
-        scheduled_time = now_manila + timedelta(seconds=10)
+    scheduled_time = _resolve_scheduled_datetime_manila(date_val, time_val, timezone_str)
 
     record_id = f"post_{uuid.uuid4().hex[:12]}"
     LAST_UPLOAD_HEARTBEAT_TS[record_id] = time.time()
@@ -1126,7 +1135,8 @@ async def schedule_chunked_init(
     media_total_size: int = Form(0),
     total_parts: int = Form(1),
     thumbnail: Optional[UploadFile] = File(None),
-    vault_thumb_file_id: str = Form("")
+    vault_thumb_file_id: str = Form(""),
+    timezone: str = Form("Asia/Manila")
 ):
     thumb_bytes: Optional[bytes] = None
     thumb_filename = ""
@@ -1152,7 +1162,8 @@ async def schedule_chunked_init(
         total_parts,
         thumb_bytes,
         thumb_filename,
-        vault_thumb_file_id
+        vault_thumb_file_id,
+        timezone
     )
 
 
@@ -1767,15 +1778,10 @@ async def receive_schedule(
     media_files: Optional[List[UploadFile]] = File(None),
     vault_media_file_id: str = Form(""),
     vault_thumb_file_id: str = Form(""),
-    vault_media_file_ids: str = Form("")
+    vault_media_file_ids: str = Form(""),
+    timezone: str = Form("Asia/Manila")
 ):
-    manila_tz = pytz.timezone("Asia/Manila")
-    now_manila = datetime.now(manila_tz)
-
-    if date_val and time_val:
-        scheduled_time = manila_tz.localize(datetime.strptime(f"{date_val} {time_val}", "%Y-%m-%d %H:%M"))
-    else:
-        scheduled_time = now_manila + timedelta(seconds=10)
+    scheduled_time = _resolve_scheduled_datetime_manila(date_val, time_val, timezone)
 
     record_id = f"post_{uuid.uuid4().hex[:12]}"
     LAST_UPLOAD_HEARTBEAT_TS[record_id] = time.time()

@@ -58,6 +58,7 @@
             accounts: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             titles: { youtube: '' },
             captions: { facebook: '', instagram: '', tiktok: '', youtube: '' },
+            timezones: { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' },
             dates: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             times: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             mediaFiles: { facebook: null, instagram: null, tiktok: null, youtube: null },
@@ -66,6 +67,98 @@
             vaultThumbItems: { facebook: null, instagram: null, tiktok: null, youtube: null },
             lastPostType: 'reels'
         };
+
+        window.activeQueueTimezone = 'Asia/Manila';
+        window.activeCalendarTimezone = 'Asia/Manila';
+
+        function getActiveQueueTimezone() {
+            const sel = document.getElementById('queue-timezone-select');
+            const raw = sel && sel.value ? sel.value : (window.activeQueueTimezone || 'Asia/Manila');
+            return (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.normalizeTimezone === 'function')
+                ? window.GlennBotTimezoneUtils.normalizeTimezone(raw)
+                : (raw || 'Asia/Manila');
+        }
+
+        function getActiveCalendarTimezone() {
+            const sel = document.getElementById('cal-timezone-select');
+            const raw = sel && sel.value ? sel.value : (window.activeCalendarTimezone || 'Asia/Manila');
+            return (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.normalizeTimezone === 'function')
+                ? window.GlennBotTimezoneUtils.normalizeTimezone(raw)
+                : (raw || 'Asia/Manila');
+        }
+
+        function getProjectedScheduledPostsForTimezone(targetTz, sortDir = 'asc') {
+            const rawPosts = getCombinedScheduledPosts();
+            if (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.projectAndSortPostsInTimezone === 'function') {
+                return window.GlennBotTimezoneUtils.projectAndSortPostsInTimezone(rawPosts, targetTz, sortDir);
+            }
+            return rawPosts;
+        }
+
+        function onCreatePostTimezoneChange(platform, newTz) {
+            const tzUtil = window.GlennBotTimezoneUtils;
+            const cleanNewTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
+                ? tzUtil.normalizeTimezone(newTz)
+                : (newTz || 'Asia/Manila');
+            if (!currentDraftState.timezones) {
+                currentDraftState.timezones = { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' };
+            }
+            const prevTz = currentDraftState.timezones[platform] || 'Asia/Manila';
+            const dateEl = document.getElementById(`date-${platform}`);
+            const timeEl = document.getElementById(`time-${platform}`);
+
+            if (dateEl && timeEl && dateEl.value && timeEl.value && prevTz !== cleanNewTz && tzUtil && typeof tzUtil.convertWallDateTimeBetweenTimezones === 'function') {
+                const converted = tzUtil.convertWallDateTimeBetweenTimezones(dateEl.value, timeEl.value, prevTz, cleanNewTz);
+                if (converted && converted.date_str && converted.time_24) {
+                    dateEl.value = converted.date_str;
+                    timeEl.value = converted.time_24;
+                    currentDraftState.dates[platform] = converted.date_str;
+                    currentDraftState.times[platform] = converted.time_24;
+                }
+            }
+            currentDraftState.timezones[platform] = cleanNewTz;
+            captureCurrentDraftState();
+            const meta = (tzUtil && typeof tzUtil.getTimezoneMeta === 'function') ? tzUtil.getTimezoneMeta(cleanNewTz) : { label: cleanNewTz };
+            if (typeof showToast === 'function') {
+                showToast(`🌐 ${platform.toUpperCase()} schedule timezone set to ${meta.label}`);
+            }
+        }
+
+        function onQueueTimezoneChange(newTz) {
+            const tzUtil = window.GlennBotTimezoneUtils;
+            const cleanTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
+                ? tzUtil.normalizeTimezone(newTz)
+                : (newTz || 'Asia/Manila');
+            window.activeQueueTimezone = cleanTz;
+            const sel = document.getElementById('queue-timezone-select');
+            if (sel && sel.value !== cleanTz) sel.value = cleanTz;
+            if (typeof renderQueue === 'function') renderQueue();
+            const meta = (tzUtil && typeof tzUtil.getTimezoneMeta === 'function') ? tzUtil.getTimezoneMeta(cleanTz) : { label: cleanTz };
+            if (typeof showToast === 'function') {
+                showToast(`🌐 Queue rearranged & converted to ${meta.label}`);
+            }
+        }
+
+        function onCalendarTimezoneChange(newTz) {
+            const tzUtil = window.GlennBotTimezoneUtils;
+            const cleanTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
+                ? tzUtil.normalizeTimezone(newTz)
+                : (newTz || 'Asia/Manila');
+            window.activeCalendarTimezone = cleanTz;
+            const calSel = document.getElementById('cal-timezone-select');
+            if (calSel && calSel.value !== cleanTz) calSel.value = cleanTz;
+            const modalSel = document.getElementById('day-modal-timezone-select');
+            if (modalSel && modalSel.value !== cleanTz) modalSel.value = cleanTz;
+
+            if (typeof renderCalendar === 'function') renderCalendar();
+            if (currentModalDayKey) {
+                openDayModal(currentModalDayKey.day, currentModalDayKey.month, currentModalDayKey.year);
+            }
+            const meta = (tzUtil && typeof tzUtil.getTimezoneMeta === 'function') ? tzUtil.getTimezoneMeta(cleanTz) : { label: cleanTz };
+            if (typeof showToast === 'function') {
+                showToast(`🌐 Calendar dates & times converted to ${meta.label}`);
+            }
+        }
 
         const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -813,10 +906,14 @@
         }
 
         function captureCurrentDraftState() {
+            if (!currentDraftState.timezones) {
+                currentDraftState.timezones = { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' };
+            }
             ['facebook', 'instagram', 'tiktok', 'youtube'].forEach(p => {
                 const pageEl = document.getElementById(`page-${p}`);
                 const titleEl = document.getElementById(`title-${p}`);
                 const capEl = document.getElementById(`caption-${p}`);
+                const tzEl = document.getElementById(`tz-${p}`);
                 const dateEl = document.getElementById(`date-${p}`);
                 const timeEl = document.getElementById(`time-${p}`);
                 const mediaEl = document.getElementById(`media-${p}`);
@@ -827,6 +924,7 @@
                     currentDraftState.titles[p] = titleEl.value;
                 }
                 if (capEl) currentDraftState.captions[p] = capEl.value;
+                if (tzEl && tzEl.value) currentDraftState.timezones[p] = tzEl.value;
                 if (dateEl) currentDraftState.dates[p] = dateEl.value;
                 if (timeEl) currentDraftState.times[p] = timeEl.value;
                 if (mediaEl && mediaEl.files && mediaEl.files.length > 0) {
@@ -1082,7 +1180,7 @@
             showToast(`✅ Media & Cover/Thumbnail synced from ${(sourcePlatform || 'card').toUpperCase()} to all selected platforms!`);
         }
 
-        // --- SYNC CAPTION, DATE & TIME TO ALL PLATFORMS ---
+        // --- SYNC CAPTION, TIMEZONE, DATE & TIME TO ALL PLATFORMS ---
         function syncCaptionAndTimeToAll() {
             hidePostTooltip();
             const checkedBoxes = Array.from(document.querySelectorAll('input[name="platform"]:checked'));
@@ -1090,14 +1188,15 @@
                 return alert("Please select at least two platforms first.");
             }
 
-            let srcCap = '', srcDate = '', srcTime = '';
+            let srcCap = '', srcTz = 'Asia/Manila', srcDate = '', srcTime = '';
             for (let box of checkedBoxes) {
                 const p = box.value;
                 const cap = document.getElementById(`caption-${p}`)?.value || '';
+                const tz = document.getElementById(`tz-${p}`)?.value || 'Asia/Manila';
                 const dt = document.getElementById(`date-${p}`)?.value || '';
                 const tm = document.getElementById(`time-${p}`)?.value || '';
                 if (cap || dt || tm) {
-                    srcCap = cap; srcDate = dt; srcTime = tm;
+                    srcCap = cap; srcTz = tz; srcDate = dt; srcTime = tm;
                     break;
                 }
             }
@@ -1105,11 +1204,15 @@
             checkedBoxes.forEach(box => {
                 const p = box.value;
                 if (srcCap && document.getElementById(`caption-${p}`)) document.getElementById(`caption-${p}`).value = srcCap;
+                if (srcTz && document.getElementById(`tz-${p}`)) {
+                    document.getElementById(`tz-${p}`).value = srcTz;
+                    if (currentDraftState.timezones) currentDraftState.timezones[p] = srcTz;
+                }
                 if (srcDate && document.getElementById(`date-${p}`)) document.getElementById(`date-${p}`).value = srcDate;
                 if (srcTime && document.getElementById(`time-${p}`)) document.getElementById(`time-${p}`).value = srcTime;
             });
             captureCurrentDraftState();
-            showToast("✅ Caption, Date & Time synced to all platforms!");
+            showToast("✅ Caption, Time Zone, Date & Time synced to all platforms!");
         }
 
         // --- 2. SAVE & LOAD CUSTOM SELECTION PRESETS ---
@@ -1611,19 +1714,28 @@
 
         // --- WINDOWS-STYLE FLOATING BUBBLE TOOLTIP LOGIC ---
         function showPostTooltip(event, postId) {
-            const post = getCombinedScheduledPosts().find(p => p.id === postId);
-            if (!post) return;
+            const rawPost = getCombinedScheduledPosts().find(p => p.id === postId);
+            if (!rawPost) return;
+            const activeTz = getActiveCalendarTimezone();
+            const post = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.projectPostToTimezone === 'function')
+                ? window.GlennBotTimezoneUtils.projectPostToTimezone(rawPost, activeTz)
+                : rawPost;
 
             const tooltip = document.getElementById('gb-tooltip');
             const captionPreview = post.caption ? (post.caption.length > 80 ? post.caption.substring(0, 80) + '...' : post.caption) : 'No caption provided';
             const statusLabel = (post.status === 'processing_payload' || post.status === 'processing')
                 ? 'PROCESSING PAYLOAD'
                 : String(post.status || '').toUpperCase();
+            const gmtTag = post.gmt_label || 'GMT+08:00';
+            const tzName = post.display_timezone || activeTz || 'Asia/Manila';
 
             tooltip.innerHTML = `
-                <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2 gap-2">
                     ${getPlatformBadge(post.platform, true)}
-                    <span class="text-[11px] font-bold text-gb-cyan"><i class="far fa-clock mr-1"></i>${post.time_str}</span>
+                    <div class="text-right">
+                        <span class="text-[11px] font-bold text-gb-cyan block"><i class="far fa-clock mr-1"></i>${escapeHTML(post.display_date)} • ${escapeHTML(post.time_str)}</span>
+                        <span class="text-[9px] font-mono text-slate-400 block">${escapeHTML(gmtTag)} • ${escapeHTML(tzName)}</span>
+                    </div>
                 </div>
                 <div class="space-y-1.5">
                     <div>
@@ -1717,12 +1829,19 @@
                             <i class="fas fa-trash-alt"></i> <span class="hidden xl:inline">Remove</span>
                        </button>`;
 
+                const gmtBadge = p.gmt_label || 'GMT+08:00';
+                const tzBadge = p.display_timezone || 'Asia/Manila';
+                const origHint = (p.orig_manila_datetime && tzBadge !== 'Asia/Manila')
+                    ? `title="Originally set in Asia/Manila (GMT+08:00): ${escapeHTML(p.orig_manila_datetime)}"`
+                    : '';
+
                 return `
                     <tr class="border-b border-slate-800/80 hover:bg-slate-800/50 transition-colors">
                         <td class="py-3 px-4 text-xs font-bold text-slate-500">#${idx + 1}</td>
-                        <td class="py-3 px-4 whitespace-nowrap">
-                            <div class="text-xs font-semibold text-white">${p.display_date}</div>
-                            <div class="text-[11px] text-gb-cyan font-medium"><i class="far fa-clock mr-1"></i>${p.time_str}</div>
+                        <td class="py-3 px-4 whitespace-nowrap" ${origHint}>
+                            <div class="text-xs font-semibold text-white">${escapeHTML(p.display_date)}</div>
+                            <div class="text-[11px] text-gb-cyan font-medium"><i class="far fa-clock mr-1"></i>${escapeHTML(p.time_str)}</div>
+                            <div class="text-[10px] text-slate-400 font-mono mt-0.5"><i class="fas fa-globe-asia text-[9px] text-gb-cyan/80 mr-1"></i>${escapeHTML(gmtBadge)} • ${escapeHTML(tzBadge)}</div>
                         </td>
                         <td class="py-3 px-4 whitespace-nowrap">
                             ${getPlatformBadge(p.platform, true)}
@@ -1781,21 +1900,30 @@
             const subtitle = document.getElementById('modal-day-subtitle');
             const container = document.getElementById('modal-table-container');
             const schedBtn = document.getElementById('modal-day-schedule-btn');
+            const activeTz = getActiveCalendarTimezone();
+            const tzMeta = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.getTimezoneMeta === 'function')
+                ? window.GlennBotTimezoneUtils.getTimezoneMeta(activeTz)
+                : { label: `${activeTz} (GMT+08:00)` };
+            const modalTzSelect = document.getElementById('day-modal-timezone-select');
+            if (modalTzSelect && modalTzSelect.value !== activeTz) {
+                modalTzSelect.value = activeTz;
+            }
 
             if (activeCalendarSubTab === 'composio') {
                 const dayEvents = getFilteredComposioCalendarEvents().filter(ev => ev.day === day && (ev.month - 1) === monthZeroIndexed && ev.year === year);
                 title.textContent = `Calendars & Meetings for ${monthNames[monthZeroIndexed]} ${day}, ${year}`;
-                subtitle.textContent = `${dayEvents.length} appointment(s) / video meeting(s) synced via Composio`;
-                container.innerHTML = buildCalendarEventsTableHTML(dayEvents, `No Google Calendar, MS Outlook, or Zoom appointments for ${monthNames[monthZeroIndexed]} ${day}, ${year}.`);
+                subtitle.textContent = `${dayEvents.length} appointment(s) / video meeting(s) • Displayed in ${tzMeta.label}`;
+                container.innerHTML = buildCalendarEventsTableHTML(dayEvents, `No Google Calendar, MS Outlook, or Zoom appointments for ${monthNames[monthZeroIndexed]} ${day}, ${year} (${tzMeta.label}).`);
                 if (schedBtn) {
                     schedBtn.classList.remove('hidden');
                     schedBtn.classList.add('inline-flex');
                 }
             } else {
-                const dayPosts = getCombinedScheduledPosts().filter(p => p.day === day && (p.month - 1) === monthZeroIndexed && p.year === year);
+                const projectedPosts = getProjectedScheduledPostsForTimezone(activeTz, 'asc');
+                const dayPosts = projectedPosts.filter(p => p.day === day && (p.month - 1) === monthZeroIndexed && p.year === year);
                 title.textContent = `Scheduled Posts for ${monthNames[monthZeroIndexed]} ${day}, ${year}`;
-                subtitle.textContent = `${dayPosts.length} scheduled social media automation(s) found for this date`;
-                container.innerHTML = buildPostsTableHTML(dayPosts, `No scheduled posts for ${monthNames[monthZeroIndexed]} ${day}, ${year}.`);
+                subtitle.textContent = `${dayPosts.length} scheduled social media automation(s) • Displayed in ${tzMeta.label}`;
+                container.innerHTML = buildPostsTableHTML(dayPosts, `No scheduled posts for ${monthNames[monthZeroIndexed]} ${day}, ${year} (${tzMeta.label}).`);
                 if (schedBtn) {
                     schedBtn.classList.add('hidden');
                     schedBtn.classList.remove('inline-flex');

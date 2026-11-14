@@ -83,6 +83,25 @@
                         <span><i class="fas fa-expand-alt text-gb-cyan mr-1"></i>Click day or expand icon for full table</span>
                     </div>
                     <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-end">
+                        <div class="flex items-center gap-1.5 bg-slate-900/90 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 w-full sm:w-auto" title="Convert and arrange Calendar dates & times by Time Zone (Default: Asia/Manila GMT+08:00)">
+                            <i class="fas fa-globe-asia text-gb-cyan text-xs shrink-0"></i>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 hidden xl:inline shrink-0">Time Zone:</span>
+                            <select id="cal-timezone-select" onchange="onCalendarTimezoneChange(this.value)" class="bg-transparent border-none text-white text-xs font-medium focus:outline-none cursor-pointer w-full sm:w-auto [color-scheme:dark]">
+                                <option value="Asia/Manila" selected>GMT+08:00 • Asia/Manila (PHT)</option>
+                                <option value="Asia/Singapore">GMT+08:00 • Asia/Singapore (SGT)</option>
+                                <option value="Asia/Hong_Kong">GMT+08:00 • Asia/Hong_Kong (HKT)</option>
+                                <option value="Asia/Tokyo">GMT+09:00 • Asia/Tokyo (JST)</option>
+                                <option value="Australia/Sydney">GMT+10:00 • Australia/Sydney (AEST/AEDT)</option>
+                                <option value="Asia/Dubai">GMT+04:00 • Asia/Dubai (GST)</option>
+                                <option value="Europe/Berlin">GMT+01:00 • Europe/Berlin (CET/CEST)</option>
+                                <option value="Europe/London">GMT+00:00 • Europe/London (GMT/BST)</option>
+                                <option value="UTC">GMT+00:00 • UTC (Universal Time)</option>
+                                <option value="America/New_York">GMT-05:00 • America/New_York (EST/EDT)</option>
+                                <option value="America/Chicago">GMT-06:00 • America/Chicago (CST/CDT)</option>
+                                <option value="America/Denver">GMT-07:00 • America/Denver (MST/MDT)</option>
+                                <option value="America/Los_Angeles">GMT-08:00 • America/Los_Angeles (PST/PDT)</option>
+                            </select>
+                        </div>
                         <button onclick="changeCalendarMonth(-1)" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white px-2.5 py-1.5 rounded-lg text-xs transition-all">
                             <i class="fas fa-chevron-left"></i>
                         </button>

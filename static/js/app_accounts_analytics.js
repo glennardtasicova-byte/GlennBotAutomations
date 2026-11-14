@@ -1117,8 +1117,12 @@
 
                 const savedTitle = (currentDraftState.titles && currentDraftState.titles[platform]) || '';
                 const savedCap = currentDraftState.captions[platform] || '';
+                const savedTz = (currentDraftState.timezones && currentDraftState.timezones[platform]) || 'Asia/Manila';
                 const savedDate = currentDraftState.dates[platform] || '';
                 const savedTime = currentDraftState.times[platform] || '';
+                const tzOptionsHTML = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML === 'function')
+                    ? window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML(savedTz)
+                    : `<option value="Asia/Manila" selected>GMT+08:00 • Asia/Manila (PHT)</option>`;
 
                 const attachedTabsHTML = (index === 0) ? getDockedActionTabsHTML() : '';
                 const topCornerClass = (index === 0) ? 'rounded-tl-none' : '';
@@ -1127,8 +1131,8 @@
                     <div class="shrink-0">
                         ${attachedTabsHTML}
                         <div class="bg-slate-800/60 border border-slate-600 rounded-xl ${topCornerClass} p-3.5 sm:p-4 shadow-lg">
-                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3">
-                                <div class="flex items-center gap-2.5 w-full sm:w-auto flex-1">
+                            <div class="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-3 mb-3">
+                                <div class="flex items-center gap-2.5 w-full xl:w-auto flex-1">
                                     <div class="w-10 h-10 rounded-full ${iconBg} flex items-center justify-center shadow-md shrink-0"><i class="${icon} text-lg"></i></div>
                                     <div class="flex items-center gap-2 w-full sm:max-w-[360px]">
                                         <div class="flex-1 min-w-0">${pageSelector}</div>
@@ -1138,7 +1142,13 @@
                                     </div>
                                 </div>
                                 
-                                <div class="grid grid-cols-2 sm:flex gap-2 w-full sm:w-auto">
+                                <div class="grid grid-cols-1 sm:grid-cols-3 xl:flex items-center gap-2 w-full xl:w-auto">
+                                    <div class="relative bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex items-center" title="Select Time Zone before or while setting Date & Time (Default: GMT+08:00 Asia/Manila)">
+                                        <i class="fas fa-globe-asia text-gb-cyan mr-2 text-xs shrink-0"></i>
+                                        <select id="tz-${platform}" onchange="onCreatePostTimezoneChange('${platform}', this.value)" class="bg-transparent border-none text-xs text-white font-medium focus:outline-none w-full cursor-pointer [color-scheme:dark]">
+                                            ${tzOptionsHTML}
+                                        </select>
+                                    </div>
                                     <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-calendar-alt text-gb-cyan mr-2 text-xs"></i><input type="date" id="date-${platform}" value="${savedDate}" onchange="captureCurrentDraftState()" class="bg-transparent border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
                                     <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-clock text-gb-cyan mr-2 text-xs"></i><input type="time" id="time-${platform}" value="${savedTime}" onchange="captureCurrentDraftState()" class="bg-transparent border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
                                 </div>
@@ -1221,13 +1231,23 @@
         function buildOptimisticPayloadItem(job) {
             const now = new Date();
             let schedDate = now;
+            const jobTz = job.timezone || 'Asia/Manila';
             if (job.dateVal && job.timeVal) {
-                const parsed = new Date(`${job.dateVal}T${job.timeVal}:00`);
-                if (!isNaN(parsed.getTime())) schedDate = parsed;
+                if (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.zonedDateTimeToUtcDate === 'function') {
+                    const zoned = window.GlennBotTimezoneUtils.zonedDateTimeToUtcDate(job.dateVal, job.timeVal, jobTz);
+                    if (zoned && !isNaN(zoned.getTime())) schedDate = zoned;
+                } else {
+                    const parsed = new Date(`${job.dateVal}T${job.timeVal}:00`);
+                    if (!isNaN(parsed.getTime())) schedDate = parsed;
+                }
             }
+            const manilaParts = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.getPartsInTimezone === 'function')
+                ? window.GlennBotTimezoneUtils.getPartsInTimezone(schedDate, 'Asia/Manila')
+                : null;
             const monthShort = monthNames[schedDate.getMonth()].slice(0, 3);
-            const dayNum = schedDate.getDate();
-            const yearNum = schedDate.getFullYear();
+            const dayNum = manilaParts ? manilaParts.day : schedDate.getDate();
+            const monthNum = manilaParts ? manilaParts.month : (schedDate.getMonth() + 1);
+            const yearNum = manilaParts ? manilaParts.year : schedDate.getFullYear();
             const hours24 = schedDate.getHours();
             const mins = String(schedDate.getMinutes()).padStart(2, '0');
             const ampm = hours24 >= 12 ? 'PM' : 'AM';
@@ -1244,12 +1264,12 @@
                 external_post_id: '',
                 permalink_url: '',
                 scheduled_iso: schedDate.toISOString(),
-                date_str: `${yearNum}-${String(schedDate.getMonth() + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`,
-                display_date: `${monthShort} ${String(dayNum).padStart(2, '0')}, ${yearNum}`,
-                time_str: `${hours12}:${mins} ${ampm}`,
-                display_datetime: `${monthShort} ${String(dayNum).padStart(2, '0')}, ${yearNum} • ${hours12}:${mins} ${ampm}`,
+                date_str: manilaParts ? manilaParts.date_str : `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`,
+                display_date: manilaParts ? manilaParts.display_date : `${monthShort} ${String(dayNum).padStart(2, '0')}, ${yearNum}`,
+                time_str: manilaParts ? manilaParts.time_str : `${hours12}:${mins} ${ampm}`,
+                display_datetime: manilaParts ? manilaParts.display_datetime : `${monthShort} ${String(dayNum).padStart(2, '0')}, ${yearNum} • ${hours12}:${mins} ${ampm}`,
                 day: dayNum,
-                month: schedDate.getMonth() + 1,
+                month: monthNum,
                 year: yearNum,
                 status: 'processing_payload',
                 status_message: (job.vaultMediaList && job.vaultMediaList.length > 0)
@@ -1292,6 +1312,7 @@
                 const selectEl = document.getElementById(`page-${platform}`);
                 const pageId = selectEl?.value || '';
                 const accountName = selectEl?.options[selectEl.selectedIndex]?.text || platform;
+                const tzVal = document.getElementById(`tz-${platform}`)?.value || (currentDraftState.timezones && currentDraftState.timezones[platform]) || 'Asia/Manila';
                 const dateVal = document.getElementById(`date-${platform}`)?.value || '';
                 const timeVal = document.getElementById(`time-${platform}`)?.value || '';
                 const titleInputEl = document.getElementById(`title-${platform}`);
@@ -1304,6 +1325,7 @@
                 formData.append('base_url', window.location.origin);
                 if (pageId) formData.append('pageId', pageId);
                 formData.append('accountName', accountName);
+                formData.append('timezone', tzVal);
                 formData.append('date', dateVal);
                 formData.append('time', timeVal);
                 if (titleInputEl) formData.append('title', titleVal);
@@ -1360,6 +1382,7 @@
                     postType,
                     pageId,
                     accountName,
+                    timezone: tzVal,
                     dateVal,
                     timeVal,
                     title: titleVal,
@@ -1467,6 +1490,7 @@
                     initForm.append('post_type', job.postType);
                     if (job.pageId) initForm.append('pageId', job.pageId);
                     initForm.append('accountName', job.accountName || job.platform);
+                    initForm.append('timezone', job.timezone || 'Asia/Manila');
                     initForm.append('date', job.dateVal || '');
                     initForm.append('time', job.timeVal || '');
                     initForm.append('title', job.title || '');

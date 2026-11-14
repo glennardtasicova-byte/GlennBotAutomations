@@ -101,7 +101,8 @@
         function getFilteredComposioCalendarEvents() {
             const accFilter = document.getElementById('cal-composio-account-filter')?.value || 'all';
             const meetFilter = document.getElementById('cal-composio-meeting-filter')?.value || 'all';
-            return (composioCalendarEvents || []).filter(ev => {
+            const activeTz = (typeof getActiveCalendarTimezone === 'function') ? getActiveCalendarTimezone() : 'Asia/Manila';
+            const filtered = (composioCalendarEvents || []).filter(ev => {
                 if (accFilter !== 'all' && String(ev.account_id || '') !== accFilter && String(ev.provider || '') !== accFilter) {
                     return false;
                 }
@@ -112,6 +113,12 @@
                 }
                 return true;
             });
+            if (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.projectCalendarEventToTimezone === 'function') {
+                const projected = filtered.map(ev => window.GlennBotTimezoneUtils.projectCalendarEventToTimezone(ev, activeTz));
+                projected.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+                return projected;
+            }
+            return filtered;
         }
 
         function renderComposioCalendarAccountsToolbar() {
@@ -1292,7 +1299,11 @@
                     renderQueue();
                     if (currentModalDayKey && activeCalendarSubTab === 'posts') {
                         const { day, month, year } = currentModalDayKey;
-                        const dayPosts = getCombinedScheduledPosts().filter(p => p.day === day && (p.month - 1) === month && p.year === year);
+                        const activeCalTz = (typeof getActiveCalendarTimezone === 'function') ? getActiveCalendarTimezone() : 'Asia/Manila';
+                        const projectedPosts = (typeof getProjectedScheduledPostsForTimezone === 'function')
+                            ? getProjectedScheduledPostsForTimezone(activeCalTz, 'asc')
+                            : getCombinedScheduledPosts();
+                        const dayPosts = projectedPosts.filter(p => p.day === day && (p.month - 1) === month && p.year === year);
                         const container = document.getElementById('modal-table-container');
                         const subtitle = document.getElementById('modal-day-subtitle');
                         if (subtitle) subtitle.textContent = `${dayPosts.length} scheduled automation(s) found for this date`;
@@ -1337,7 +1348,10 @@
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const today = new Date();
 
-            const allPosts = getCombinedScheduledPosts();
+            const activeCalTz = (typeof getActiveCalendarTimezone === 'function') ? getActiveCalendarTimezone() : 'Asia/Manila';
+            const allPosts = (typeof getProjectedScheduledPostsForTimezone === 'function')
+                ? getProjectedScheduledPostsForTimezone(activeCalTz, 'asc')
+                : getCombinedScheduledPosts();
             const allComposioEvents = getFilteredComposioCalendarEvents();
 
             const postsSubBadge = document.getElementById('cal-subtab-posts-count');
@@ -1439,8 +1453,11 @@
             const container = document.getElementById('queue-container');
             if (!container) return;
             const filterVal = document.getElementById('queue-filter-status').value;
+            const activeQueueTz = (typeof getActiveQueueTimezone === 'function') ? getActiveQueueTimezone() : 'Asia/Manila';
 
-            let filtered = getCombinedScheduledPosts();
+            let filtered = (typeof getProjectedScheduledPostsForTimezone === 'function')
+                ? getProjectedScheduledPostsForTimezone(activeQueueTz, 'asc')
+                : getCombinedScheduledPosts();
             if (filterVal !== 'all') {
                 if (filterVal === 'processing') {
                     filtered = filtered.filter(p => p.status === 'processing' || p.status === 'processing_payload');

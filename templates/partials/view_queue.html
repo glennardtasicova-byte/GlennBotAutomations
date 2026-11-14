@@ -1,12 +1,31 @@
     <!-- ==================== TAB 3: QUEUE VIEW (TABULAR FORMAT) ==================== -->
     <div id="view-queue" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
         <div class="glass-panel rounded-2xl p-4 sm:p-5 flex flex-col lg:h-full lg:min-h-0">
-            <div class="flex-none flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-700">
-                <div>
+            <div class="flex-none flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-700">
+                <div class="min-w-0">
                     <h2 class="text-base sm:text-lg font-bold text-white"><i class="fas fa-table text-gb-cyan mr-2"></i>Scheduled Posts Queue (Tabular View)</h2>
                     <p class="text-[11px] sm:text-xs text-slate-400">Chronological master table • Stored in Supabase PostgreSQL (30-Day Retention)</p>
                 </div>
-                <div class="flex items-center gap-2 w-full sm:w-auto">
+                <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full lg:w-auto shrink-0">
+                    <div class="flex items-center gap-1.5 bg-slate-900/90 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex-1 sm:flex-none" title="Convert and arrange Queue schedule dates & times by Time Zone (Default: Asia/Manila GMT+08:00)">
+                        <i class="fas fa-globe-asia text-gb-cyan text-xs shrink-0"></i>
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 hidden xl:inline shrink-0">Time Zone:</span>
+                        <select id="queue-timezone-select" onchange="onQueueTimezoneChange(this.value)" class="bg-transparent border-none text-white text-xs font-medium focus:outline-none cursor-pointer w-full sm:w-auto [color-scheme:dark]">
+                            <option value="Asia/Manila" selected>GMT+08:00 • Asia/Manila (PHT)</option>
+                            <option value="Asia/Singapore">GMT+08:00 • Asia/Singapore (SGT)</option>
+                            <option value="Asia/Hong_Kong">GMT+08:00 • Asia/Hong_Kong (HKT)</option>
+                            <option value="Asia/Tokyo">GMT+09:00 • Asia/Tokyo (JST)</option>
+                            <option value="Australia/Sydney">GMT+10:00 • Australia/Sydney (AEST/AEDT)</option>
+                            <option value="Asia/Dubai">GMT+04:00 • Asia/Dubai (GST)</option>
+                            <option value="Europe/Berlin">GMT+01:00 • Europe/Berlin (CET/CEST)</option>
+                            <option value="Europe/London">GMT+00:00 • Europe/London (GMT/BST)</option>
+                            <option value="UTC">GMT+00:00 • UTC (Universal Time)</option>
+                            <option value="America/New_York">GMT-05:00 • America/New_York (EST/EDT)</option>
+                            <option value="America/Chicago">GMT-06:00 • America/Chicago (CST/CDT)</option>
+                            <option value="America/Denver">GMT-07:00 • America/Denver (MST/MDT)</option>
+                            <option value="America/Los_Angeles">GMT-08:00 • America/Los_Angeles (PST/PDT)</option>
+                        </select>
+                    </div>
                     <select id="queue-filter-status" onchange="renderQueue()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-3 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer flex-1 sm:flex-none">
                         <option value="all">All Statuses</option>
                         <option value="processing">Processing Payload</option>
