@@ -1684,7 +1684,7 @@
             }
         }
 
-        async function openComposeEmailModal(prefillTo = '') {
+        async function openComposeEmailModal(prefillTo = '', prefillSubject = '', prefillBody = '') {
             if (!Array.isArray(emailAccountsList) || emailAccountsList.length === 0) {
                 try {
                     await fetchEmailAccounts(false);
@@ -1694,6 +1694,14 @@
             if (prefillTo) {
                 const toEl = document.getElementById('compose-email-to');
                 if (toEl) toEl.value = String(prefillTo).trim();
+            }
+            if (prefillSubject) {
+                const subjEl = document.getElementById('compose-email-subject');
+                if (subjEl) subjEl.value = String(prefillSubject).trim();
+            }
+            if (prefillBody) {
+                const bodyEl = document.getElementById('compose-email-body');
+                if (bodyEl) bodyEl.value = String(prefillBody).trim();
             }
             renderComposeEmailAttachmentsUI();
             openModalWithFade('compose-email-modal');

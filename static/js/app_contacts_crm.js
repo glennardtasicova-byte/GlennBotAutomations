@@ -1025,11 +1025,11 @@
                 const fullName = [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ') || c.social_username || 'Unnamed Contact';
                 const plat = (c.platform || 'manual').toLowerCase();
 
-                // Build multi-platform badges if this contact was combined from multiple sources (e.g. Manual + WhatsApp + Telegram)
+                // Build multi-platform badges if this contact was combined from multiple sources (e.g. Apollo.io + Gmail + WhatsApp)
                 const rawSources = `${plat},${c.source_type || ''}`
                     .split(',')
                     .map(s => s.trim().toLowerCase())
-                    .filter(s => ['facebook', 'instagram', 'tiktok', 'youtube', 'whatsapp', 'telegram', 'gmail', 'microsoft', 'imap', 'google_contacts', 'manual'].includes(s));
+                    .filter(s => ['apollo', 'facebook', 'instagram', 'tiktok', 'youtube', 'whatsapp', 'telegram', 'gmail', 'microsoft', 'imap', 'google_contacts', 'sms', 'textbee', 'manual'].includes(s));
                 const uniqueSources = [...new Set(rawSources)];
                 if (uniqueSources.length === 0) uniqueSources.push('manual');
 
@@ -1604,4 +1604,265 @@
                 if (window._gbInFlightPolls) window._gbInFlightPolls.emailRealtime = false;
             }
         }
+
+
+        // =========================================================================
+        // --- APOLLO.IO B2B LEAD FINDER & CRM ENRICHMENT (INSIDE CONTACTS VIEW) ---
+        // =========================================================================
+        let currentApolloLeadResults = [];
+
+        function toggleApolloLeadFinderPanel(forceState = null) {
+            const panel = document.getElementById('crm-apollo-lead-finder-panel');
+            if (!panel) return;
+            const willOpen = typeof forceState === 'boolean' ? forceState : panel.classList.contains('hidden');
+            panel.classList.toggle('hidden', !willOpen);
+            if (willOpen && currentApolloLeadResults.length === 0) {
+                searchApolloB2BLeads();
+            }
+        }
+
+        function applyApolloQuickTitlePreset(titleStr) {
+            const input = document.getElementById('apollo-filter-title');
+            if (input) {
+                input.value = String(titleStr || '').trim();
+            }
+            searchApolloB2BLeads();
+        }
+
+        async function searchApolloB2BLeads() {
+            const btn = document.getElementById('btn-search-apollo-leads');
+            const container = document.getElementById('apollo-leads-results-container');
+            const saveAllBtn = document.getElementById('btn-apollo-save-all');
+
+            const rawFilters = {
+                job_title: document.getElementById('apollo-filter-title')?.value || 'CEO / Founder',
+                location: document.getElementById('apollo-filter-location')?.value || 'United States',
+                industry: document.getElementById('apollo-filter-industry')?.value || 'SaaS & Software',
+                seniority: document.getElementById('apollo-filter-seniority')?.value || 'all',
+                company_size: document.getElementById('apollo-filter-size')?.value || 'any',
+                verified_email_only: true
+            };
+
+            const filters = (window.GlennBotApolloUtils && typeof window.GlennBotApolloUtils.normalizeApolloSearchFilters === 'function')
+                ? window.GlennBotApolloUtils.normalizeApolloSearchFilters(rawFilters)
+                : rawFilters;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Searching...</span>`;
+            }
+            if (container) {
+                container.innerHTML = `
+                    <div class="p-6 text-center text-xs text-slate-300 flex items-center justify-center gap-2">
+                        <i class="fas fa-circle-notch fa-spin text-indigo-400"></i>
+                        <span>Searching Apollo.io B2B leads for <strong>${escapeHTML(filters.job_title)}</strong> in <strong>${escapeHTML(filters.location)}</strong> (${escapeHTML(filters.industry)})...</span>
+                    </div>
+                `;
+            }
+
+            try {
+                const res = await fetch('/api/contacts/apollo/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(filters)
+                });
+                const data = await res.json();
+                if (data.status === 'success' && Array.isArray(data.leads)) {
+                    currentApolloLeadResults = data.leads;
+                    renderApolloLeadResults();
+                    if (saveAllBtn) {
+                        saveAllBtn.classList.toggle('hidden', currentApolloLeadResults.length === 0);
+                    }
+                } else {
+                    if (container) {
+                        container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Could not load Apollo.io leads. Please try again.</div>`;
+                    }
+                }
+            } catch (e) {
+                if (container) {
+                    container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Network error while searching Apollo.io leads.</div>`;
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="fas fa-search"></i> <span>Find B2B Leads</span>`;
+                }
+            }
+        }
+
+        function renderApolloLeadResults() {
+            const container = document.getElementById('apollo-leads-results-container');
+            if (!container) return;
+
+            if (!Array.isArray(currentApolloLeadResults) || currentApolloLeadResults.length === 0) {
+                container.innerHTML = `
+                    <div class="p-5 text-center text-xs text-slate-400">
+                        Choose your filters above and click <strong class="text-indigo-300">Find B2B Leads</strong> to discover verified decision-makers from Apollo.io.
+                    </div>
+                `;
+                return;
+            }
+
+            const existingEmails = new Set(
+                (crmContactsList || [])
+                    .map(c => String(c.email_address || '').trim().toLowerCase())
+                    .filter(Boolean)
+            );
+
+            const rows = currentApolloLeadResults.map((lead, idx) => {
+                const fullName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || 'Executive Lead';
+                const emailLow = String(lead.email || '').trim().toLowerCase();
+                const isSaved = Boolean(lead.already_in_crm || (emailLow && existingEmails.has(emailLow)));
+
+                const saveBtnHTML = isSaved
+                    ? `<span class="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1">
+                           <i class="fas fa-check-circle"></i> Saved in CRM
+                       </span>`
+                    : `<button type="button" onclick="saveSingleApolloLeadToCrm(${idx}, false)" class="px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-400/50 text-indigo-200 hover:text-white text-[11px] font-extrabold inline-flex items-center gap-1 transition-all cursor-pointer">
+                           <i class="fas fa-user-plus"></i> + Save to Contacts
+                       </button>`;
+
+                return `
+                    <tr class="border-b border-slate-800/80 hover:bg-slate-900/90 transition-colors text-xs">
+                        <td class="py-2.5 px-3 whitespace-nowrap">
+                            <div class="font-bold text-white flex items-center gap-1.5">
+                                <span>${escapeHTML(fullName)}</span>
+                                <span class="px-1.5 py-0.5 rounded bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-[9px] font-bold">Apollo.io</span>
+                            </div>
+                            <div class="text-[11px] text-slate-400">${escapeHTML(lead.job_title || '')}</div>
+                        </td>
+                        <td class="py-2.5 px-3 whitespace-nowrap">
+                            <div class="font-semibold text-slate-200">${escapeHTML(lead.company || '')}</div>
+                            <div class="text-[10px] text-slate-400">${escapeHTML(lead.industry || '')} • ${escapeHTML(lead.company_size || '51-200')} emp</div>
+                        </td>
+                        <td class="py-2.5 px-3 whitespace-nowrap text-slate-300">
+                            <i class="fas fa-map-marker-alt text-indigo-400 mr-1 text-[10px]"></i>${escapeHTML(lead.location || '')}
+                        </td>
+                        <td class="py-2.5 px-3 whitespace-nowrap">
+                            <div class="text-gb-cyan font-semibold flex items-center gap-1">
+                                <i class="fas fa-check-circle text-emerald-400 text-[10px]" title="Verified B2B Email"></i>
+                                <span>${escapeHTML(lead.email || '')}</span>
+                            </div>
+                            <div class="text-[10px] text-emerald-300/90">${escapeHTML(lead.phone || '')}</div>
+                        </td>
+                        <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                            <div class="inline-flex items-center gap-1.5">
+                                ${saveBtnHTML}
+                                <button type="button" onclick="saveAndEmailApolloLead(${idx})" class="px-2.5 py-1 rounded-lg bg-gb-cyan/15 hover:bg-gb-cyan/30 border border-gb-cyan/50 text-gb-cyan hover:text-white text-[11px] font-extrabold inline-flex items-center gap-1 transition-all cursor-pointer" title="Save lead to Contacts and open Email Modal with personalized outreach">
+                                    <i class="fas fa-envelope"></i> Email Lead
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            container.innerHTML = `
+                <table class="w-full text-left border-collapse min-w-[780px]">
+                    <thead>
+                        <tr class="border-b border-slate-800 bg-slate-900 text-[10px] font-bold uppercase tracking-wider text-slate-400 sticky top-0 z-10">
+                            <th class="py-2 px-3">Decision Maker &amp; Role</th>
+                            <th class="py-2 px-3">Company &amp; Niche</th>
+                            <th class="py-2 px-3">Location</th>
+                            <th class="py-2 px-3">Verified Email &amp; Phone</th>
+                            <th class="py-2 px-3 text-right">CRM &amp; Outreach Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function saveSingleApolloLeadToCrm(index, silentToast = false) {
+            const lead = currentApolloLeadResults[index];
+            if (!lead) return null;
+
+            const payload = (window.GlennBotApolloUtils && typeof window.GlennBotApolloUtils.mapApolloLeadToCrmPayload === 'function')
+                ? window.GlennBotApolloUtils.mapApolloLeadToCrmPayload(lead)
+                : {
+                    first_name: lead.first_name || '',
+                    middle_name: '',
+                    last_name: lead.last_name || '',
+                    contact_number: lead.phone || '',
+                    email_address: lead.email || '',
+                    platform: 'apollo',
+                    social_username: lead.linkedin_url || '',
+                    account_name: 'Apollo.io Lead Finder',
+                    category: 'Hot Prospect',
+                    company: `${lead.company || ''} (${lead.job_title || ''})`.trim(),
+                    notes: `Saved from Apollo.io B2B Lead Finder • Role: ${lead.job_title || ''} • Industry: ${lead.industry || ''} • Location: ${lead.location || ''}`,
+                    source_type: 'apollo',
+                    source_ref_id: lead.apollo_id || lead.email || ''
+                };
+
+            try {
+                const res = await fetch('/api/contacts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    lead.already_in_crm = true;
+                    await fetchCrmContacts(false);
+                    renderApolloLeadResults();
+                    if (!silentToast) {
+                        showToast(`🚀 Saved "${lead.first_name} ${lead.last_name}" (${lead.company}) to Contacts CRM with Apollo.io badge!`);
+                    }
+                    return data.contact || payload;
+                }
+            } catch (e) {
+                if (!silentToast) showToast('❌ Failed to save Apollo.io lead to Contacts.');
+            }
+            return null;
+        }
+
+        async function saveAllCurrentApolloLeadsToCrm() {
+            if (!Array.isArray(currentApolloLeadResults) || currentApolloLeadResults.length === 0) return;
+            const btn = document.getElementById('btn-apollo-save-all');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Saving All...</span>`;
+            }
+            try {
+                const res = await fetch('/api/contacts/apollo/save-bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leads: currentApolloLeadResults })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    currentApolloLeadResults.forEach(l => { l.already_in_crm = true; });
+                    await fetchCrmContacts(false);
+                    renderApolloLeadResults();
+                    showToast(`🚀 ${data.message || 'Saved all Apollo.io leads to Contacts CRM!'}`);
+                }
+            } catch (e) {
+                showToast('❌ Could not bulk-save Apollo.io leads.');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="fas fa-cloud-download-alt"></i> <span>Save All to Contacts</span>`;
+                }
+            }
+        }
+
+        async function saveAndEmailApolloLead(index) {
+            const lead = currentApolloLeadResults[index];
+            if (!lead) return;
+            if (!lead.already_in_crm) {
+                await saveSingleApolloLeadToCrm(index, true);
+            }
+            const draft = (window.GlennBotApolloUtils && typeof window.GlennBotApolloUtils.buildColdOutreachEmailDraft === 'function')
+                ? window.GlennBotApolloUtils.buildColdOutreachEmailDraft(lead)
+                : {
+                    subject: `Quick question regarding ${lead.company || 'your team'}`,
+                    body: `Hi ${lead.first_name || 'there'},\n\nI came across ${lead.company || 'your company'} and wanted to connect.`
+                };
+            showToast(`🚀 Saved "${lead.first_name} ${lead.last_name}" to Contacts & opened Email Modal!`);
+            openComposeEmailModal(lead.email || '', draft.subject, draft.body);
+        }
+
 

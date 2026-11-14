@@ -1735,6 +1735,9 @@
             if (platform === 'imap') {
                 return `<span class="inline-flex items-center gap-1.5"><span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-600 text-white text-[10px] shrink-0"><i class="fas fa-server"></i></span>${withLabel ? '<span class="text-xs font-semibold text-amber-300">IMAP/SMTP</span>' : ''}</span>`;
             }
+            if (platform === 'apollo') {
+                return `<span class="inline-flex items-center gap-1.5"><span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] shrink-0" title="Saved from Apollo.io B2B Lead Finder"><i class="fas fa-rocket"></i></span>${withLabel ? '<span class="text-xs font-extrabold text-indigo-300">Apollo.io</span>' : ''}</span>`;
+            }
             if (platform === 'sms' || platform === 'textbee') {
                 return `<span class="inline-flex items-center gap-1.5"><span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-600 text-white text-[10px] shrink-0" title="TextBee.dev SMS (SIM 2)"><i class="fas fa-sms"></i></span>${withLabel ? '<span class="text-xs font-semibold text-emerald-300">TextBee SMS</span>' : ''}</span>`;
             }
@@ -3371,6 +3374,9 @@
                 };
                 setGlennBotPopoutBarHeader(meta.title, meta.subtitle, meta.icon);
                 switchTab(targetTab);
+                if (targetTab === 'contacts' && (params.apollo === '1' || params.apollo === 'true') && typeof toggleApolloLeadFinderPanel === 'function') {
+                    toggleApolloLeadFinderPanel(true);
+                }
 
                 try {
                     const cached = JSON.parse(localStorage.getItem('gb_popout_workspace_view_cache') || '{}') || {};
