@@ -573,6 +573,23 @@
 
         function openScheduleMeetingModal(prefillDateStr = '') {
             renderComposioCalendarAccountsToolbar();
+            const schedTzSel = document.getElementById('sched-cal-timezone');
+            const defaultTz = (typeof getDefaultUserTimezone === 'function')
+                ? getDefaultUserTimezone()
+                : ((window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.detectUserTimezone === 'function')
+                    ? window.GlennBotTimezoneUtils.detectUserTimezone()
+                    : 'Asia/Manila');
+            if (schedTzSel && window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML === 'function') {
+                const targetTz = schedTzSel.getAttribute('data-user-selected') === '1' && schedTzSel.value ? schedTzSel.value : defaultTz;
+                schedTzSel.innerHTML = window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML(targetTz);
+                schedTzSel.value = targetTz;
+                if (!schedTzSel.hasAttribute('data-tz-listener')) {
+                    schedTzSel.setAttribute('data-tz-listener', '1');
+                    schedTzSel.addEventListener('change', () => {
+                        schedTzSel.setAttribute('data-user-selected', '1');
+                    });
+                }
+            }
             const dateInput = document.getElementById('sched-cal-date');
             if (dateInput) {
                 if (prefillDateStr) {
@@ -960,8 +977,17 @@
             }
 
             const tzSelect = document.getElementById('resched-cal-timezone');
-            if (tzSelect && evObj.timezone) {
-                tzSelect.value = evObj.timezone;
+            if (tzSelect) {
+                const defaultTz = (typeof getDefaultUserTimezone === 'function')
+                    ? getDefaultUserTimezone()
+                    : ((window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.detectUserTimezone === 'function')
+                        ? window.GlennBotTimezoneUtils.detectUserTimezone()
+                        : 'Asia/Manila');
+                const targetTz = evObj.timezone || defaultTz;
+                if (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML === 'function') {
+                    tzSelect.innerHTML = window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML(targetTz);
+                }
+                tzSelect.value = targetTz;
             }
 
             const attList = Array.isArray(evObj.attendees)

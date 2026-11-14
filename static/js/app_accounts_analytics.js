@@ -1115,14 +1115,17 @@
                     pageSelector = `<select id="page-${platform}" onchange="captureCurrentDraftState()" class="bg-slate-800 border border-slate-600 text-white text-xs sm:text-sm rounded-lg focus:ring-gb-cyan focus:border-gb-cyan block w-full p-2 cursor-pointer">${options}</select>`;
                 }
 
+                const defaultAutoTz = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.detectUserTimezone === 'function')
+                    ? window.GlennBotTimezoneUtils.detectUserTimezone()
+                    : 'Asia/Manila';
                 const savedTitle = (currentDraftState.titles && currentDraftState.titles[platform]) || '';
                 const savedCap = currentDraftState.captions[platform] || '';
-                const savedTz = (currentDraftState.timezones && currentDraftState.timezones[platform]) || 'Asia/Manila';
+                const savedTz = (currentDraftState.timezones && currentDraftState.timezones[platform]) || defaultAutoTz;
                 const savedDate = currentDraftState.dates[platform] || '';
                 const savedTime = currentDraftState.times[platform] || '';
                 const tzOptionsHTML = (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML === 'function')
                     ? window.GlennBotTimezoneUtils.buildTimezoneOptionsHTML(savedTz)
-                    : `<option value="Asia/Manila" selected>GMT+08:00 • Asia/Manila (PHT)</option>`;
+                    : `<option value="Asia/Manila" class="bg-slate-900 text-white" selected>GMT+08:00 • Asia/Manila (PHT)</option>`;
 
                 const attachedTabsHTML = (index === 0) ? getDockedActionTabsHTML() : '';
                 const topCornerClass = (index === 0) ? 'rounded-tl-none' : '';
@@ -1143,14 +1146,14 @@
                                 </div>
                                 
                                 <div class="grid grid-cols-1 sm:grid-cols-3 xl:flex items-center gap-2 w-full xl:w-auto">
-                                    <div class="relative bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex items-center" title="Select Time Zone before or while setting Date & Time (Default: GMT+08:00 Asia/Manila)">
+                                    <div class="relative bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex items-center" title="Auto-detected Time Zone • Select any global Time Zone before or while setting Date & Time">
                                         <i class="fas fa-globe-asia text-gb-cyan mr-2 text-xs shrink-0"></i>
-                                        <select id="tz-${platform}" onchange="onCreatePostTimezoneChange('${platform}', this.value)" class="bg-transparent border-none text-xs text-white font-medium focus:outline-none w-full cursor-pointer [color-scheme:dark]">
+                                        <select id="tz-${platform}" onchange="onCreatePostTimezoneChange('${platform}', this.value)" class="bg-slate-900 border-none text-xs text-white font-medium focus:outline-none w-full cursor-pointer [color-scheme:dark]">
                                             ${tzOptionsHTML}
                                         </select>
                                     </div>
-                                    <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-calendar-alt text-gb-cyan mr-2 text-xs"></i><input type="date" id="date-${platform}" value="${savedDate}" onchange="captureCurrentDraftState()" class="bg-transparent border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
-                                    <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-clock text-gb-cyan mr-2 text-xs"></i><input type="time" id="time-${platform}" value="${savedTime}" onchange="captureCurrentDraftState()" class="bg-transparent border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
+                                    <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-calendar-alt text-gb-cyan mr-2 text-xs"></i><input type="date" id="date-${platform}" value="${savedDate}" onchange="captureCurrentDraftState()" class="bg-slate-900 border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
+                                    <div class="relative bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 flex items-center"><i class="fas fa-clock text-gb-cyan mr-2 text-xs"></i><input type="time" id="time-${platform}" value="${savedTime}" onchange="captureCurrentDraftState()" class="bg-slate-900 border-none text-xs text-white focus:outline-none w-full [color-scheme:dark]"></div>
                                 </div>
                             </div>
                             ${platform === 'youtube' ? `

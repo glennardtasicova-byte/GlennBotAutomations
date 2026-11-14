@@ -54,11 +54,19 @@
             }
         }
 
+        function getDefaultUserTimezone() {
+            return (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.detectUserTimezone === 'function')
+                ? window.GlennBotTimezoneUtils.detectUserTimezone()
+                : 'Asia/Manila';
+        }
+
+        const _initialDetectedTz = getDefaultUserTimezone();
+
         let currentDraftState = {
             accounts: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             titles: { youtube: '' },
             captions: { facebook: '', instagram: '', tiktok: '', youtube: '' },
-            timezones: { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' },
+            timezones: { facebook: _initialDetectedTz, instagram: _initialDetectedTz, tiktok: _initialDetectedTz, youtube: _initialDetectedTz },
             dates: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             times: { facebook: '', instagram: '', tiktok: '', youtube: '' },
             mediaFiles: { facebook: null, instagram: null, tiktok: null, youtube: null },
@@ -68,23 +76,113 @@
             lastPostType: 'reels'
         };
 
-        window.activeQueueTimezone = 'Asia/Manila';
-        window.activeCalendarTimezone = 'Asia/Manila';
+        window.activeQueueTimezone = _initialDetectedTz;
+        window.activeCalendarTimezone = _initialDetectedTz;
+        window.userManuallyChangedQueueTz = false;
+        window.userManuallyChangedCalendarTz = false;
+        window.userManuallyChangedCreatePostTz = {};
+
+        function populateAllGlobalTimezoneSelects(overrideDefaultTz = '') {
+            const tzUtil = window.GlennBotTimezoneUtils;
+            if (!tzUtil || typeof tzUtil.buildTimezoneOptionsHTML !== 'function') return;
+            const autoTz = overrideDefaultTz || getDefaultUserTimezone();
+
+            const queueSel = document.getElementById('queue-timezone-select');
+            if (queueSel) {
+                const targetQ = window.userManuallyChangedQueueTz ? (window.activeQueueTimezone || autoTz) : autoTz;
+                window.activeQueueTimezone = targetQ;
+                queueSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(targetQ);
+                queueSel.value = targetQ;
+            }
+
+            const targetC = window.userManuallyChangedCalendarTz ? (window.activeCalendarTimezone || autoTz) : autoTz;
+            window.activeCalendarTimezone = targetC;
+            const calSel = document.getElementById('cal-timezone-select');
+            if (calSel) {
+                calSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(targetC);
+                calSel.value = targetC;
+            }
+            const dayModalSel = document.getElementById('day-modal-timezone-select');
+            if (dayModalSel) {
+                dayModalSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(targetC);
+                dayModalSel.value = targetC;
+            }
+
+            const schedSel = document.getElementById('sched-cal-timezone');
+            if (schedSel) {
+                const currentSchedVal = schedSel.getAttribute('data-user-selected') === '1' && schedSel.value ? schedSel.value : autoTz;
+                schedSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(currentSchedVal);
+                schedSel.value = currentSchedVal;
+            }
+
+            const reschedSel = document.getElementById('resched-cal-timezone');
+            if (reschedSel) {
+                const currentReschedVal = reschedSel.value || autoTz;
+                reschedSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(currentReschedVal);
+                reschedSel.value = currentReschedVal;
+            }
+
+            ['facebook', 'instagram', 'tiktok', 'youtube'].forEach(p => {
+                if (!window.userManuallyChangedCreatePostTz[p]) {
+                    if (currentDraftState.timezones) currentDraftState.timezones[p] = autoTz;
+                }
+                const pSel = document.getElementById(`tz-${p}`);
+                if (pSel) {
+                    const targetP = (currentDraftState.timezones && currentDraftState.timezones[p]) || autoTz;
+                    pSel.innerHTML = tzUtil.buildTimezoneOptionsHTML(targetP);
+                    pSel.value = targetP;
+                }
+            });
+        }
+
+        async function autoDetectUserCountryTimezoneAsync() {
+            const tzUtil = window.GlennBotTimezoneUtils;
+            if (!tzUtil) return;
+            try {
+                const browserResolved = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (browserResolved && tzUtil.isValidTimezone(browserResolved) && !/^(UTC|Etc\/UTC|Etc\/GMT|GMT)$/i.test(browserResolved)) {
+                    tzUtil.setDetectedUserTimezone(browserResolved);
+                    populateAllGlobalTimezoneSelects(browserResolved);
+                    return;
+                }
+            } catch (_) {}
+
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 2500);
+                const resp = await fetch('https://ipapi.co/json/', { signal: controller.signal });
+                clearTimeout(timer);
+                if (resp && resp.ok) {
+                    const data = await resp.json();
+                    const candidate = (data && data.timezone && tzUtil.isValidTimezone(data.timezone))
+                        ? data.timezone
+                        : (data && data.country_code ? tzUtil.resolveTimezoneFromCountryCode(data.country_code) : '');
+                    if (candidate && tzUtil.isValidTimezone(candidate)) {
+                        tzUtil.setDetectedUserTimezone(candidate);
+                        populateAllGlobalTimezoneSelects(candidate);
+                        if (typeof renderQueue === 'function') renderQueue();
+                        if (typeof renderCalendar === 'function') renderCalendar();
+                    }
+                }
+            } catch (_) {}
+        }
 
         function getActiveQueueTimezone() {
             const sel = document.getElementById('queue-timezone-select');
-            const raw = sel && sel.value ? sel.value : (window.activeQueueTimezone || 'Asia/Manila');
+            const fallback = getDefaultUserTimezone();
+            const raw = sel && sel.value ? sel.value : (window.activeQueueTimezone || fallback);
             return (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.normalizeTimezone === 'function')
                 ? window.GlennBotTimezoneUtils.normalizeTimezone(raw)
-                : (raw || 'Asia/Manila');
+                : (raw || fallback);
         }
 
         function getActiveCalendarTimezone() {
             const sel = document.getElementById('cal-timezone-select');
-            const raw = sel && sel.value ? sel.value : (window.activeCalendarTimezone || 'Asia/Manila');
+            const fallback = getDefaultUserTimezone();
+            const raw = sel && sel.value ? sel.value : (window.activeCalendarTimezone || fallback);
             return (window.GlennBotTimezoneUtils && typeof window.GlennBotTimezoneUtils.normalizeTimezone === 'function')
                 ? window.GlennBotTimezoneUtils.normalizeTimezone(raw)
-                : (raw || 'Asia/Manila');
+                : (raw || fallback);
         }
 
         function getProjectedScheduledPostsForTimezone(targetTz, sortDir = 'asc') {
@@ -97,13 +195,14 @@
 
         function onCreatePostTimezoneChange(platform, newTz) {
             const tzUtil = window.GlennBotTimezoneUtils;
+            const fallback = getDefaultUserTimezone();
             const cleanNewTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
                 ? tzUtil.normalizeTimezone(newTz)
-                : (newTz || 'Asia/Manila');
+                : (newTz || fallback);
             if (!currentDraftState.timezones) {
-                currentDraftState.timezones = { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' };
+                currentDraftState.timezones = { facebook: fallback, instagram: fallback, tiktok: fallback, youtube: fallback };
             }
-            const prevTz = currentDraftState.timezones[platform] || 'Asia/Manila';
+            const prevTz = currentDraftState.timezones[platform] || fallback;
             const dateEl = document.getElementById(`date-${platform}`);
             const timeEl = document.getElementById(`time-${platform}`);
 
@@ -116,6 +215,7 @@
                     currentDraftState.times[platform] = converted.time_24;
                 }
             }
+            window.userManuallyChangedCreatePostTz[platform] = true;
             currentDraftState.timezones[platform] = cleanNewTz;
             captureCurrentDraftState();
             const meta = (tzUtil && typeof tzUtil.getTimezoneMeta === 'function') ? tzUtil.getTimezoneMeta(cleanNewTz) : { label: cleanNewTz };
@@ -126,9 +226,11 @@
 
         function onQueueTimezoneChange(newTz) {
             const tzUtil = window.GlennBotTimezoneUtils;
+            const fallback = getDefaultUserTimezone();
             const cleanTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
                 ? tzUtil.normalizeTimezone(newTz)
-                : (newTz || 'Asia/Manila');
+                : (newTz || fallback);
+            window.userManuallyChangedQueueTz = true;
             window.activeQueueTimezone = cleanTz;
             const sel = document.getElementById('queue-timezone-select');
             if (sel && sel.value !== cleanTz) sel.value = cleanTz;
@@ -141,9 +243,11 @@
 
         function onCalendarTimezoneChange(newTz) {
             const tzUtil = window.GlennBotTimezoneUtils;
+            const fallback = getDefaultUserTimezone();
             const cleanTz = (tzUtil && typeof tzUtil.normalizeTimezone === 'function')
                 ? tzUtil.normalizeTimezone(newTz)
-                : (newTz || 'Asia/Manila');
+                : (newTz || fallback);
+            window.userManuallyChangedCalendarTz = true;
             window.activeCalendarTimezone = cleanTz;
             const calSel = document.getElementById('cal-timezone-select');
             if (calSel && calSel.value !== cleanTz) calSel.value = cleanTz;
@@ -906,8 +1010,9 @@
         }
 
         function captureCurrentDraftState() {
+            const fallback = getDefaultUserTimezone();
             if (!currentDraftState.timezones) {
-                currentDraftState.timezones = { facebook: 'Asia/Manila', instagram: 'Asia/Manila', tiktok: 'Asia/Manila', youtube: 'Asia/Manila' };
+                currentDraftState.timezones = { facebook: fallback, instagram: fallback, tiktok: fallback, youtube: fallback };
             }
             ['facebook', 'instagram', 'tiktok', 'youtube'].forEach(p => {
                 const pageEl = document.getElementById(`page-${p}`);
@@ -1188,11 +1293,12 @@
                 return alert("Please select at least two platforms first.");
             }
 
-            let srcCap = '', srcTz = 'Asia/Manila', srcDate = '', srcTime = '';
+            const fallbackTz = getDefaultUserTimezone();
+            let srcCap = '', srcTz = fallbackTz, srcDate = '', srcTime = '';
             for (let box of checkedBoxes) {
                 const p = box.value;
                 const cap = document.getElementById(`caption-${p}`)?.value || '';
-                const tz = document.getElementById(`tz-${p}`)?.value || 'Asia/Manila';
+                const tz = document.getElementById(`tz-${p}`)?.value || fallbackTz;
                 const dt = document.getElementById(`date-${p}`)?.value || '';
                 const tm = document.getElementById(`time-${p}`)?.value || '';
                 if (cap || dt || tm) {
@@ -3321,10 +3427,14 @@
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', () => {
+                populateAllGlobalTimezoneSelects();
+                autoDetectUserCountryTimezoneAsync();
                 initGlennBotDoubleClickExpandedView();
                 applyInstantPopoutChromeHideIfPresent();
             });
         } else {
+            populateAllGlobalTimezoneSelects();
+            autoDetectUserCountryTimezoneAsync();
             initGlennBotDoubleClickExpandedView();
             applyInstantPopoutChromeHideIfPresent();
         }

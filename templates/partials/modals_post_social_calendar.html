@@ -491,23 +491,11 @@
                     </div>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
-                    <div class="flex items-center gap-1.5 bg-slate-950/90 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5" title="Convert Day Modal schedule dates & times by Time Zone">
+                    <div class="flex items-center gap-1.5 bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5" title="Auto-detected Time Zone • Convert Day Modal schedule dates & times">
                         <i class="fas fa-globe-asia text-gb-cyan text-xs shrink-0"></i>
                         <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 hidden sm:inline shrink-0">Time Zone:</span>
-                        <select id="day-modal-timezone-select" onchange="onCalendarTimezoneChange(this.value)" class="bg-transparent border-none text-white text-xs font-medium focus:outline-none cursor-pointer [color-scheme:dark]">
-                            <option value="Asia/Manila" selected>GMT+08:00 • Asia/Manila (PHT)</option>
-                            <option value="Asia/Singapore">GMT+08:00 • Asia/Singapore (SGT)</option>
-                            <option value="Asia/Hong_Kong">GMT+08:00 • Asia/Hong_Kong (HKT)</option>
-                            <option value="Asia/Tokyo">GMT+09:00 • Asia/Tokyo (JST)</option>
-                            <option value="Australia/Sydney">GMT+10:00 • Australia/Sydney (AEST/AEDT)</option>
-                            <option value="Asia/Dubai">GMT+04:00 • Asia/Dubai (GST)</option>
-                            <option value="Europe/Berlin">GMT+01:00 • Europe/Berlin (CET/CEST)</option>
-                            <option value="Europe/London">GMT+00:00 • Europe/London (GMT/BST)</option>
-                            <option value="UTC">GMT+00:00 • UTC (Universal Time)</option>
-                            <option value="America/New_York">GMT-05:00 • America/New_York (EST/EDT)</option>
-                            <option value="America/Chicago">GMT-06:00 • America/Chicago (CST/CDT)</option>
-                            <option value="America/Denver">GMT-07:00 • America/Denver (MST/MDT)</option>
-                            <option value="America/Los_Angeles">GMT-08:00 • America/Los_Angeles (PST/PDT)</option>
+                        <select id="day-modal-timezone-select" onchange="onCalendarTimezoneChange(this.value)" class="bg-slate-900 border-none text-white text-xs font-medium focus:outline-none cursor-pointer [color-scheme:dark]">
+                            <option value="Asia/Manila" class="bg-slate-900 text-white" selected>GMT+08:00 • Asia/Manila (PHT)</option>
                         </select>
                     </div>
                     <button id="modal-day-schedule-btn" onclick="openScheduleMeetingFromDayModal()" class="hidden px-3 py-1.5 rounded-lg bg-gradient-to-r from-gb-blue to-gb-cyan text-slate-950 font-bold text-xs items-center gap-1.5 shadow-[0_0_12px_rgba(0,240,255,0.25)] hover:opacity-95 transition-all">

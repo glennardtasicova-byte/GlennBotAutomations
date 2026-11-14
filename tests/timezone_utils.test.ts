@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import tzUtils from '../static/js/timezone_utils.js';
 
 describe('GlennBotTimezoneUtils', () => {
-    it('defaults to Asia/Manila with GMT+08:00 metadata', () => {
-        assert.equal(tzUtils.DEFAULT_TIMEZONE, 'Asia/Manila');
-        assert.equal(tzUtils.normalizeTimezone(''), 'Asia/Manila');
-        assert.equal(tzUtils.normalizeTimezone('Invalid/Zone'), 'Asia/Manila');
+    it('auto-detects user timezone by default and provides Asia/Manila GMT+08:00 metadata', () => {
+        const detected = tzUtils.detectUserTimezone();
+        assert.ok(tzUtils.isValidTimezone(detected));
+        assert.equal(tzUtils.DEFAULT_TIMEZONE, detected);
+        assert.equal(tzUtils.FALLBACK_TIMEZONE, 'Asia/Manila');
+        assert.equal(tzUtils.normalizeTimezone(''), detected);
+        assert.equal(tzUtils.normalizeTimezone('Invalid/Zone'), detected);
 
         const meta = tzUtils.getTimezoneMeta('Asia/Manila');
         assert.equal(meta.value, 'Asia/Manila');
@@ -100,4 +103,32 @@ describe('GlennBotTimezoneUtils', () => {
         assert.equal(arranged[1].display_date, 'Nov 15, 2026');
         assert.equal(arranged[1].time_str, '06:00 PM');
     });
+
+    it('provides all global IANA timezones (>400 zones) and dark-styled <option> tags', () => {
+        const allOptions = tzUtils.getAllTimezoneOptions();
+        assert.ok(Array.isArray(allOptions));
+        assert.ok(allOptions.length >= 400, `Expected >=400 global timezones, got ${allOptions.length}`);
+        assert.ok(allOptions.some((o: any) => o.value === 'Asia/Manila'));
+        assert.ok(allOptions.some((o: any) => o.value === 'America/New_York'));
+        assert.ok(allOptions.some((o: any) => o.value === 'Europe/London'));
+        assert.ok(allOptions.some((o: any) => o.value === 'Pacific/Auckland'));
+
+        const html = tzUtils.buildTimezoneOptionsHTML('Asia/Manila');
+        assert.ok(html.includes('class="bg-slate-900 text-white"'));
+        assert.ok(html.includes('value="Asia/Manila" class="bg-slate-900 text-white" selected'));
+    });
+
+    it('resolves country codes to default timezones and supports setDetectedUserTimezone', () => {
+        assert.equal(tzUtils.resolveTimezoneFromCountryCode('PH'), 'Asia/Manila');
+        assert.equal(tzUtils.resolveTimezoneFromCountryCode('SG'), 'Asia/Singapore');
+        assert.equal(tzUtils.resolveTimezoneFromCountryCode('GB'), 'Europe/London');
+        assert.equal(tzUtils.resolveTimezoneFromCountryCode('US'), 'America/New_York');
+
+        tzUtils.setDetectedUserTimezone('Europe/London');
+        assert.equal(tzUtils.detectUserTimezone(), 'Europe/London');
+
+        tzUtils.setDetectedUserTimezone('PH');
+        assert.equal(tzUtils.detectUserTimezone(), 'Asia/Manila');
+    });
 });
+

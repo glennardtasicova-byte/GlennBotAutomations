@@ -8,6 +8,24 @@ input[type="checkbox"]:checked + div i.platform-icon { color: #00f0ff; text-shad
 .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
 .tab-btn.active { border-color: #00f0ff; background: rgba(0, 240, 255, 0.15); color: #00f0ff; box-shadow: 0 0 15px rgba(0, 240, 255, 0.25); }
 
+/* Native <select> & <option> Contrast Protection: Prevents white-on-white dropdown menus on Windows/Chrome */
+body:not(.gb-theme-light) select {
+    background-color: #0f172a;
+    color: #f8fafc;
+    color-scheme: dark;
+}
+body:not(.gb-theme-light) select option,
+body:not(.gb-theme-light) select optgroup {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+}
+body.gb-theme-dark select,
+body.gb-theme-dark select option,
+body.gb-theme-dark select optgroup {
+    background-color: #141418 !important;
+    color: #f4f4f5 !important;
+}
+
 /* Docked Folder-Style Action Tabs above the First Platform Card */
 .docked-tab-bar {
     display: flex;
