@@ -1610,37 +1610,258 @@
         // --- APOLLO.IO B2B LEAD FINDER & CRM ENRICHMENT (INSIDE CONTACTS VIEW) ---
         // =========================================================================
         let currentApolloLeadResults = [];
+        let currentApolloCompanyResults = [];
+        let apolloSearchMode = 'people'; // 'people' | 'companies'
+        let apolloValidationWarning = '';
+        let apolloAutocompleteTimer = null;
+
+        async function refreshApolloConnectionStatus() {
+            try {
+                const res = await fetch('/api/contacts/apollo/status');
+                const data = await res.json();
+                const badgeEl = document.getElementById('apollo-auth-status-badge');
+                const textEl = document.getElementById('apollo-auth-status-text');
+                const btnLabel = document.getElementById('btn-apollo-connect-label');
+                if (data && data.connected) {
+                    const emailStr = data.account_email || 'Apollo.io Connected';
+                    if (textEl) textEl.textContent = `Connected: ${emailStr}`;
+                    if (badgeEl) {
+                        badgeEl.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold flex items-center gap-1';
+                    }
+                    if (btnLabel) btnLabel.textContent = 'Switch Apollo Account';
+                } else {
+                    if (textEl) textEl.textContent = 'Not Connected';
+                    if (badgeEl) {
+                        badgeEl.className = 'px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold flex items-center gap-1';
+                    }
+                    if (btnLabel) btnLabel.textContent = 'Connect Apollo.io';
+                }
+            } catch (_) {}
+        }
+
+        function openApolloOAuthLoginPopup() {
+            const width = 480;
+            const height = 620;
+            const left = Math.max(0, Math.round((window.screen.width - width) / 2));
+            const top = Math.max(0, Math.round((window.screen.height - height) / 2));
+            window.open(
+                '/api/oauth/apollo/redirect',
+                'GlennBotApolloOAuthPopup',
+                `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+            );
+        }
+
+        window.addEventListener('message', (event) => {
+            const msg = event && event.data;
+            if (msg && msg.type === 'GLENNBOT_APOLLO_AUTH_DONE') {
+                refreshApolloConnectionStatus();
+                showToast(`🚀 Connected Apollo.io Account (${msg.account_email || 'Authorized'})!`);
+                searchApolloB2BLeads();
+            }
+        });
 
         function toggleApolloLeadFinderPanel(forceState = null) {
             const panel = document.getElementById('crm-apollo-lead-finder-panel');
             if (!panel) return;
             const willOpen = typeof forceState === 'boolean' ? forceState : panel.classList.contains('hidden');
             panel.classList.toggle('hidden', !willOpen);
-            if (willOpen && currentApolloLeadResults.length === 0) {
-                searchApolloB2BLeads();
+            if (willOpen) {
+                refreshApolloConnectionStatus();
+                if (currentApolloLeadResults.length === 0 && currentApolloCompanyResults.length === 0) {
+                    searchApolloB2BLeads();
+                }
             }
         }
 
-        function applyApolloQuickTitlePreset(titleStr) {
-            const input = document.getElementById('apollo-filter-title');
+        function setApolloSearchMode(mode) {
+            apolloSearchMode = mode === 'companies' ? 'companies' : 'people';
+            const tabPeople = document.getElementById('apollo-tab-people');
+            const tabCompanies = document.getElementById('apollo-tab-companies');
+            const titleCol = document.getElementById('apollo-basic-col-title');
+            const compCol = document.getElementById('apollo-basic-col-company');
+            const searchBtnLabel = document.getElementById('btn-search-apollo-label');
+
+            if (tabPeople && tabCompanies) {
+                if (apolloSearchMode === 'people') {
+                    tabPeople.className = 'px-3 py-1 rounded-lg bg-indigo-500 text-white text-[11px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer';
+                    tabCompanies.className = 'px-3 py-1 rounded-lg text-slate-400 hover:text-white text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer';
+                } else {
+                    tabCompanies.className = 'px-3 py-1 rounded-lg bg-gb-cyan text-slate-950 text-[11px] font-extrabold flex items-center gap-1.5 transition-all cursor-pointer';
+                    tabPeople.className = 'px-3 py-1 rounded-lg text-slate-400 hover:text-white text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer';
+                }
+            }
+
+            if (titleCol && compCol) {
+                if (apolloSearchMode === 'companies') {
+                    titleCol.classList.add('hidden');
+                    compCol.className = 'lg:col-span-5 relative';
+                } else {
+                    titleCol.classList.remove('hidden');
+                    compCol.className = 'lg:col-span-3 relative';
+                }
+            }
+
+            if (searchBtnLabel) {
+                searchBtnLabel.textContent = apolloSearchMode === 'companies' ? 'Find Companies' : 'Find Leads';
+            }
+
+            searchApolloB2BLeads();
+        }
+
+        function toggleApolloAdvancedFiltersDrawer(forceState = null) {
+            const drawer = document.getElementById('apollo-advanced-filters-drawer');
+            const labelEl = document.getElementById('apollo-more-filters-label');
+            if (!drawer) return;
+            const willOpen = typeof forceState === 'boolean' ? forceState : drawer.classList.contains('hidden');
+            drawer.classList.toggle('hidden', !willOpen);
+            if (labelEl) {
+                labelEl.textContent = willOpen ? 'Less Filters -' : 'View More +';
+            }
+        }
+
+        function hideAllApolloAutocompletes() {
+            ['job_title', 'company', 'technology'].forEach(f => {
+                const el = document.getElementById(`apollo-autocomplete-${f}`);
+                if (el) el.classList.add('hidden');
+            });
+        }
+
+        document.addEventListener('click', (evt) => {
+            const t = evt.target;
+            if (!t || !t.closest) return;
+            if (!t.closest('#apollo-basic-col-title') && !t.closest('#apollo-basic-col-company') && !t.closest('#apollo-advanced-filters-drawer')) {
+                hideAllApolloAutocompletes();
+            }
+        });
+
+        function triggerApolloFilterAutocomplete(field, query) {
+            if (apolloAutocompleteTimer) clearTimeout(apolloAutocompleteTimer);
+            apolloAutocompleteTimer = setTimeout(async () => {
+                const box = document.getElementById(`apollo-autocomplete-${field}`);
+                if (!box) return;
+                try {
+                    const res = await fetch(`/api/contacts/apollo/autocomplete?field=${encodeURIComponent(field)}&q=${encodeURIComponent(query || '')}`);
+                    const data = await res.json();
+                    const list = Array.isArray(data.suggestions) ? data.suggestions : [];
+                    if (list.length === 0) {
+                        box.classList.add('hidden');
+                        return;
+                    }
+                    ['job_title', 'company', 'technology'].forEach(other => {
+                        if (other !== field) {
+                            const oEl = document.getElementById(`apollo-autocomplete-${other}`);
+                            if (oEl) oEl.classList.add('hidden');
+                        }
+                    });
+                    box.innerHTML = list.map(item => {
+                        const valEsc = escapeHTML(String(item.value || item.label || '')).replace(/'/g, "\\'");
+                        if (field === 'company') {
+                            return `
+                                <button type="button" onclick="selectApolloAutocompleteSuggestion('company', '${valEsc}')"
+                                    class="w-full px-3 py-2 text-left hover:bg-slate-800/90 border-b border-slate-800/70 last:border-none flex items-center justify-between gap-2 transition-colors cursor-pointer">
+                                    <div class="min-w-0">
+                                        <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                                            <i class="fas fa-building text-gb-cyan text-[10px]"></i>
+                                            <span class="truncate">${escapeHTML(item.label || '')}</span>
+                                            <span class="text-[10px] font-mono text-gb-cyan">${escapeHTML(item.domain || '')}</span>
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 truncate">${escapeHTML(item.industry || '')} • ${escapeHTML(item.location || '')}</div>
+                                    </div>
+                                    <span class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[9px] font-bold text-slate-300 shrink-0">${escapeHTML(item.company_size || '')} emp</span>
+                                </button>
+                            `;
+                        }
+                        return `
+                            <button type="button" onclick="selectApolloAutocompleteSuggestion('${field}', '${valEsc}')"
+                                class="w-full px-3 py-1.5 text-left hover:bg-slate-800/90 border-b border-slate-800/70 last:border-none flex items-center justify-between gap-2 transition-colors cursor-pointer">
+                                <span class="text-xs font-semibold text-white truncate">${escapeHTML(item.label || '')}</span>
+                                <span class="text-[9px] text-indigo-300 shrink-0">Apollo DB</span>
+                            </button>
+                        `;
+                    }).join('');
+                    box.classList.remove('hidden');
+                } catch (_) {
+                    box.classList.add('hidden');
+                }
+            }, 140);
+        }
+
+        function selectApolloAutocompleteSuggestion(field, value) {
+            hideAllApolloAutocompletes();
+            const mapIds = {
+                job_title: 'apollo-filter-title',
+                company: 'apollo-filter-company',
+                technology: 'apollo-filter-tech'
+            };
+            const input = document.getElementById(mapIds[field]);
             if (input) {
-                input.value = String(titleStr || '').trim();
+                input.value = value;
+            }
+            if (field === 'company' && value) {
+                const indEl = document.getElementById('apollo-filter-industry');
+                if (indEl) indEl.value = 'All Industries';
             }
             searchApolloB2BLeads();
         }
 
+        function applyApolloQuickTitlePreset(titleStr) {
+            if (apolloSearchMode !== 'people') {
+                setApolloSearchMode('people');
+            }
+            const input = document.getElementById('apollo-filter-title');
+            if (input) {
+                input.value = String(titleStr || '').trim();
+            }
+            hideAllApolloAutocompletes();
+            searchApolloB2BLeads();
+        }
+
+        function applyApolloQuickCompanyPreset(companyStr) {
+            const input = document.getElementById('apollo-filter-company');
+            if (input) {
+                input.value = String(companyStr || '').trim();
+            }
+            if (companyStr) {
+                const indEl = document.getElementById('apollo-filter-industry');
+                if (indEl) indEl.value = 'All Industries';
+            }
+            hideAllApolloAutocompletes();
+            searchApolloB2BLeads();
+        }
+
+        function filterApolloPeopleByCompany(companyName) {
+            const input = document.getElementById('apollo-filter-company');
+            if (input) {
+                input.value = String(companyName || '').trim();
+            }
+            const indEl = document.getElementById('apollo-filter-industry');
+            if (indEl) indEl.value = 'All Industries';
+            setApolloSearchMode('people');
+        }
+
+        let apolloSearchReqSeq = 0;
+
         async function searchApolloB2BLeads() {
+            hideAllApolloAutocompletes();
+            const reqId = ++apolloSearchReqSeq;
             const btn = document.getElementById('btn-search-apollo-leads');
             const container = document.getElementById('apollo-leads-results-container');
             const saveAllBtn = document.getElementById('btn-apollo-save-all');
 
             const rawFilters = {
-                job_title: document.getElementById('apollo-filter-title')?.value || 'CEO / Founder',
+                search_type: apolloSearchMode,
+                job_title: document.getElementById('apollo-filter-title')?.value ?? '',
+                company: document.getElementById('apollo-filter-company')?.value || '',
                 location: document.getElementById('apollo-filter-location')?.value || 'United States',
                 industry: document.getElementById('apollo-filter-industry')?.value || 'SaaS & Software',
                 seniority: document.getElementById('apollo-filter-seniority')?.value || 'all',
+                department: document.getElementById('apollo-filter-department')?.value || 'all',
                 company_size: document.getElementById('apollo-filter-size')?.value || 'any',
-                verified_email_only: true
+                email_status: document.getElementById('apollo-filter-email-status')?.value || 'verified',
+                revenue: document.getElementById('apollo-filter-revenue')?.value || 'any',
+                funding_stage: document.getElementById('apollo-filter-funding')?.value || 'any',
+                technology: document.getElementById('apollo-filter-tech')?.value || '',
+                verified_email_only: (document.getElementById('apollo-filter-email-status')?.value || 'verified') !== 'all'
             };
 
             const filters = (window.GlennBotApolloUtils && typeof window.GlennBotApolloUtils.normalizeApolloSearchFilters === 'function')
@@ -1652,10 +1873,13 @@
                 btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Searching...</span>`;
             }
             if (container) {
+                const targetDesc = filters.search_type === 'companies'
+                    ? `B2B Organizations ${filters.company ? `matching "${filters.company}"` : `in ${filters.industry}`}`
+                    : `${filters.job_title || 'Decision Makers'} ${filters.company ? `at ${filters.company}` : `in ${filters.location}`}`;
                 container.innerHTML = `
                     <div class="p-6 text-center text-xs text-slate-300 flex items-center justify-center gap-2">
                         <i class="fas fa-circle-notch fa-spin text-indigo-400"></i>
-                        <span>Searching Apollo.io B2B leads for <strong>${escapeHTML(filters.job_title)}</strong> in <strong>${escapeHTML(filters.location)}</strong> (${escapeHTML(filters.industry)})...</span>
+                        <span>Querying Apollo.io B2B database for <strong>${escapeHTML(targetDesc)}</strong>...</span>
                     </div>
                 `;
             }
@@ -1667,25 +1891,49 @@
                     body: JSON.stringify(filters)
                 });
                 const data = await res.json();
-                if (data.status === 'success' && Array.isArray(data.leads)) {
-                    currentApolloLeadResults = data.leads;
+                if (reqId !== apolloSearchReqSeq) return;
+                apolloValidationWarning = String(data.validation_warning || data.message || '').trim();
+
+                if (data.status === 'auth_required') {
+                    currentApolloLeadResults = [];
+                    currentApolloCompanyResults = [];
+                    if (container) {
+                        container.innerHTML = `
+                            <div class="p-6 text-center">
+                                <div class="text-xs font-bold text-amber-300 mb-2"><i class="fas fa-lock mr-1"></i>Apollo.io Account Authorization Required</div>
+                                <p class="text-[11px] text-slate-400 mb-3">${escapeHTML(apolloValidationWarning || 'Connect your Apollo.io Account to search verified B2B People & Companies.')}</p>
+                                <button type="button" onclick="openApolloOAuthLoginPopup()" class="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer">
+                                    <i class="fas fa-key"></i> Connect Apollo.io Account
+                                </button>
+                            </div>
+                        `;
+                    }
+                    if (saveAllBtn) saveAllBtn.classList.add('hidden');
+                    return;
+                }
+
+                if (data.status === 'success') {
+                    currentApolloLeadResults = Array.isArray(data.leads) ? data.leads : [];
+                    currentApolloCompanyResults = Array.isArray(data.companies) ? data.companies : [];
                     renderApolloLeadResults();
                     if (saveAllBtn) {
-                        saveAllBtn.classList.toggle('hidden', currentApolloLeadResults.length === 0);
+                        saveAllBtn.classList.toggle('hidden', apolloSearchMode !== 'people' || currentApolloLeadResults.length === 0);
                     }
                 } else {
                     if (container) {
-                        container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Could not load Apollo.io leads. Please try again.</div>`;
+                        container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Could not load Apollo.io database records. Please try again.</div>`;
                     }
                 }
             } catch (e) {
+                if (reqId !== apolloSearchReqSeq) return;
                 if (container) {
-                    container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Network error while searching Apollo.io leads.</div>`;
+                    container.innerHTML = `<div class="p-4 text-center text-xs text-rose-400">Network error while querying Apollo.io database.</div>`;
                 }
             } finally {
-                if (btn) {
+                if (reqId === apolloSearchReqSeq && btn) {
                     btn.disabled = false;
-                    btn.innerHTML = `<i class="fas fa-search"></i> <span>Find B2B Leads</span>`;
+                    const labelTxt = apolloSearchMode === 'companies' ? 'Find Companies' : 'Find Leads';
+                    btn.innerHTML = `<i class="fas fa-search"></i> <span id="btn-search-apollo-label">${labelTxt}</span>`;
                 }
             }
         }
@@ -1694,10 +1942,77 @@
             const container = document.getElementById('apollo-leads-results-container');
             if (!container) return;
 
+            // Companies Mode Rendering
+            if (apolloSearchMode === 'companies') {
+                if (!Array.isArray(currentApolloCompanyResults) || currentApolloCompanyResults.length === 0) {
+                    container.innerHTML = `
+                        <div class="p-5 text-center text-xs text-slate-400">
+                            ${apolloValidationWarning ? `<div class="text-amber-300 font-semibold mb-1"><i class="fas fa-exclamation-circle mr-1"></i>${escapeHTML(apolloValidationWarning)}</div>` : ''}
+                            No matching B2B organizations found in the Apollo.io database. Try searching for <strong class="text-gb-cyan">Google</strong>, <strong class="text-gb-cyan">Apple</strong>, <strong class="text-gb-cyan">Stripe</strong>, or <strong class="text-gb-cyan">Shopify</strong>.
+                        </div>
+                    `;
+                    return;
+                }
+
+                const compRows = currentApolloCompanyResults.map(comp => {
+                    const compNameEsc = escapeHTML(String(comp.name || '')).replace(/'/g, "\\'");
+                    const techs = Array.isArray(comp.technologies) ? comp.technologies.slice(0, 4).map(t => `<span class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[9px] text-slate-300">${escapeHTML(t)}</span>`).join(' ') : '';
+                    return `
+                        <tr class="border-b border-slate-800/80 hover:bg-slate-900/90 transition-colors text-xs">
+                            <td class="py-2.5 px-3 whitespace-nowrap">
+                                <div class="font-bold text-white flex items-center gap-2">
+                                    <i class="fas fa-building text-gb-cyan"></i>
+                                    <span>${escapeHTML(comp.name || '')}</span>
+                                    <span class="px-1.5 py-0.5 rounded bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-[9px] font-bold">Apollo Org</span>
+                                </div>
+                                <div class="text-[11px] font-mono text-gb-cyan mt-0.5">${escapeHTML(comp.domain || '')}</div>
+                            </td>
+                            <td class="py-2.5 px-3 whitespace-nowrap">
+                                <div class="font-semibold text-slate-200">${escapeHTML(comp.industry || '')}</div>
+                                <div class="text-[10px] text-slate-400"><i class="fas fa-map-marker-alt text-indigo-400 mr-1"></i>${escapeHTML(comp.location || '')}</div>
+                            </td>
+                            <td class="py-2.5 px-3 whitespace-nowrap">
+                                <div class="text-emerald-300 font-bold">${escapeHTML(comp.company_size || '')} Employees</div>
+                                <div class="text-[10px] text-amber-300">Rev: ${escapeHTML(comp.revenue || 'N/A')} • ${escapeHTML(comp.funding_stage || '')}</div>
+                            </td>
+                            <td class="py-2.5 px-3">
+                                <div class="flex flex-wrap gap-1">${techs}</div>
+                            </td>
+                            <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                                <button type="button" onclick="filterApolloPeopleByCompany('${compNameEsc}')" class="px-3 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-400/50 text-indigo-200 hover:text-white text-[11px] font-extrabold inline-flex items-center gap-1.5 transition-all cursor-pointer">
+                                    <i class="fas fa-user-tie"></i> View Decision Makers
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                container.innerHTML = `
+                    <table class="w-full text-left border-collapse min-w-[780px]">
+                        <thead>
+                            <tr class="border-b border-slate-800 bg-slate-900 text-[10px] font-bold uppercase tracking-wider text-slate-400 sticky top-0 z-10">
+                                <th class="py-2 px-3">Organization &amp; Domain</th>
+                                <th class="py-2 px-3">Industry &amp; HQ</th>
+                                <th class="py-2 px-3">Headcount, Revenue &amp; Stage</th>
+                                <th class="py-2 px-3">Verified Tech Stack</th>
+                                <th class="py-2 px-3 text-right">People Search</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${compRows}
+                        </tbody>
+                    </table>
+                `;
+                return;
+            }
+
+            // People Mode Rendering
             if (!Array.isArray(currentApolloLeadResults) || currentApolloLeadResults.length === 0) {
                 container.innerHTML = `
                     <div class="p-5 text-center text-xs text-slate-400">
-                        Choose your filters above and click <strong class="text-indigo-300">Find B2B Leads</strong> to discover verified decision-makers from Apollo.io.
+                        ${apolloValidationWarning
+                            ? `<div class="text-amber-300 font-bold mb-1.5"><i class="fas fa-exclamation-triangle mr-1"></i>${escapeHTML(apolloValidationWarning)}</div>`
+                            : `Choose your filters above and click <strong class="text-indigo-300">Find Leads</strong> to discover verified decision-makers from Apollo.io.`}
                     </div>
                 `;
                 return;
@@ -1732,7 +2047,10 @@
                             <div class="text-[11px] text-slate-400">${escapeHTML(lead.job_title || '')}</div>
                         </td>
                         <td class="py-2.5 px-3 whitespace-nowrap">
-                            <div class="font-semibold text-slate-200">${escapeHTML(lead.company || '')}</div>
+                            <div class="font-semibold text-slate-200 flex items-center gap-1.5">
+                                <span>${escapeHTML(lead.company || '')}</span>
+                                ${lead.company_domain ? `<span class="text-[10px] font-mono text-gb-cyan">(${escapeHTML(lead.company_domain)})</span>` : ''}
+                            </div>
                             <div class="text-[10px] text-slate-400">${escapeHTML(lead.industry || '')} • ${escapeHTML(lead.company_size || '51-200')} emp</div>
                         </td>
                         <td class="py-2.5 px-3 whitespace-nowrap text-slate-300">
@@ -1762,7 +2080,7 @@
                     <thead>
                         <tr class="border-b border-slate-800 bg-slate-900 text-[10px] font-bold uppercase tracking-wider text-slate-400 sticky top-0 z-10">
                             <th class="py-2 px-3">Decision Maker &amp; Role</th>
-                            <th class="py-2 px-3">Company &amp; Niche</th>
+                            <th class="py-2 px-3">Company &amp; Domain</th>
                             <th class="py-2 px-3">Location</th>
                             <th class="py-2 px-3">Verified Email &amp; Phone</th>
                             <th class="py-2 px-3 text-right">CRM &amp; Outreach Actions</th>

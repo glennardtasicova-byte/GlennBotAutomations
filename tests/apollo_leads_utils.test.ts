@@ -3,28 +3,49 @@ import assert from 'node:assert/strict';
 import apolloUtils from '../static/js/apollo_leads_utils.js';
 
 describe('GlennBotApolloUtils', () => {
-    it('normalizes the 5 core Apollo.io search filters with sensible defaults', () => {
+    it('normalizes basic and advanced Apollo.io search filters for People & Companies', () => {
         const defaults = apolloUtils.normalizeApolloSearchFilters({});
+        assert.equal(defaults.search_type, 'people');
         assert.equal(defaults.job_title, 'CEO / Founder');
+        assert.equal(defaults.company, '');
         assert.equal(defaults.location, 'United States');
         assert.equal(defaults.industry, 'SaaS & Software');
         assert.equal(defaults.seniority, 'all');
+        assert.equal(defaults.department, 'all');
         assert.equal(defaults.company_size, 'any');
         assert.equal(defaults.verified_email_only, true);
 
-        const custom = apolloUtils.normalizeApolloSearchFilters({
-            job_title: 'Operations Director',
-            location: 'Australia',
-            industry: 'Manufacturing & Industrial',
-            seniority: 'director',
-            company_size: '51-200',
-            verified_email_only: true
+        const companySearch = apolloUtils.normalizeApolloSearchFilters({
+            search_type: 'companies',
+            job_title: '',
+            company: 'Google',
+            location: 'United States',
+            industry: 'SaaS & Software',
+            company_size: '10000+',
+            revenue: '$1B+',
+            funding_stage: 'Public / IPO',
+            technology: 'Google Cloud'
         });
-        assert.equal(custom.job_title, 'Operations Director');
-        assert.equal(custom.location, 'Australia');
-        assert.equal(custom.industry, 'Manufacturing & Industrial');
-        assert.equal(custom.seniority, 'director');
-        assert.equal(custom.company_size, '51-200');
+        assert.equal(companySearch.search_type, 'companies');
+        assert.equal(companySearch.company, 'Google');
+        assert.equal(companySearch.company_size, '10000+');
+        assert.equal(companySearch.revenue, '$1B+');
+        assert.equal(companySearch.funding_stage, 'Public / IPO');
+        assert.equal(companySearch.technology, 'Google Cloud');
+    });
+
+    it('strictly validates B2B job titles and rejects non-B2B or inappropriate roles', () => {
+        const validCeo = apolloUtils.validateApolloB2BRoleOrQuery('CEO / Founder');
+        assert.equal(validCeo.valid, true);
+
+        const validEng = apolloUtils.validateApolloB2BRoleOrQuery('Senior Software Engineer');
+        assert.equal(validEng.valid, true);
+
+        const blockedRole = apolloUtils.validateApolloB2BRoleOrQuery('Porn Star');
+        assert.equal(blockedRole.valid, false);
+
+        const gibberishRole = apolloUtils.validateApolloB2BRoleOrQuery('zxcvbnm12345');
+        assert.equal(gibberishRole.valid, false);
     });
 
     it('maps an Apollo.io lead into a CRM contact payload with platform="apollo" and source_type="apollo"', () => {
