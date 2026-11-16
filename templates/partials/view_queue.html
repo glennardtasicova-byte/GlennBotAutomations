@@ -1,32 +1,31 @@
-    <!-- ==================== TAB 3: QUEUE VIEW (TABULAR FORMAT) ==================== -->
-    <div id="view-queue" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
-        <div class="glass-panel rounded-2xl p-4 sm:p-5 flex flex-col lg:h-full lg:min-h-0">
-            <div class="flex-none flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-700">
-                <div class="min-w-0">
-                    <h2 class="text-base sm:text-lg font-bold text-white"><i class="fas fa-table text-gb-cyan mr-2"></i>Scheduled Posts Queue (Tabular View)</h2>
-                    <p class="text-[11px] sm:text-xs text-slate-400">Chronological master table • Stored in Supabase PostgreSQL (30-Day Retention)</p>
-                </div>
-                <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full lg:w-auto shrink-0">
-                    <div class="flex items-center gap-1.5 bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex-1 sm:flex-none" title="Auto-detected Time Zone • Convert and arrange Queue schedule dates & times">
-                        <i class="fas fa-globe-asia text-gb-cyan text-xs shrink-0"></i>
-                        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 hidden xl:inline shrink-0">Time Zone:</span>
-                        <select id="queue-timezone-select" onchange="onQueueTimezoneChange(this.value)" class="bg-slate-900 border-none text-white text-xs font-medium focus:outline-none cursor-pointer w-full sm:w-auto [color-scheme:dark]">
-                            <option value="Asia/Manila" class="bg-slate-900 text-white" selected>GMT+08:00 • Asia/Manila (PHT)</option>
-                        </select>
-                    </div>
-                    <select id="queue-filter-status" onchange="renderQueue()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-3 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer flex-1 sm:flex-none">
-                        <option value="all">All Statuses</option>
-                        <option value="processing">Processing Payload</option>
-                        <option value="waiting">Waiting / Scheduled</option>
-                        <option value="published">Published</option>
-                        <option value="failed">Failed</option>
-                    </select>
-                    <button onclick="fetchScheduledPosts()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0">
-                        <i class="fas fa-sync-alt"></i> Refresh
-                    </button>
-                </div>
-            </div>
-
-            <div id="queue-container" class="flex-1 lg:min-h-0 overflow-auto rounded-xl border border-slate-700/80 bg-slate-900/50"></div>
-        </div>
+ <!-- ==================== TAB 3: QUEUE VIEW (TABULAR FORMAT) ==================== -->
+ <div id="view-queue" class="hidden flex-1 lg:min-h-0 flex flex-col w-full max-w-none mx-auto pb-4 lg:pb-1">
+  <div class="glass-panel rounded-2xl p-4 sm:p-5 flex flex-col lg:h-full lg:min-h-0">
+   <div class="flex-none flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-700">
+    <div class="min-w-0">
+     <h2 class="text-base sm:text-lg font-bold text-white"><i class="fas fa-table text-gb-cyan mr-2"></i>Scheduled Posts Queue (Tabular View)</h2>
+     <p class="text-[11px] sm:text-xs text-slate-400">Chronological master table • Stored in Supabase PostgreSQL (30-Day Retention)</p>
     </div>
+    <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full lg:w-auto shrink-0">
+     <div class="flex items-center gap-1.5 bg-slate-900 border border-gb-cyan/40 rounded-lg px-2.5 py-1.5 flex-1 sm:flex-none" title="Auto-detected Time Zone • Convert and arrange Queue schedule dates & times">
+      <i class="fas fa-globe-asia text-gb-cyan text-xs shrink-0"></i>
+      <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 hidden xl:inline shrink-0">Time Zone:</span>
+      <select id="queue-timezone-select" onchange="onQueueTimezoneChange(this.value)" class="bg-slate-900 border-none text-white text-xs font-medium focus:outline-none cursor-pointer w-full sm:w-auto [color-scheme:dark]">
+       <option value="Asia/Manila" class="bg-slate-900 text-white" selected>GMT+08:00 • Asia/Manila (PHT)</option>
+      </select>
+     </div>
+     <select id="queue-filter-status" onchange="renderQueue()" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-3 py-1.5 focus:border-gb-cyan focus:outline-none cursor-pointer flex-1 sm:flex-none">
+      <option value="all">All Statuses</option>
+      <option value="processing">Processing Payload</option>
+      <option value="waiting">Waiting / Scheduled</option>
+      <option value="published">Published</option>
+      <option value="failed">Failed</option>
+     </select>
+     <button onclick="fetchScheduledPosts()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0">
+      <i class="fas fa-sync-alt"></i> Refresh
+     </button>
+    </div>
+   </div>
+   <div id="queue-container" class="flex-1 lg:min-h-0 overflow-auto rounded-xl border border-slate-700/80 bg-slate-900/50"></div>
+  </div>
+ </div>

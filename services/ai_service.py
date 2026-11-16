@@ -7,288 +7,263 @@ from typing import List, Optional, Any
 import requests
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
-
-
 # =========================================================================
 # --- GEMINI 3.5 FLASH: ASK AI POST CONTENT, QUESTION SEARCH & REPLY API ---
 # =========================================================================
 class AskAIRequest(BaseModel):
-    topic: Optional[str] = ""
-    prompt: Optional[str] = ""
-    question: Optional[str] = ""
-    message: Optional[str] = ""
-    comment: Optional[str] = ""
-    tone: Optional[str] = "engaging"
-    language: Optional[str] = "taglish"
-    post_type: Optional[str] = "reels"
-    platforms: Optional[List[str]] = None
-    use_search: Optional[bool] = True
-
-
+ topic: Optional[str] = ""
+ prompt: Optional[str] = ""
+ question: Optional[str] = ""
+ message: Optional[str] = ""
+ comment: Optional[str] = ""
+ tone: Optional[str] = "engaging"
+ language: Optional[str] = "taglish"
+ post_type: Optional[str] = "reels"
+ platforms: Optional[List[str]] = None
+ use_search: Optional[bool] = True
 def _perform_free_web_search_for_ai(raw_query: str) -> str:
-    """
+ """
     Performs a fast, free live internet search across Bing Web RSS, Google News RSS, and Wikipedia
     so Gemini AI can answer any factual or current-events question from social media comments/DMs
     without hitting Google AI Studio's paid-tier grounding quota limits.
     """
-    clean_q = str(raw_query or "").strip()
-    # Strip common instruction prefixes added by n8n prompts so the search engine gets the actual user question
-    clean_q = re.sub(
-        r"^(reply\s+politely[^:]*:|answer\s+this\s+question[^:]*:|respond\s+to\s+this\s+comment[^:]*:|comment\s*:|question\s*:)\s*",
-        "",
-        clean_q,
-        flags=re.IGNORECASE
-    ).strip()
-    if not clean_q or len(clean_q) < 3:
-        return ""
-
-    search_q = clean_q[:180]
-    snippets: List[str] = []
-
-    # 1. Bing Web Search RSS (general web results & prices/facts)
-    try:
-        r_bing = requests.get(
-            "https://www.bing.com/search",
-            params={"q": search_q, "format": "rss"},
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=4
-        )
-        if r_bing.status_code == 200 and "<rss" in r_bing.text:
-            root = ET.fromstring(r_bing.text)
-            for item in root.findall(".//item")[:4]:
-                t_val = (item.findtext("title") or "").strip()
-                d_val = re.sub(r"<[^>]+>", "", (item.findtext("description") or "")).strip()
-                if t_val or d_val:
-                    snippets.append(f"- [Web] {t_val}: {d_val[:240]}")
-    except Exception:
-        pass
-
-    # 2. Google News RSS (latest news & current events in PH / Global)
-    try:
-        r_news = requests.get(
-            "https://news.google.com/rss/search",
-            params={"q": search_q, "hl": "en-PH", "gl": "PH", "ceid": "PH:en"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=4
-        )
-        if r_news.status_code == 200 and "<rss" in r_news.text:
-            root = ET.fromstring(r_news.text)
-            for item in root.findall(".//item")[:3]:
-                t_val = (item.findtext("title") or "").strip()
-                pub_val = (item.findtext("pubDate") or "").strip()
-                if t_val:
-                    snippets.append(f"- [News] {t_val} ({pub_val})")
-    except Exception:
-        pass
-
-    # 3. Wikipedia API (encyclopedic & factual knowledge)
-    try:
-        r_wiki = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": search_q, "format": "json", "srlimit": 2},
-            headers={"User-Agent": "GlennBot/2.0"},
-            timeout=4
-        )
-        if r_wiki.status_code == 200:
-            for s_item in r_wiki.json().get("query", {}).get("search", [])[:2]:
-                w_title = s_item.get("title") or ""
-                w_snip = re.sub(r"<[^>]+>", "", s_item.get("snippet") or "").strip()
-                if w_title and w_snip:
-                    snippets.append(f"- [Wikipedia: {w_title}] {w_snip}")
-    except Exception:
-        pass
-
-    return "\n".join(snippets[:8])
-
-
+ clean_q = str(raw_query or "").strip()
+ # Strip common instruction prefixes added by n8n prompts so the search engine gets the actual user question
+ clean_q = re.sub(
+ r"^(reply\s+politely[^:]*:|answer\s+this\s+question[^:]*:|respond\s+to\s+this\s+comment[^:]*:|comment\s*:|question\s*:)\s*",
+ "",
+ clean_q,
+ flags=re.IGNORECASE
+ ).strip()
+ if not clean_q or len(clean_q) < 3:
+  return ""
+ search_q = clean_q[:180]
+ snippets: List[str] = []
+ # 1. Bing Web Search RSS (general web results & prices/facts)
+ try:
+  r_bing = requests.get(
+  "https://www.bing.com/search",
+  params={"q": search_q, "format": "rss"},
+  headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+  timeout=4
+  )
+  if r_bing.status_code == 200 and "<rss" in r_bing.text:
+   root = ET.fromstring(r_bing.text)
+   for item in root.findall(".//item")[:4]:
+    t_val = (item.findtext("title") or "").strip()
+    d_val = re.sub(r"<[^>]+>", "", (item.findtext("description") or "")).strip()
+    if t_val or d_val:
+     snippets.append(f"- [Web] {t_val}: {d_val[:240]}")
+ except Exception:
+  pass
+ # 2. Google News RSS (latest news & current events in PH / Global)
+ try:
+  r_news = requests.get(
+  "https://news.google.com/rss/search",
+  params={"q": search_q, "hl": "en-PH", "gl": "PH", "ceid": "PH:en"},
+  headers={"User-Agent": "Mozilla/5.0"},
+  timeout=4
+  )
+  if r_news.status_code == 200 and "<rss" in r_news.text:
+   root = ET.fromstring(r_news.text)
+   for item in root.findall(".//item")[:3]:
+    t_val = (item.findtext("title") or "").strip()
+    pub_val = (item.findtext("pubDate") or "").strip()
+    if t_val:
+     snippets.append(f"- [News] {t_val} ({pub_val})")
+ except Exception:
+  pass
+ # 3. Wikipedia API (encyclopedic & factual knowledge)
+ try:
+  r_wiki = requests.get(
+  "https://en.wikipedia.org/w/api.php",
+  params={"action": "query", "list": "search", "srsearch": search_q, "format": "json", "srlimit": 2},
+  headers={"User-Agent": "GlennBot/2.0"},
+  timeout=4
+  )
+  if r_wiki.status_code == 200:
+   for s_item in r_wiki.json().get("query", {}).get("search", [])[:2]:
+    w_title = s_item.get("title") or ""
+    w_snip = re.sub(r"<[^>]+>", "", s_item.get("snippet") or "").strip()
+    if w_title and w_snip:
+     snippets.append(f"- [Wikipedia: {w_title}] {w_snip}")
+ except Exception:
+  pass
+ return "\n".join(snippets[:8])
 def _sanitize_outbound_social_or_email_text(raw_val: Any) -> str:
-    """
+ """
     Ensures that raw or truncated AI JSON objects (e.g. {"reply": "...", "title": "...", "facebook_caption": "..."})
     are NEVER posted as literal text to Facebook/Instagram comments, Messenger/IG DMs, SMS, or Emails.
     Automatically unwraps and returns the clean conversational string.
     """
-    if isinstance(raw_val, dict):
-        for k in ("reply", "message", "response", "text", "answer", "caption"):
-            v = raw_val.get(k)
-            if isinstance(v, str) and v.strip():
-                return _sanitize_outbound_social_or_email_text(v.strip())
-        return ""
-
-    s = str(raw_val or "").strip()
-    if not s:
-        return ""
-
-    if s.startswith("```"):
-        lines = s.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        s = "\n".join(lines).strip()
-
-    # Check if s looks like a JSON object (complete or truncated at token limit) containing AI payload keys
-    if s.startswith("{") and any(
-        marker in s
-        for marker in ('"reply"', '"caption"', '"facebook_caption"', '"instagram_caption"', '"response"', '"message"', '"answer"')
-    ):
-        try:
-            parsed_obj = json.loads(s)
-            if isinstance(parsed_obj, dict):
-                for k in ("reply", "message", "response", "text", "answer", "caption"):
-                    v = parsed_obj.get(k)
-                    if isinstance(v, str) and v.strip():
-                        return _sanitize_outbound_social_or_email_text(v.strip())
-        except Exception:
-            pass
-
-        # Regex extraction fallback for truncated JSON strings (e.g. cut off mid-youtube_description)
-        for k in ("reply", "message", "response", "text", "answer", "caption"):
-            m_val = re.search(rf'"{k}"\s*:\s*"((?:\\.|[^"\\])*)"', s, re.DOTALL)
-            if m_val:
-                raw_inner = m_val.group(1)
-                try:
-                    unquoted = json.loads(f'"{raw_inner}"')
-                except Exception:
-                    unquoted = (
-                        raw_inner.replace('\\n', '\n')
-                        .replace('\\r', '\r')
-                        .replace('\\t', '\t')
-                        .replace('\\"', '"')
-                        .replace('\\\\', '\\')
-                    )
-                if str(unquoted).strip():
-                    return str(unquoted).strip()
-
-    return s
-
-
+ if isinstance(raw_val, dict):
+  for k in ("reply", "message", "response", "text", "answer", "caption"):
+   v = raw_val.get(k)
+   if isinstance(v, str) and v.strip():
+    return _sanitize_outbound_social_or_email_text(v.strip())
+  return ""
+ s = str(raw_val or "").strip()
+ if not s:
+  return ""
+ if s.startswith("```"):
+  lines = s.splitlines()
+  if lines and lines[0].startswith("```"):
+   lines = lines[1:]
+  if lines and lines[-1].startswith("```"):
+   lines = lines[:-1]
+  s = "\n".join(lines).strip()
+ # Check if s looks like a JSON object (complete or truncated at token limit) containing AI payload keys
+ if s.startswith("{") and any(
+ marker in s
+ for marker in ('"reply"', '"caption"', '"facebook_caption"', '"instagram_caption"', '"response"', '"message"', '"answer"')
+ ):
+  try:
+   parsed_obj = json.loads(s)
+   if isinstance(parsed_obj, dict):
+    for k in ("reply", "message", "response", "text", "answer", "caption"):
+     v = parsed_obj.get(k)
+     if isinstance(v, str) and v.strip():
+      return _sanitize_outbound_social_or_email_text(v.strip())
+  except Exception:
+   pass
+  # Regex extraction fallback for truncated JSON strings (e.g. cut off mid-youtube_description)
+  for k in ("reply", "message", "response", "text", "answer", "caption"):
+   m_val = re.search(rf'"{k}"\s*:\s*"((?:\\.|[^"\\])*)"', s, re.DOTALL)
+   if m_val:
+    raw_inner = m_val.group(1)
+    try:
+     unquoted = json.loads(f'"{raw_inner}"')
+    except Exception:
+     unquoted = (
+     raw_inner.replace('\\n', '\n')
+     .replace('\\r', '\r')
+     .replace('\\t', '\t')
+     .replace('\\"', '"')
+     .replace('\\\\', '\\')
+     )
+    if str(unquoted).strip():
+     return str(unquoted).strip()
+ return s
 def _execute_glennbot_ask_ai_core(
-    user_topic: str,
-    tone_str: str = "engaging",
-    lang_str: str = "taglish",
-    post_type_str: str = "reels",
-    platforms_list: Optional[List[str]] = None,
-    force_reply_mode: bool = False,
-    use_search: bool = True
+user_topic: str,
+tone_str: str = "engaging",
+lang_str: str = "taglish",
+post_type_str: str = "reels",
+platforms_list: Optional[List[str]] = None,
+force_reply_mode: bool = False,
+use_search: bool = True
 ):
-    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip().strip('"').strip("'")
-    if not api_key:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(override=True)
-            api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip().strip('"').strip("'")
-        except Exception:
-            pass
-
-    user_topic = (user_topic or "").strip()
-    if not user_topic:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "Please enter some details or a question/comment for Gemini AI."}
-        )
-
-    preferred_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-    candidate_models: List[str] = []
-    # Map legacy/alias names to active v1beta model identifiers first to avoid unnecessary 404 roundtrips
-    normalized_pref = "gemini-2.5-flash" if preferred_model in ("gemini-3.5-flash", "gemini-3.5-flash-lite") else preferred_model
-    for candidate_m in [
-        normalized_pref,
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-flash-latest",
-    ]:
-        if candidate_m and candidate_m not in candidate_models:
-            candidate_models.append(candidate_m)
-
-    tone_str = (tone_str or "engaging").strip()
-    lang_str = (lang_str or "taglish").strip()
-    post_type_str = (post_type_str or "reels").strip()
-    platforms_list = platforms_list or ["facebook", "instagram", "tiktok", "youtube"]
-
-    topic_low = user_topic.lower()
-    is_reply_mode = (
-        force_reply_mode
-        or post_type_str.lower() in ("comment_reply", "reply", "dm_reply", "email_reply", "chat", "comment")
-        or any(k in topic_low for k in ("reply politely", "reply to this comment", "answer this question", "analyze this", "comment:", "?"))
-    )
-    wants_full_social_post_pack = (
-        not is_reply_mode
-        or post_type_str.lower() in ("reels", "video169", "image", "text", "post", "carousel")
-        and not force_reply_mode
-        and not any(k in topic_low for k in ("analyze this", "reply to", "comment_reply", "draft a very polite", "customer's comment"))
-    )
-
-    is_email_reply_mode = (
-        post_type_str.lower() == "email_reply"
-        or "email format" in topic_low
-        or "regards, glennard" in topic_low
-    )
-    is_script_guided_reply = (
-        post_type_str.lower() in ("dm_reply", "comment_reply", "email_reply", "reply", "chat")
-        or "script.xlsx" in topic_low
-        or "script-based reply instructions" in topic_low
-    )
-    web_search_context = ""
-    if use_search and not is_script_guided_reply:
-        try:
-            web_search_context = _perform_free_web_search_for_ai(user_topic)
-        except Exception:
-            web_search_context = ""
-
-    search_block = (
-        f"\nLive Internet Search Context (Use these real-time facts if relevant to answer the user's question accurately):\n{web_search_context}\n"
-        if web_search_context else ""
-    )
-
-    if is_script_guided_reply and not wants_full_social_post_pack:
-        if is_email_reply_mode:
-            system_instruction = (
-                "You are Glennard R. Tasico (AI Automation Specialist, Web App Developer & Industrial Engineer), replying personally in first-person "
-                "('I', 'me', 'my' in English; 'ako', 'ko', 'akin' in Tagalog/Taglish) to a client Email sent to glennard.tasico.va@gmail.com. "
-                "CRITICAL RULES:\n"
-                "1. Read the Full Email Thread History in Conversations.xlsx Sheet3 (separated by '|') carefully so you remember the exact context and flow of the email thread.\n"
-                "2. STEP 1 — SEARCH Script.xlsx (Sheet1) COLUMN A FIRST: Check Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1) for any row that matches or is similar to the sender's email question/message (including typos or misspelled words like 'wehbooks' -> 'webhooks'). "
-                "When a match exists in Column A, check its corresponding Column B (Reference Script / Core Answer) and use Column B's core details to construct your own natural, custom first-person email reply in whatever language the sender used (DO NOT copy-paste Column B verbatim).\n"
-                "3. STEP 2 — UNMATCHED / OUT-OF-SCOPE PIVOT TO AUTOMATION & WEB APP PROJECTS: If the sender's email is NOT related to any information in Script.xlsx, "
-                "warmly acknowledge their email and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
-                "4. MANDATORY EMAIL FORMAT: Your reply MUST be formatted as a proper email:\n"
-                "   - Start with: Dear [Name of Sender],\n"
-                "   - Followed by a blank line and your custom, helpful email body in the sender's language.\n"
-                "   - End with a blank line and:\n"
-                "     Regards,\n"
-                "     Glennard\n"
-                "5. Output ONLY valid JSON with a 'reply' field containing the complete formatted email text (no markdown fences, no hashtags)."
-            )
-        else:
-            system_instruction = (
-                "You are Glennard R. Tasico (AI Automation Specialist, Web App Developer & Industrial Engineer), replying personally in first-person "
-                "('I', 'me', 'my' in English; 'ako', 'ko', 'akin' in Tagalog/Taglish) to a social media Direct Message or Post Comment. "
-                "CRITICAL RULES:\n"
-                "1. Read the Full Conversation History (separated by '|') carefully so you remember the exact context and flow of the conversation.\n"
-                "2. STEP 1 — SEARCH Script.xlsx (Sheet1) COLUMN A FIRST: Check Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1) for any row that matches or is similar to the commenter's question/comment (including typos or misspelled words like 'wehbooks' -> 'webhooks'). "
-                "When a match exists in Column A, check its corresponding Column B (Reference Script / Core Answer) and use Column B's core answer to construct your own natural, conversational first-person reply in whatever language the commenter used (DO NOT copy-paste Column B verbatim).\n"
-                "3. STEP 2 — UNMATCHED / OUT-OF-SCOPE PIVOT TO AUTOMATION & WEB APP PROJECTS: If the commenter's question or remark is NOT related to any information in Script.xlsx (for example, general remarks like 'I need you!!', unrelated topics, or questions outside Script.xlsx), "
-                "warmly acknowledge their message and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects (e.g., workflow automations, AI chatbots, webhook/API integrations, CRM/spreadsheet automations, or custom web application projects).\n"
-                "4. LANGUAGE ADAPTATION: Always reply in the EXACT SAME language (Pure English, Tagalog, Taglish, Bisaya, Spanish, etc.) used by the sender in their latest message. "
-                "NEVER reply with 'My apologies for the brief delay!'. Output ONLY valid JSON with a 'reply' field containing clean plain text (no markdown fences, no hashtags)."
-            )
-        prompt = f"""{user_topic}
+ api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip().strip('"').strip("'")
+ if not api_key:
+  try:
+   from dotenv import load_dotenv
+   load_dotenv(override=True)
+   api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip().strip('"').strip("'")
+  except Exception:
+   pass
+ user_topic = (user_topic or "").strip()
+ if not user_topic:
+  return JSONResponse(
+  status_code=400,
+  content={"status": "error", "message": "Please enter some details or a question/comment for Gemini AI."}
+  )
+ preferred_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+ candidate_models: List[str] = []
+ # Map legacy/alias names to active v1beta model identifiers first to avoid unnecessary 404 roundtrips
+ normalized_pref = "gemini-2.5-flash" if preferred_model in ("gemini-3.5-flash", "gemini-3.5-flash-lite") else preferred_model
+ for candidate_m in [
+ normalized_pref,
+ "gemini-2.5-flash",
+ "gemini-2.5-flash-lite",
+ "gemini-3-flash-preview",
+ "gemini-2.0-flash",
+ "gemini-2.0-flash-lite",
+ "gemini-flash-latest",
+ ]:
+  if candidate_m and candidate_m not in candidate_models:
+   candidate_models.append(candidate_m)
+ tone_str = (tone_str or "engaging").strip()
+ lang_str = (lang_str or "taglish").strip()
+ post_type_str = (post_type_str or "reels").strip()
+ platforms_list = platforms_list or ["facebook", "instagram", "tiktok", "youtube"]
+ topic_low = user_topic.lower()
+ is_reply_mode = (
+ force_reply_mode
+ or post_type_str.lower() in ("comment_reply", "reply", "dm_reply", "email_reply", "chat", "comment")
+ or any(k in topic_low for k in ("reply politely", "reply to this comment", "answer this question", "analyze this", "comment:", "?"))
+ )
+ wants_full_social_post_pack = (
+ not is_reply_mode
+ or post_type_str.lower() in ("reels", "video169", "image", "text", "post", "carousel")
+ and not force_reply_mode
+ and not any(k in topic_low for k in ("analyze this", "reply to", "comment_reply", "draft a very polite", "customer's comment"))
+ )
+ is_email_reply_mode = (
+ post_type_str.lower() == "email_reply"
+ or "email format" in topic_low
+ or "regards, glennard" in topic_low
+ )
+ is_script_guided_reply = (
+ post_type_str.lower() in ("dm_reply", "comment_reply", "email_reply", "reply", "chat")
+ or "script.xlsx" in topic_low
+ or "script-based reply instructions" in topic_low
+ )
+ web_search_context = ""
+ if use_search and not is_script_guided_reply:
+  try:
+   web_search_context = _perform_free_web_search_for_ai(user_topic)
+  except Exception:
+   web_search_context = ""
+ search_block = (
+ f"\nLive Internet Search Context (Use these real-time facts if relevant to answer the user's question accurately):\n{web_search_context}\n"
+ if web_search_context else ""
+ )
+ if is_script_guided_reply and not wants_full_social_post_pack:
+  if is_email_reply_mode:
+   system_instruction = (
+   "You are Glennard R. Tasico (AI Automation Specialist, Web App Developer & Industrial Engineer), replying personally in first-person "
+   "('I', 'me', 'my' in English; 'ako', 'ko', 'akin' in Tagalog/Taglish) to a client Email sent to glennard.tasico.va@gmail.com. "
+   "CRITICAL RULES:\n"
+   "1. Read the Full Email Thread History in Conversations.xlsx Sheet3 (separated by '|') carefully so you remember the exact context and flow of the email thread.\n"
+   "2. STEP 1 — SEARCH Script.xlsx (Sheet1) COLUMN A FIRST: Check Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1) for any row that matches or is similar to the sender's email question/message (including typos or misspelled words like 'wehbooks' -> 'webhooks'). "
+   "When a match exists in Column A, check its corresponding Column B (Reference Script / Core Answer) and use Column B's core details to construct your own natural, custom first-person email reply in whatever language the sender used (DO NOT copy-paste Column B verbatim).\n"
+   "3. STEP 2 — UNMATCHED / OUT-OF-SCOPE PIVOT TO AUTOMATION & WEB APP PROJECTS: If the sender's email is NOT related to any information in Script.xlsx, "
+   "warmly acknowledge their email and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
+   "4. MANDATORY EMAIL FORMAT: Your reply MUST be formatted as a proper email:\n"
+   "   - Start with: Dear [Name of Sender],\n"
+   "   - Followed by a blank line and your custom, helpful email body in the sender's language.\n"
+   "   - End with a blank line and:\n"
+   "     Regards,\n"
+   "     Glennard\n"
+   "5. Output ONLY valid JSON with a 'reply' field containing the complete formatted email text (no markdown fences, no hashtags)."
+   )
+  else:
+   system_instruction = (
+   "You are Glennard R. Tasico (AI Automation Specialist, Web App Developer & Industrial Engineer), replying personally in first-person "
+   "('I', 'me', 'my' in English; 'ako', 'ko', 'akin' in Tagalog/Taglish) to a social media Direct Message or Post Comment. "
+   "CRITICAL RULES:\n"
+   "1. Read the Full Conversation History (separated by '|') carefully so you remember the exact context and flow of the conversation.\n"
+   "2. STEP 1 — SEARCH Script.xlsx (Sheet1) COLUMN A FIRST: Check Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1) for any row that matches or is similar to the commenter's question/comment (including typos or misspelled words like 'wehbooks' -> 'webhooks'). "
+   "When a match exists in Column A, check its corresponding Column B (Reference Script / Core Answer) and use Column B's core answer to construct your own natural, conversational first-person reply in whatever language the commenter used (DO NOT copy-paste Column B verbatim).\n"
+   "3. STEP 2 — UNMATCHED / OUT-OF-SCOPE PIVOT TO AUTOMATION & WEB APP PROJECTS: If the commenter's question or remark is NOT related to any information in Script.xlsx (for example, general remarks like 'I need you!!', unrelated topics, or questions outside Script.xlsx), "
+   "warmly acknowledge their message and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects (e.g., workflow automations, AI chatbots, webhook/API integrations, CRM/spreadsheet automations, or custom web application projects).\n"
+   "4. LANGUAGE ADAPTATION: Always reply in the EXACT SAME language (Pure English, Tagalog, Taglish, Bisaya, Spanish, etc.) used by the sender in their latest message. "
+   "NEVER reply with 'My apologies for the brief delay!'. Output ONLY valid JSON with a 'reply' field containing clean plain text (no markdown fences, no hashtags)."
+   )
+  prompt = f"""{user_topic}
 
 Respond ONLY with a raw JSON object in this exact format:
 {{
   "reply": "Your natural, context-aware first-person reply as Glennard that uses Script.xlsx Column B if matched in Column A, OR steers the conversation to how you can help with their Automation/Web App Projects if unrelated to Script.xlsx",
   "intent": "contextual_reply"
 }}"""
-    elif is_reply_mode and not wants_full_social_post_pack:
-        system_instruction = (
-            "You are GlennBot AI, an elite social media strategist, helpful customer support specialist, and intelligent research assistant. "
-            "When replying to user comments, messages, or emails, write natural, polite, human-like plain text inside the 'reply' field (NEVER nest JSON inside 'reply' and NEVER include hashtag walls in 'reply'). "
-            "Respect the requested language and tone. Output ONLY valid JSON matching the exact schema provided."
-        )
-        prompt = f"""Incoming Prompt / Comment / Message Analysis Request:
+ elif is_reply_mode and not wants_full_social_post_pack:
+  system_instruction = (
+  "You are GlennBot AI, an elite social media strategist, helpful customer support specialist, and intelligent research assistant. "
+  "When replying to user comments, messages, or emails, write natural, polite, human-like plain text inside the 'reply' field (NEVER nest JSON inside 'reply' and NEVER include hashtag walls in 'reply'). "
+  "Respect the requested language and tone. Output ONLY valid JSON matching the exact schema provided."
+  )
+  prompt = f"""Incoming Prompt / Comment / Message Analysis Request:
 "{user_topic}"
 {search_block}
 Mode: {post_type_str}
@@ -315,13 +290,13 @@ You MUST respond ONLY with a raw JSON object (no markdown formatting, no extra e
   "title": "..."
 }}
 """
-    else:
-        system_instruction = (
-            "You are GlennBot AI, an elite social media strategist, helpful customer support specialist, and intelligent research assistant. "
-            "When replying to user comments, messages, or emails, write natural, polite, human-like plain text inside the 'reply' field (NEVER nest JSON inside 'reply' and NEVER include hashtag walls in 'reply'). "
-            "Respect the requested language and tone. Output ONLY valid JSON matching the exact schema provided."
-        )
-        prompt = f"""Content Details / Comment / Question from User:
+ else:
+  system_instruction = (
+  "You are GlennBot AI, an elite social media strategist, helpful customer support specialist, and intelligent research assistant. "
+  "When replying to user comments, messages, or emails, write natural, polite, human-like plain text inside the 'reply' field (NEVER nest JSON inside 'reply' and NEVER include hashtag walls in 'reply'). "
+  "Respect the requested language and tone. Output ONLY valid JSON matching the exact schema provided."
+  )
+  prompt = f"""Content Details / Comment / Question from User:
 "{user_topic}"
 {search_block}
 Post Format / Mode: {post_type_str}
@@ -353,191 +328,179 @@ You MUST respond ONLY with a raw JSON object (no markdown formatting, no extra e
   "hashtags": "..."
 }}
 """
-
-    last_err = ""
-    if api_key:
-        for current_model in candidate_models:
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={api_key}"
-            payload = {
-                "contents": [{"parts": [{"text": f"{system_instruction}\n\n{prompt}"}]}],
-                "generationConfig": {
-                    "temperature": 0.45 if is_script_guided_reply else (0.55 if is_reply_mode else 0.65),
-                    "maxOutputTokens": 2048 if is_script_guided_reply else 4096,
-                    "responseMimeType": "application/json"
-                }
-            }
-
-            for attempt in range(1, 3):
-                try:
-                    resp = requests.post(gemini_url, json=payload, timeout=16)
-                    if resp.status_code == 200:
-                        res_data = resp.json()
-                        candidates = res_data.get("candidates", [])
-                        if not candidates:
-                            last_err = "No response returned from Gemini."
-                            break
-
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        raw_text = "".join(part.get("text", "") for part in parts).strip()
-
-                        if raw_text.startswith("```"):
-                            lines = raw_text.splitlines()
-                            if lines and lines[0].startswith("```"):
-                                lines = lines[1:]
-                            if lines and lines[-1].startswith("```"):
-                                lines = lines[:-1]
-                            raw_text = "\n".join(lines).strip()
-
-                        parsed = None
-                        try:
-                            parsed = json.loads(raw_text)
-                        except Exception:
-                            m = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                            if m:
-                                try:
-                                    parsed = json.loads(m.group(0))
-                                except Exception:
-                                    pass
-
-                        if not isinstance(parsed, dict):
-                            clean_fallback_reply = _sanitize_outbound_social_or_email_text(raw_text)
-                            parsed = {
-                                "reply": clean_fallback_reply,
-                                "title": user_topic[:80],
-                                "caption": clean_fallback_reply,
-                                "facebook_caption": clean_fallback_reply,
-                                "instagram_caption": clean_fallback_reply,
-                                "tiktok_caption": clean_fallback_reply[:150],
-                                "youtube_title": user_topic[:80],
-                                "youtube_description": clean_fallback_reply,
-                                "hashtags": ""
-                            }
-
-                        raw_reply_candidate = str(parsed.get("reply") or parsed.get("caption") or "").strip()
-                        reply_text = _sanitize_outbound_social_or_email_text(raw_reply_candidate)
-                        if not reply_text:
-                            last_err = "Empty reply text returned from Gemini."
-                            break
-                        caption_text = _sanitize_outbound_social_or_email_text(str(parsed.get("caption") or reply_text).strip()) if is_reply_mode else str(parsed.get("caption") or reply_text).strip()
-                        title_text = str(parsed.get("title") or user_topic[:80]).strip()
-
-                        # Extract or infer delivery/tracking & relevance fields for n8n conditional nodes
-                        is_deliv = parsed.get("is_delivery_related")
-                        if not isinstance(is_deliv, bool):
-                            is_deliv = bool(re.search(r"\b(parcel|delivery|deliver|tracking|order|package|padala|ship|shipping|status|asaan|nasaan|rider|courier)\b", topic_low))
-                        is_rel = parsed.get("is_relevant")
-                        if not isinstance(is_rel, bool):
-                            is_rel = is_deliv if ("delivery" in topic_low or "parcel" in topic_low or "tracking" in topic_low) else True
-                        extracted_trk = str(parsed.get("tracking_number") or "").strip()
-                        if extracted_trk.lower() in ("none", "null", "n/a", "false", "undefined"):
-                            extracted_trk = ""
-                        has_trk = bool(parsed.get("has_tracking_number")) if isinstance(parsed.get("has_tracking_number"), bool) else bool(extracted_trk)
-                        intent_str = str(parsed.get("intent") or ("delivery_inquiry" if is_deliv else "general")).strip()
-
-                        return {
-                            "status": "success",
-                            "model": current_model,
-                            "reply": reply_text,
-                            "response": reply_text,
-                            "text": reply_text,
-                            "answer": reply_text,
-                            "message": reply_text,
-                            "title": title_text,
-                            "caption": reply_text if is_reply_mode else caption_text,
-                            "is_relevant": is_rel,
-                            "is_delivery_related": is_deliv,
-                            "has_tracking_number": has_trk,
-                            "tracking_number": extracted_trk,
-                            "intent": intent_str,
-                            "search_used": bool(web_search_context),
-                            "data": {
-                                "reply": reply_text,
-                                "response": reply_text,
-                                "title": title_text,
-                                "caption": caption_text,
-                                "is_relevant": is_rel,
-                                "is_delivery_related": is_deliv,
-                                "has_tracking_number": has_trk,
-                                "tracking_number": extracted_trk,
-                                "intent": intent_str,
-                                "facebook_caption": parsed.get("facebook_caption") or caption_text,
-                                "instagram_caption": parsed.get("instagram_caption") or caption_text,
-                                "tiktok_caption": parsed.get("tiktok_caption") or caption_text,
-                                "youtube_title": parsed.get("youtube_title") or title_text,
-                                "youtube_description": parsed.get("youtube_description") or caption_text,
-                                "hashtags": parsed.get("hashtags") or ""
-                            }
-                        }
-                    elif resp.status_code in (429, 503) and attempt == 1:
-                        last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
-                        time.sleep(1.1)
-                        continue
-                    elif resp.status_code in (429, 404, 503, 500):
-                        last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
-                        break
-                    else:
-                        err_detail = resp.text[:300]
-                        last_err = f"Gemini API returned HTTP {resp.status_code}: {err_detail}"
-                        break
-                except Exception as ex:
-                    last_err = f"Network error connecting to Gemini API ({current_model}): {str(ex)}"
-                    if attempt == 1:
-                        time.sleep(0.8)
-                        continue
-                    break
-
-    if is_reply_mode:
-        # Resilient context-aware fallback if Gemini API is unreachable or rate-limited:
-        # 1. If a row in Script.xlsx Column A matched, use its Column B Reference Script / Core Answer.
-        # 2. If the question/comment did NOT match any information in Script.xlsx, pivot the conversation
-        #    toward how Glennard can help with their Automation / Web App Projects!
-        m_guide = re.search(r'Base Script Answer to Rephrase\):\s*"([^"]+)"', user_topic)
-        m_latest = re.search(r'Latest (?:Direct Message|Comment|Email) from ([^:(\n]+)(?:\s*\([^)]*\))?:\s*"([^"]+)"', user_topic)
-        sender_lbl = (m_latest.group(1).strip() if m_latest else "Client").strip() or "Client"
-        latest_user_msg = (m_latest.group(2).strip() if m_latest else user_topic).strip()
-        is_tl = (
-            ("tagalog" in lang_str.lower() or "taglish" in lang_str.lower())
-            and "pure english" not in lang_str.lower()
-        ) or bool(
-            re.search(r"\b(ano|anong|bakit|paano|pano|magkano|kaya|naman|lang|ung|yung|ba|po|opo|sakin|sayo|ikaw|ako|mo|ko|kita|dyan|diyan|pwede|puwede|gusto|kailangan|tulong|tulungan)\b", latest_user_msg.lower())
-        )
-        if m_guide and m_guide.group(1).strip():
-            fallback_reply = m_guide.group(1).strip()
-        elif is_tl:
-            fallback_reply = (
-                "Maraming salamat sa pag-reach out! Handa akong tumulong—anong specific na Automation o Web App project "
-                "po ang gusto ninyong ipagawa o i-automate para sa business o workflow ninyo?"
-            )
-        else:
-            fallback_reply = (
-                "Thanks for reaching out! I'd love to help you out—what specific Automation or Web App project "
-                "are you looking to build or streamline right now?"
-            )
-        if is_email_reply_mode and not fallback_reply.lower().startswith("dear "):
-            fallback_reply = f"Dear {sender_lbl},\n\n{fallback_reply}\n\nRegards,\nGlennard"
-        return {
-            "status": "success",
-            "model": "glennbot-resilient-fallback",
-            "reply": fallback_reply,
-            "response": fallback_reply,
-            "text": fallback_reply,
-            "answer": fallback_reply,
-            "message": fallback_reply,
-            "title": user_topic[:80],
-            "caption": fallback_reply,
-            "is_relevant": True,
-            "is_delivery_related": False,
-            "has_tracking_number": False,
-            "tracking_number": "",
-            "intent": "general",
-            "search_used": False,
-            "data": {
-                "reply": fallback_reply,
-                "response": fallback_reply,
-                "title": user_topic[:80],
-                "caption": fallback_reply,
-            }
-        }
-
-    return JSONResponse(status_code=500, content={"status": "error", "message": last_err or "Failed to connect to Gemini."})
-
+ last_err = ""
+ if api_key:
+  for current_model in candidate_models:
+   gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={api_key}"
+   payload = {
+   "contents": [{"parts": [{"text": f"{system_instruction}\n\n{prompt}"}]}],
+   "generationConfig": {
+   "temperature": 0.45 if is_script_guided_reply else (0.55 if is_reply_mode else 0.65),
+   "maxOutputTokens": 2048 if is_script_guided_reply else 4096,
+   "responseMimeType": "application/json"
+   }
+   }
+   for attempt in range(1, 3):
+    try:
+     resp = requests.post(gemini_url, json=payload, timeout=16)
+     if resp.status_code == 200:
+      res_data = resp.json()
+      candidates = res_data.get("candidates", [])
+      if not candidates:
+       last_err = "No response returned from Gemini."
+       break
+      parts = candidates[0].get("content", {}).get("parts", [])
+      raw_text = "".join(part.get("text", "") for part in parts).strip()
+      if raw_text.startswith("```"):
+       lines = raw_text.splitlines()
+       if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+       if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+       raw_text = "\n".join(lines).strip()
+      parsed = None
+      try:
+       parsed = json.loads(raw_text)
+      except Exception:
+       m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+       if m:
+        try:
+         parsed = json.loads(m.group(0))
+        except Exception:
+         pass
+      if not isinstance(parsed, dict):
+       clean_fallback_reply = _sanitize_outbound_social_or_email_text(raw_text)
+       parsed = {
+       "reply": clean_fallback_reply,
+       "title": user_topic[:80],
+       "caption": clean_fallback_reply,
+       "facebook_caption": clean_fallback_reply,
+       "instagram_caption": clean_fallback_reply,
+       "tiktok_caption": clean_fallback_reply[:150],
+       "youtube_title": user_topic[:80],
+       "youtube_description": clean_fallback_reply,
+       "hashtags": ""
+       }
+      raw_reply_candidate = str(parsed.get("reply") or parsed.get("caption") or "").strip()
+      reply_text = _sanitize_outbound_social_or_email_text(raw_reply_candidate)
+      if not reply_text:
+       last_err = "Empty reply text returned from Gemini."
+       break
+      caption_text = _sanitize_outbound_social_or_email_text(str(parsed.get("caption") or reply_text).strip()) if is_reply_mode else str(parsed.get("caption") or reply_text).strip()
+      title_text = str(parsed.get("title") or user_topic[:80]).strip()
+      # Extract or infer delivery/tracking & relevance fields for n8n conditional nodes
+      is_deliv = parsed.get("is_delivery_related")
+      if not isinstance(is_deliv, bool):
+       is_deliv = bool(re.search(r"\b(parcel|delivery|deliver|tracking|order|package|padala|ship|shipping|status|asaan|nasaan|rider|courier)\b", topic_low))
+      is_rel = parsed.get("is_relevant")
+      if not isinstance(is_rel, bool):
+       is_rel = is_deliv if ("delivery" in topic_low or "parcel" in topic_low or "tracking" in topic_low) else True
+      extracted_trk = str(parsed.get("tracking_number") or "").strip()
+      if extracted_trk.lower() in ("none", "null", "n/a", "false", "undefined"):
+       extracted_trk = ""
+      has_trk = bool(parsed.get("has_tracking_number")) if isinstance(parsed.get("has_tracking_number"), bool) else bool(extracted_trk)
+      intent_str = str(parsed.get("intent") or ("delivery_inquiry" if is_deliv else "general")).strip()
+      return {
+      "status": "success",
+      "model": current_model,
+      "reply": reply_text,
+      "response": reply_text,
+      "text": reply_text,
+      "answer": reply_text,
+      "message": reply_text,
+      "title": title_text,
+      "caption": reply_text if is_reply_mode else caption_text,
+      "is_relevant": is_rel,
+      "is_delivery_related": is_deliv,
+      "has_tracking_number": has_trk,
+      "tracking_number": extracted_trk,
+      "intent": intent_str,
+      "search_used": bool(web_search_context),
+      "data": {
+      "reply": reply_text,
+      "response": reply_text,
+      "title": title_text,
+      "caption": caption_text,
+      "is_relevant": is_rel,
+      "is_delivery_related": is_deliv,
+      "has_tracking_number": has_trk,
+      "tracking_number": extracted_trk,
+      "intent": intent_str,
+      "facebook_caption": parsed.get("facebook_caption") or caption_text,
+      "instagram_caption": parsed.get("instagram_caption") or caption_text,
+      "tiktok_caption": parsed.get("tiktok_caption") or caption_text,
+      "youtube_title": parsed.get("youtube_title") or title_text,
+      "youtube_description": parsed.get("youtube_description") or caption_text,
+      "hashtags": parsed.get("hashtags") or ""
+      }
+      }
+     elif resp.status_code in (429, 503) and attempt == 1:
+      last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
+      time.sleep(1.1)
+      continue
+     elif resp.status_code in (429, 404, 503, 500):
+      last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
+      break
+     else:
+      err_detail = resp.text[:300]
+      last_err = f"Gemini API returned HTTP {resp.status_code}: {err_detail}"
+      break
+    except Exception as ex:
+     last_err = f"Network error connecting to Gemini API ({current_model}): {str(ex)}"
+     if attempt == 1:
+      time.sleep(0.8)
+      continue
+     break
+ if is_reply_mode:
+  # Resilient context-aware fallback if Gemini API is unreachable or rate-limited:
+  # 1. If a row in Script.xlsx Column A matched, use its Column B Reference Script / Core Answer.
+  # 2. If the question/comment did NOT match any information in Script.xlsx, pivot the conversation
+  #    toward how Glennard can help with their Automation / Web App Projects!
+  m_guide = re.search(r'Base Script Answer to Rephrase\):\s*"([^"]+)"', user_topic)
+  m_latest = re.search(r'Latest (?:Direct Message|Comment|Email) from ([^:(\n]+)(?:\s*\([^)]*\))?:\s*"([^"]+)"', user_topic)
+  sender_lbl = (m_latest.group(1).strip() if m_latest else "Client").strip() or "Client"
+  latest_user_msg = (m_latest.group(2).strip() if m_latest else user_topic).strip()
+  is_tl = (
+  ("tagalog" in lang_str.lower() or "taglish" in lang_str.lower())
+  and "pure english" not in lang_str.lower()
+  ) or bool(
+  re.search(r"\b(ano|anong|bakit|paano|pano|magkano|kaya|naman|lang|ung|yung|ba|po|opo|sakin|sayo|ikaw|ako|mo|ko|kita|dyan|diyan|pwede|puwede|gusto|kailangan|tulong|tulungan)\b", latest_user_msg.lower())
+  )
+  if m_guide and m_guide.group(1).strip():
+   fallback_reply = m_guide.group(1).strip()
+  elif is_tl:
+   fallback_reply = (
+   "Maraming salamat sa pag-reach out! Handa akong tumulong—anong specific na Automation o Web App project "
+   "po ang gusto ninyong ipagawa o i-automate para sa business o workflow ninyo?"
+   )
+  else:
+   fallback_reply = (
+   "Thanks for reaching out! I'd love to help you out—what specific Automation or Web App project "
+   "are you looking to build or streamline right now?"
+   )
+  if is_email_reply_mode and not fallback_reply.lower().startswith("dear "):
+   fallback_reply = f"Dear {sender_lbl},\n\n{fallback_reply}\n\nRegards,\nGlennard"
+  return {
+  "status": "success",
+  "model": "glennbot-resilient-fallback",
+  "reply": fallback_reply,
+  "response": fallback_reply,
+  "text": fallback_reply,
+  "answer": fallback_reply,
+  "message": fallback_reply,
+  "title": user_topic[:80],
+  "caption": fallback_reply,
+  "is_relevant": True,
+  "is_delivery_related": False,
+  "has_tracking_number": False,
+  "tracking_number": "",
+  "intent": "general",
+  "search_used": False,
+  "data": {
+  "reply": fallback_reply,
+  "response": fallback_reply,
+  "title": user_topic[:80],
+  "caption": fallback_reply,
+  }
+  }
+ return JSONResponse(status_code=500, content={"status": "error", "message": last_err or "Failed to connect to Gemini."})

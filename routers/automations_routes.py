@@ -36,7 +36,6 @@ import io
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import pytz
 import requests
 import cloudinary
@@ -47,99 +46,92 @@ from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, JSO
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import text
-
 import copy
 from core.config import *
 from core.config import (
-    AUTOMATIONS_WORKFLOW_EXECUTOR,
-    _invalidate_fast_db_cache,
-    _normalize_origin_url,
-    _is_localhost_origin,
-    _detect_cloud_hosting_url_from_env,
-    _detect_local_ngrok_tunnel_url,
-    _extract_origin_from_request,
-    _RUNTIME_URL_STATE,
+AUTOMATIONS_WORKFLOW_EXECUTOR,
+_invalidate_fast_db_cache,
+_normalize_origin_url,
+_is_localhost_origin,
+_detect_cloud_hosting_url_from_env,
+_detect_local_ngrok_tunnel_url,
+_extract_origin_from_request,
+_RUNTIME_URL_STATE,
 )
 from routers.spreadsheet_routes import (
-    _read_spreadsheet_cells_sync,
-    _append_spreadsheet_row_sync,
-    _update_spreadsheet_cells_sync,
+_read_spreadsheet_cells_sync,
+_append_spreadsheet_row_sync,
+_update_spreadsheet_cells_sync,
 )
 from core.database import *
 from core.database import (
-    _normalize_social_page_name,
-    _strip_social_page_punctuation,
-    _extract_social_page_segments,
-    _is_same_social_page_name,
-    _does_zernio_account_match_page,
-    _resolve_service_callable,
-    _get_cached_seen_comment_ids,
-    _get_cached_published_posts,
-    _get_cached_seen_messages_map,
+_normalize_social_page_name,
+_strip_social_page_punctuation,
+_extract_social_page_segments,
+_is_same_social_page_name,
+_does_zernio_account_match_page,
+_resolve_service_callable,
+_get_cached_seen_comment_ids,
+_get_cached_published_posts,
+_get_cached_seen_messages_map,
 )
 from services.gdrive_service import *
 from services.gdrive_service import (
-    _load_gdrive_auth_store,
-    _save_gdrive_auth_store,
+_load_gdrive_auth_store,
+_save_gdrive_auth_store,
 )
 from services.cloudinary_service import *
 from services.cloudinary_service import (
-    _make_key_id,
-    _mask_api_key,
-    _is_message_deleted_for_conversation,
-    _filter_out_deleted_messages,
-    _CLOUDINARY_COMMENTS_UPLOAD_LOCK,
-    _CLOUDINARY_MESSAGES_UPLOAD_LOCK,
+_make_key_id,
+_mask_api_key,
+_is_message_deleted_for_conversation,
+_filter_out_deleted_messages,
+_CLOUDINARY_COMMENTS_UPLOAD_LOCK,
+_CLOUDINARY_MESSAGES_UPLOAD_LOCK,
 )
 from services.zernio_service import *
 from services.zernio_service import (
-    _format_bytes_label,
-    _resolve_runtime_helper,
-    _collect_valid_account_ids_for_page,
-    _detect_attachment_media_category,
-    _normalize_zernio_content_type,
-    _is_valid_final_permalink,
-    _strip_internal_ids_from_status_message,
-    _format_zernio_error_text,
-    _differentiate_caption_for_zernio_24h_guard,
-    _should_proactively_differentiate_caption,
-    _handle_zernio_duplicate_content_response,
-    _recover_zernio_post_after_timeout,
-    _cancel_zernio_scheduled_post,
-    _ZERNIO_PUBLISH_LOCK,
-    _ZERNIO_ACTIVE_PUBLISH_RECORDS,
+_format_bytes_label,
+_resolve_runtime_helper,
+_collect_valid_account_ids_for_page,
+_detect_attachment_media_category,
+_normalize_zernio_content_type,
+_is_valid_final_permalink,
+_strip_internal_ids_from_status_message,
+_format_zernio_error_text,
+_differentiate_caption_for_zernio_24h_guard,
+_should_proactively_differentiate_caption,
+_handle_zernio_duplicate_content_response,
+_recover_zernio_post_after_timeout,
+_cancel_zernio_scheduled_post,
+_ZERNIO_PUBLISH_LOCK,
+_ZERNIO_ACTIVE_PUBLISH_RECORDS,
 )
 from services.ai_service import *
 from services.ai_service import (
-    _perform_free_web_search_for_ai,
-    _sanitize_outbound_social_or_email_text,
-    _execute_glennbot_ask_ai_core,
+_perform_free_web_search_for_ai,
+_sanitize_outbound_social_or_email_text,
+_execute_glennbot_ask_ai_core,
 )
 from routers.auth_and_keys import *
 from routers.ai_routes import api_ask_ai
-
 router = APIRouter()
-
-
 # ==============================================================================
 # --- IN-DASHBOARD "AUTOMATIONS" MODAL & NATIVE N8N JSON EXECUTION ENGINE ---
 # Supports uploading/importing any n8n .json workflow (from "Ask AI" or n8n),
 # editing generic nodes (Dashboard Trigger/Webhook, IF, Wait, Code, HTTP Request, Set),
 # and executing the workflow graph natively inside GlennBot!
 # ==============================================================================
-
 AUTOMATIONS_CANVAS_LOCK = threading.Lock()
 CLOUDINARY_AUTOMATIONS_CANVAS_PUBLIC_ID = "glennbot_config/automations_canvas_workflows_v1.json"
 LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH = os.path.join(BASE_DIR, "automations_canvas_workflows_cache.json")
 AUTOMATIONS_CANVAS_STATE: Dict[str, Any] = {
-    "loaded": False,
-    "workflows": [],
-    "execution_history": []
+"loaded": False,
+"workflows": [],
+"execution_history": []
 }
-
-
 def _canonical_automation_slot(wf_obj_or_name: Any) -> str:
-    """
+ """
     Normalizes workflow names/paths so variations like:
       - 'Auto reply to post (GlennBot Automations)'
       - 'Auto reply to post - GlennBot Automations'
@@ -147,1827 +139,1693 @@ def _canonical_automation_slot(wf_obj_or_name: Any) -> str:
     or DM equivalents always map to the same canonical slot ('glennbot_post_auto_reply' or 'glennbot_dm_auto_reply'),
     preventing duplicate workflows when a user uploads a JSON in the Automations modal.
     """
-    if isinstance(wf_obj_or_name, dict):
-        raw_name = str(
-            wf_obj_or_name.get("name")
-            or (wf_obj_or_name.get("workflow_json") or {}).get("name")
-            or ""
-        ).strip().lower()
-        raw_id = str(wf_obj_or_name.get("id") or "").strip().lower()
-        wf_json_str = json.dumps(wf_obj_or_name.get("workflow_json") or wf_obj_or_name, ensure_ascii=False).lower()
-    else:
-        raw_name = str(wf_obj_or_name or "").strip().lower()
-        raw_id = ""
-        wf_json_str = ""
-
-    norm = re.sub(r"[^a-z0-9]+", " ", raw_name).strip()
-    if (
-        raw_id == "auto_wf_glennbot_email_default"
-        or "auto reply to email" in norm
-        or "auto reply from email" in norm
-        or "email-thread-ai-agent" in wf_json_str
-    ):
-        return "glennbot_email_auto_reply"
-    if (
-        raw_id == "auto_wf_glennbot_dm_default"
-        or "auto reply to dm" in norm
-        or "auto reply from dm" in norm
-        or "dm-thread-ai-agent" in wf_json_str
-    ):
-        return "glennbot_dm_auto_reply"
-    if (
-        raw_id == "auto_wf_glennbot_post_default"
-        or "auto reply to post" in norm
-        or "comment-thread-ai-agent" in wf_json_str
-    ):
-        return "glennbot_post_auto_reply"
-    return ""
-
-
+ if isinstance(wf_obj_or_name, dict):
+  raw_name = str(
+  wf_obj_or_name.get("name")
+  or (wf_obj_or_name.get("workflow_json") or {}).get("name")
+  or ""
+  ).strip().lower()
+  raw_id = str(wf_obj_or_name.get("id") or "").strip().lower()
+  wf_json_str = json.dumps(wf_obj_or_name.get("workflow_json") or wf_obj_or_name, ensure_ascii=False).lower()
+ else:
+  raw_name = str(wf_obj_or_name or "").strip().lower()
+  raw_id = ""
+  wf_json_str = ""
+ norm = re.sub(r"[^a-z0-9]+", " ", raw_name).strip()
+ if (
+ raw_id == "auto_wf_glennbot_email_default"
+ or "auto reply to email" in norm
+ or "auto reply from email" in norm
+ or "email-thread-ai-agent" in wf_json_str
+ ):
+  return "glennbot_email_auto_reply"
+ if (
+ raw_id == "auto_wf_glennbot_dm_default"
+ or "auto reply to dm" in norm
+ or "auto reply from dm" in norm
+ or "dm-thread-ai-agent" in wf_json_str
+ ):
+  return "glennbot_dm_auto_reply"
+ if (
+ raw_id == "auto_wf_glennbot_post_default"
+ or "auto reply to post" in norm
+ or "comment-thread-ai-agent" in wf_json_str
+ ):
+  return "glennbot_post_auto_reply"
+ return ""
 def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
-    with AUTOMATIONS_CANVAS_LOCK:
-        if AUTOMATIONS_CANVAS_STATE.get("loaded") and not force_cloud:
-            return AUTOMATIONS_CANVAS_STATE
-
-        wf_list: List[Dict[str, Any]] = []
-        exec_hist: List[Dict[str, Any]] = []
-        loaded_cloud = False
-
-        if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
-            try:
-                res = cloudinary.api.resource(CLOUDINARY_AUTOMATIONS_CANVAS_PUBLIC_ID, resource_type="raw")
-                sec_url = (res or {}).get("secure_url")
-                if sec_url:
-                    sep = "&" if "?" in sec_url else "?"
-                    r = HTTP_SESSION.get(f"{sec_url}{sep}_ts={int(time.time())}", timeout=10)
-                    if r.status_code == 200:
-                        c_data = r.json() or {}
-                        if isinstance(c_data.get("workflows"), list):
-                            wf_list = c_data["workflows"]
-                            loaded_cloud = True
-                        if isinstance(c_data.get("execution_history"), list):
-                            exec_hist = c_data["execution_history"][:40]
-            except Exception:
-                pass
-
-        if not loaded_cloud and os.path.exists(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH):
-            try:
-                with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "r", encoding="utf-8") as f:
-                    l_data = json.load(f) or {}
-                    if isinstance(l_data.get("workflows"), list):
-                        wf_list = l_data["workflows"]
-                    if isinstance(l_data.get("execution_history"), list):
-                        exec_hist = l_data["execution_history"][:40]
-            except Exception:
-                pass
-
-        # Deduplicate any duplicate Post or DM workflows (e.g. if user uploaded one in the Dashboard and another was seeded)
-        # Keep the first occurrence (which is the newest Dashboard-uploaded workflow since save inserts at index 0)
-        deduped_wf_list: List[Dict[str, Any]] = []
-        seen_slots: Set[str] = set()
-        seeded_or_healed = False
-        for w_item in wf_list:
-            if not isinstance(w_item, dict):
-                continue
-            slot = _canonical_automation_slot(w_item)
-            if slot:
-                if slot in seen_slots:
-                    seeded_or_healed = True
-                    continue
-                seen_slots.add(slot)
-            deduped_wf_list.append(w_item)
-        wf_list = deduped_wf_list
-
-        AUTOMATIONS_CANVAS_STATE["workflows"] = wf_list
-        AUTOMATIONS_CANVAS_STATE["execution_history"] = exec_hist
-        AUTOMATIONS_CANVAS_STATE["loaded"] = True
-        if seeded_or_healed:
-            try:
-                raw_seed_bytes = json.dumps({
-                    "version": 1,
-                    "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
-                    "workflows": wf_list,
-                    "execution_history": exec_hist[:40]
-                }, indent=2, ensure_ascii=False)
-                with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "w", encoding="utf-8") as cf:
-                    cf.write(raw_seed_bytes)
-            except Exception:
-                pass
-        return AUTOMATIONS_CANVAS_STATE
-
-
+ with AUTOMATIONS_CANVAS_LOCK:
+  if AUTOMATIONS_CANVAS_STATE.get("loaded") and not force_cloud:
+   return AUTOMATIONS_CANVAS_STATE
+  wf_list: List[Dict[str, Any]] = []
+  exec_hist: List[Dict[str, Any]] = []
+  loaded_cloud = False
+  if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+   try:
+    res = cloudinary.api.resource(CLOUDINARY_AUTOMATIONS_CANVAS_PUBLIC_ID, resource_type="raw")
+    sec_url = (res or {}).get("secure_url")
+    if sec_url:
+     sep = "&" if "?" in sec_url else "?"
+     r = HTTP_SESSION.get(f"{sec_url}{sep}_ts={int(time.time())}", timeout=10)
+     if r.status_code == 200:
+      c_data = r.json() or {}
+      if isinstance(c_data.get("workflows"), list):
+       wf_list = c_data["workflows"]
+       loaded_cloud = True
+      if isinstance(c_data.get("execution_history"), list):
+       exec_hist = c_data["execution_history"][:40]
+   except Exception:
+    pass
+  if not loaded_cloud and os.path.exists(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH):
+   try:
+    with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "r", encoding="utf-8") as f:
+     l_data = json.load(f) or {}
+     if isinstance(l_data.get("workflows"), list):
+      wf_list = l_data["workflows"]
+     if isinstance(l_data.get("execution_history"), list):
+      exec_hist = l_data["execution_history"][:40]
+   except Exception:
+    pass
+  # Deduplicate any duplicate Post or DM workflows (e.g. if user uploaded one in the Dashboard and another was seeded)
+  # Keep the first occurrence (which is the newest Dashboard-uploaded workflow since save inserts at index 0)
+  deduped_wf_list: List[Dict[str, Any]] = []
+  seen_slots: Set[str] = set()
+  seeded_or_healed = False
+  for w_item in wf_list:
+   if not isinstance(w_item, dict):
+    continue
+   slot = _canonical_automation_slot(w_item)
+   if slot:
+    if slot in seen_slots:
+     seeded_or_healed = True
+     continue
+    seen_slots.add(slot)
+   deduped_wf_list.append(w_item)
+  wf_list = deduped_wf_list
+  AUTOMATIONS_CANVAS_STATE["workflows"] = wf_list
+  AUTOMATIONS_CANVAS_STATE["execution_history"] = exec_hist
+  AUTOMATIONS_CANVAS_STATE["loaded"] = True
+  if seeded_or_healed:
+   try:
+    raw_seed_bytes = json.dumps({
+    "version": 1,
+    "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+    "workflows": wf_list,
+    "execution_history": exec_hist[:40]
+    }, indent=2, ensure_ascii=False)
+    with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "w", encoding="utf-8") as cf:
+     cf.write(raw_seed_bytes)
+   except Exception:
+    pass
+  return AUTOMATIONS_CANVAS_STATE
 _AUTOMATIONS_CLOUD_SAVE_LOCK = threading.Lock()
 _AUTOMATIONS_CLOUD_SAVE_TIMER: Optional[threading.Timer] = None
-
-
 def _save_automations_canvas_state(sync_cloud: bool = True) -> bool:
-    with AUTOMATIONS_CANVAS_LOCK:
-        payload = {
-            "version": 1,
-            "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
-            "workflows": AUTOMATIONS_CANVAS_STATE.get("workflows") or [],
-            "execution_history": (AUTOMATIONS_CANVAS_STATE.get("execution_history") or [])[:40]
-        }
-        raw_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
-        try:
-            with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "w", encoding="utf-8") as f:
-                f.write(raw_bytes.decode("utf-8"))
-        except Exception:
-            pass
-
-    if not sync_cloud:
-        return True
-
-    if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
-        try:
-            cloudinary.uploader.upload(
-                io.BytesIO(raw_bytes),
-                resource_type="raw",
-                public_id=CLOUDINARY_AUTOMATIONS_CANVAS_PUBLIC_ID,
-                overwrite=True,
-                invalidate=True
-            )
-            return True
-        except Exception as e:
-            print(f"[AutomationsCanvas] Cloudinary save warning: {e}")
-    return False
-
-
+ with AUTOMATIONS_CANVAS_LOCK:
+  payload = {
+  "version": 1,
+  "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+  "workflows": AUTOMATIONS_CANVAS_STATE.get("workflows") or [],
+  "execution_history": (AUTOMATIONS_CANVAS_STATE.get("execution_history") or [])[:40]
+  }
+  raw_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+  try:
+   with open(LOCAL_AUTOMATIONS_CANVAS_CACHE_PATH, "w", encoding="utf-8") as f:
+    f.write(raw_bytes.decode("utf-8"))
+  except Exception:
+   pass
+ if not sync_cloud:
+  return True
+ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+  try:
+   cloudinary.uploader.upload(
+   io.BytesIO(raw_bytes),
+   resource_type="raw",
+   public_id=CLOUDINARY_AUTOMATIONS_CANVAS_PUBLIC_ID,
+   overwrite=True,
+   invalidate=True
+   )
+   return True
+  except Exception as e:
+   print(f"[AutomationsCanvas] Cloudinary save warning: {e}")
+ return False
 def _schedule_debounced_automations_canvas_save(delay_seconds: float = 0.6) -> None:
-    """
+ """
     Saves local Automations Canvas cache immediately (<0.5ms) and coalesces Cloudinary uploads
     when 4+ concurrent workflow executions finish at the same time.
     """
-    global _AUTOMATIONS_CLOUD_SAVE_TIMER
-    _save_automations_canvas_state(sync_cloud=False)
-
-    def _fire_cloud():
-        global _AUTOMATIONS_CLOUD_SAVE_TIMER
-        with _AUTOMATIONS_CLOUD_SAVE_LOCK:
-            _AUTOMATIONS_CLOUD_SAVE_TIMER = None
-        _save_automations_canvas_state(sync_cloud=True)
-
-    with _AUTOMATIONS_CLOUD_SAVE_LOCK:
-        if _AUTOMATIONS_CLOUD_SAVE_TIMER is not None:
-            try:
-                _AUTOMATIONS_CLOUD_SAVE_TIMER.cancel()
-            except Exception:
-                pass
-        t = threading.Timer(delay_seconds, _fire_cloud)
-        t.daemon = True
-        _AUTOMATIONS_CLOUD_SAVE_TIMER = t
-        t.start()
-
-
+ global _AUTOMATIONS_CLOUD_SAVE_TIMER
+ _save_automations_canvas_state(sync_cloud=False)
+ def _fire_cloud():
+  global _AUTOMATIONS_CLOUD_SAVE_TIMER
+  with _AUTOMATIONS_CLOUD_SAVE_LOCK:
+   _AUTOMATIONS_CLOUD_SAVE_TIMER = None
+  _save_automations_canvas_state(sync_cloud=True)
+ with _AUTOMATIONS_CLOUD_SAVE_LOCK:
+  if _AUTOMATIONS_CLOUD_SAVE_TIMER is not None:
+   try:
+    _AUTOMATIONS_CLOUD_SAVE_TIMER.cancel()
+   except Exception:
+    pass
+  t = threading.Timer(delay_seconds, _fire_cloud)
+  t.daemon = True
+  _AUTOMATIONS_CLOUD_SAVE_TIMER = t
+  t.start()
 def _deep_get_path(obj: Any, path_str: str) -> Any:
-    """Resolves dot/bracket notation paths like `body.account_name` or `data.comment_id` against a dict/list."""
-    if obj is None:
-        return None
-    clean = str(path_str or "").strip()
-    if not clean:
-        return obj
-    # Normalize bracket indexing like rows[0] -> rows.0
-    clean = re.sub(r"\[(\d+)\]", r".\1", clean)
-    clean = re.sub(r"\['([^']+)'\]", r".\1", clean)
-    clean = re.sub(r'\["([^"]+)"\]', r".\1", clean)
-    parts = [p for p in clean.split(".") if p != ""]
-    curr = obj
-    for idx_p, p in enumerate(parts):
-        if isinstance(curr, dict):
-            if p in curr:
-                # If `body.<subkey>` is requested on an email event where `curr["body"]` is the email body string,
-                # resolve `<subkey>` from the top-level event dict `curr` (or `curr["data"]`) instead of failing on str.
-                if idx_p == 0 and p == "body" and len(parts) > 1 and not isinstance(curr[p], dict):
-                    continue
-                curr = curr[p]
-            elif idx_p == 0 and p in ("from_email", "from_name", "body_text", "to_email"):
-                alias_map = {
-                    "from_email": "sender_email",
-                    "from_name": "sender_name",
-                    "body_text": "body",
-                    "to_email": "account_email",
-                }
-                alt_k = alias_map.get(p, "")
-                if alt_k and alt_k in curr:
-                    curr = curr[alt_k]
-                elif isinstance(curr.get("data"), dict) and (p in curr["data"] or (alt_k and alt_k in curr["data"])):
-                    curr = curr["data"].get(p) if p in curr["data"] else curr["data"].get(alt_k)
-                else:
-                    return None
-            else:
-                return None
-        elif isinstance(curr, list) and p.isdigit():
-            idx = int(p)
-            if 0 <= idx < len(curr):
-                curr = curr[idx]
-            else:
-                return None
-        else:
-            return None
-    return curr
-
-
+ """Resolves dot/bracket notation paths like `body.account_name` or `data.comment_id` against a dict/list."""
+ if obj is None:
+  return None
+ clean = str(path_str or "").strip()
+ if not clean:
+  return obj
+ # Normalize bracket indexing like rows[0] -> rows.0
+ clean = re.sub(r"\[(\d+)\]", r".\1", clean)
+ clean = re.sub(r"\['([^']+)'\]", r".\1", clean)
+ clean = re.sub(r'\["([^"]+)"\]', r".\1", clean)
+ parts = [p for p in clean.split(".") if p != ""]
+ curr = obj
+ for idx_p, p in enumerate(parts):
+  if isinstance(curr, dict):
+   if p in curr:
+    # If `body.<subkey>` is requested on an email event where `curr["body"]` is the email body string,
+    # resolve `<subkey>` from the top-level event dict `curr` (or `curr["data"]`) instead of failing on str.
+    if idx_p == 0 and p == "body" and len(parts) > 1 and not isinstance(curr[p], dict):
+     continue
+    curr = curr[p]
+   elif idx_p == 0 and p in ("from_email", "from_name", "body_text", "to_email"):
+    alias_map = {
+    "from_email": "sender_email",
+    "from_name": "sender_name",
+    "body_text": "body",
+    "to_email": "account_email",
+    }
+    alt_k = alias_map.get(p, "")
+    if alt_k and alt_k in curr:
+     curr = curr[alt_k]
+    elif isinstance(curr.get("data"), dict) and (p in curr["data"] or (alt_k and alt_k in curr["data"])):
+     curr = curr["data"].get(p) if p in curr["data"] else curr["data"].get(alt_k)
+    else:
+     return None
+   else:
+    return None
+  elif isinstance(curr, list) and p.isdigit():
+   idx = int(p)
+   if 0 <= idx < len(curr):
+    curr = curr[idx]
+   else:
+    return None
+  else:
+   return None
+ return curr
 def _eval_single_n8n_js_token(token_expr: str, current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Any:
-    """Evaluates a single n8n JS expression token (without `||` or `??`)."""
-    t = str(token_expr or "").strip()
-    if not t:
-        return ""
-    # Strip outer parentheses if balanced
-    while t.startswith("(") and t.endswith(")"):
-        depth = 0
-        balanced = True
-        for i, ch in enumerate(t):
-            if ch == "(":
-                depth += 1
-            elif ch == ")":
-                depth -= 1
-                if depth == 0 and i < len(t) - 1:
-                    balanced = False
-                    break
-        if balanced:
-            t = t[1:-1].strip()
-        else:
-            break
-
-    # If stripping outer parens exposed a top-level `||` or `??` fallback chain, delegate to _eval_n8n_js_expression
-    if "||" in t or "??" in t:
-        _d = 0
-        _q: Optional[str] = None
-        _has_top_op = False
-        _idx = 0
-        while _idx < len(t):
-            _ch = t[_idx]
-            if _q:
-                if _ch == _q and (_idx == 0 or t[_idx - 1] != "\\"):
-                    _q = None
-                _idx += 1
-                continue
-            if _ch in ("'", '"'):
-                _q = _ch
-                _idx += 1
-                continue
-            if _ch in ("(", "{", "["):
-                _d += 1
-            elif _ch in (")", "}", "]"):
-                _d = max(0, _d - 1)
-            elif _d == 0 and t[_idx:_idx + 2] in ("||", "??"):
-                _has_top_op = True
-                break
-            _idx += 1
-        if _has_top_op:
-            return _eval_n8n_js_expression(t, current_json, node_outputs)
-
-    if t in ("true", "True"):
-        return True
-    if t in ("false", "False"):
-        return False
-    if t in ("null", "undefined", "None"):
-        return None
-    if (t.startswith("'") and t.endswith("'")) or (t.startswith('"') and t.endswith('"')):
-        return t[1:-1]
-    if re.fullmatch(r"-?\d+", t):
-        return int(t)
-    if re.fullmatch(r"-?\d+\.\d+", t):
-        return float(t)
-
-    # Handle encodeURIComponent(...)
-    m_enc = re.match(r"^encodeURIComponent\((.+)\)$", t, re.DOTALL)
-    if m_enc:
-        inner_val = _eval_n8n_js_expression(m_enc.group(1), current_json, node_outputs)
-        return urllib.parse.quote(str(inner_val if inner_val is not None else ""))
-
-    # Handle Boolean(...)
-    m_bool = re.match(r"^Boolean\((.+)\)$", t, re.DOTALL)
-    if m_bool:
-        inner_b = m_bool.group(1).strip()
-        # Special support for the Savvy Finds comment/reply filter:
-        # Boolean(!($json.body.is_own_comment ?? $json.is_own_comment) || ($json.body.is_reply_to_comment ?? $json.is_reply_to_comment) || ($json.body.parent_comment_id ?? $json.parent_comment_id))
-        if "is_own_comment" in inner_b and ("is_reply_to_comment" in inner_b or "parent_comment_id" in inner_b):
-            is_own = bool(_deep_get_path(current_json, "body.is_own_comment") or _deep_get_path(current_json, "is_own_comment"))
-            is_rep = bool(_deep_get_path(current_json, "body.is_reply_to_comment") or _deep_get_path(current_json, "is_reply_to_comment"))
-            p_cid = str(_deep_get_path(current_json, "body.parent_comment_id") or _deep_get_path(current_json, "parent_comment_id") or "").strip()
-            return bool((not is_own) or is_rep or bool(p_cid))
-        val = _eval_n8n_js_expression(inner_b, current_json, node_outputs)
-        if isinstance(val, str):
-            return val.lower() not in ("", "false", "0", "null", "undefined", "none")
-        return bool(val)
-
-    # Negation !expr
-    if t.startswith("!"):
-        inner_v = _eval_n8n_js_expression(t[1:].strip(), current_json, node_outputs)
-        return not bool(inner_v)
-
-    # $('Node Name').item.json.xyz or $('Node Name').first().json.xyz
-    m_node = re.match(r"^\$\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:item|first\(\))\.json\.?(.*)$", t)
-    if m_node:
-        ref_node_name = m_node.group(1).strip()
-        ref_path = m_node.group(2).strip()
-        target_data = node_outputs.get(ref_node_name)
-        if target_data is None:
-            # Fallback to any trigger node output if name differs slightly (e.g. 'Webhook' vs 'Webhook Trigger')
-            for k_out, v_out in node_outputs.items():
-                if "webhook" in k_out.lower() or "trigger" in k_out.lower():
-                    target_data = v_out
-                    break
-        if target_data is None:
-            target_data = current_json
-        return _deep_get_path(target_data, ref_path)
-
-    # $json.xyz or $input.first().json.xyz or $input.item.json.xyz
-    m_json = re.match(r"^(?:\$json|\$input\.(?:first\(\)|item)\.json)\.?(.*)$", t)
-    if m_json:
-        return _deep_get_path(current_json, m_json.group(1).strip())
-
-    # Safeguard against inline IIFE `(() => { ... })()` inside JSON.stringify object literals
-    if t.startswith("(() =>") or "const rawReply" in t:
-        raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
-        return raw_rep
-
-    # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) / WhatsApp (Glennard Tasico +63 917 549 7760 / +63 995 260 1753) ternary account filter expressions
-    if ("glennbot.automation" in t or "glennard.tasico.va" in t or "9175497760" in t or "9952601753" in t) and "account_name" in t:
-        raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
-        raw_un = str(_deep_get_path(current_json, "body.username") or _deep_get_path(current_json, "username") or "").strip()
-        raw_phone = str(_deep_get_path(current_json, "body.recipient_phone") or _deep_get_path(current_json, "body.sender_phone") or _deep_get_path(current_json, "recipient_phone") or _deep_get_path(current_json, "sender_phone") or "").strip()
-        raw_aid = str(_deep_get_path(current_json, "body.account_id") or _deep_get_path(current_json, "account_id") or "").strip()
-        raw_cid = str(_deep_get_path(current_json, "body.conversation_id") or _deep_get_path(current_json, "conversation_id") or "").strip()
-        raw_plat = str(_deep_get_path(current_json, "body.platform") or _deep_get_path(current_json, "platform") or "").strip().lower()
-        raw_rec = str(_deep_get_path(current_json, "body.record_id") or _deep_get_path(current_json, "record_id") or "").strip()
-        raw_pid = str(_deep_get_path(current_json, "body.post_id") or _deep_get_path(current_json, "post_id") or "").strip()
-        if "!== 'tiktok'" in t and raw_plat == "tiktok":
-            return raw_acc or "tiktok_excluded"
-        if "glennbot.automation" in t and ("glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901"):
-            return "GlennBot Automations (@glennbot.automation)"
-        compact_str = (raw_acc + " " + raw_un + " " + raw_phone).replace(" ", "")
-        if (
-            "glennbot automations" in raw_acc.lower()
-            or "glennard.tasico.va" in raw_acc.lower()
-            or "glennard.tasico.va" in raw_un.lower()
-            or "glennard tasico" in raw_acc.lower()
-            or "9175497760" in compact_str
-            or "9952601753" in compact_str
-            or "happyfinds" in raw_acc.lower()
-            or raw_plat == "whatsapp"
-            or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
-            or raw_cid.startswith(("ig_live_", "fb_live_", "wa_live_", "portfolio_"))
-            or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
-        ):
-            return "GlennBot Automations (Facebook / Instagram / WhatsApp Glennard Tasico +63 917 549 7760)"
-        return raw_acc
-
-    # Support Email account filter expression for glennard.tasico.va@gmail.com (`email_gmail_ca_svlaQjI-x1S7`)
-    if "glennard.tasico.va@gmail.com" in t and ("account_email" in t or "sender_email" in t or "email_gmail_ca_" in t):
-        raw_acc_em = str(
-            _deep_get_path(current_json, "body.account_email")
-            or _deep_get_path(current_json, "account_email")
-            or _deep_get_path(current_json, "body.to")
-            or _deep_get_path(current_json, "to")
-            or ""
-        ).strip().lower()
-        raw_acc_id_em = str(
-            _deep_get_path(current_json, "body.account_id")
-            or _deep_get_path(current_json, "account_id")
-            or ""
-        ).strip()
-        raw_sender_em = str(
-            _deep_get_path(current_json, "body.sender_email")
-            or _deep_get_path(current_json, "sender_email")
-            or _deep_get_path(current_json, "body.sender")
-            or _deep_get_path(current_json, "sender")
-            or ""
-        ).strip().lower()
-        raw_mid_em = str(
-            _deep_get_path(current_json, "body.message_id")
-            or _deep_get_path(current_json, "message_id")
-            or ""
-        ).strip()
-        if "glennard.tasico.va@gmail.com" in raw_sender_em and not raw_mid_em.startswith("test_"):
-            return "self_email_excluded"
-        if (
-            "glennard.tasico.va@gmail.com" in raw_acc_em
-            or raw_acc_id_em in ("email_gmail_ca_svlaQjI-x1S7", "email_gmail_glennard")
-            or raw_mid_em.startswith("test_")
-        ):
-            return "glennard.tasico.va@gmail.com"
-        return raw_acc_em
-
-    return t
-
-
+ """Evaluates a single n8n JS expression token (without `||` or `??`)."""
+ t = str(token_expr or "").strip()
+ if not t:
+  return ""
+ # Strip outer parentheses if balanced
+ while t.startswith("(") and t.endswith(")"):
+  depth = 0
+  balanced = True
+  for i, ch in enumerate(t):
+   if ch == "(":
+    depth += 1
+   elif ch == ")":
+    depth -= 1
+    if depth == 0 and i < len(t) - 1:
+     balanced = False
+     break
+  if balanced:
+   t = t[1:-1].strip()
+  else:
+   break
+ # If stripping outer parens exposed a top-level `||` or `??` fallback chain, delegate to _eval_n8n_js_expression
+ if "||" in t or "??" in t:
+  _d = 0
+  _q: Optional[str] = None
+  _has_top_op = False
+  _idx = 0
+  while _idx < len(t):
+   _ch = t[_idx]
+   if _q:
+    if _ch == _q and (_idx == 0 or t[_idx - 1] != "\\"):
+     _q = None
+    _idx += 1
+    continue
+   if _ch in ("'", '"'):
+    _q = _ch
+    _idx += 1
+    continue
+   if _ch in ("(", "{", "["):
+    _d += 1
+   elif _ch in (")", "}", "]"):
+    _d = max(0, _d - 1)
+   elif _d == 0 and t[_idx:_idx + 2] in ("||", "??"):
+    _has_top_op = True
+    break
+   _idx += 1
+  if _has_top_op:
+   return _eval_n8n_js_expression(t, current_json, node_outputs)
+ if t in ("true", "True"):
+  return True
+ if t in ("false", "False"):
+  return False
+ if t in ("null", "undefined", "None"):
+  return None
+ if (t.startswith("'") and t.endswith("'")) or (t.startswith('"') and t.endswith('"')):
+  return t[1:-1]
+ if re.fullmatch(r"-?\d+", t):
+  return int(t)
+ if re.fullmatch(r"-?\d+\.\d+", t):
+  return float(t)
+ # Handle encodeURIComponent(...)
+ m_enc = re.match(r"^encodeURIComponent\((.+)\)$", t, re.DOTALL)
+ if m_enc:
+  inner_val = _eval_n8n_js_expression(m_enc.group(1), current_json, node_outputs)
+  return urllib.parse.quote(str(inner_val if inner_val is not None else ""))
+ # Handle Boolean(...)
+ m_bool = re.match(r"^Boolean\((.+)\)$", t, re.DOTALL)
+ if m_bool:
+  inner_b = m_bool.group(1).strip()
+  # Special support for the Savvy Finds comment/reply filter:
+  # Boolean(!($json.body.is_own_comment ?? $json.is_own_comment) || ($json.body.is_reply_to_comment ?? $json.is_reply_to_comment) || ($json.body.parent_comment_id ?? $json.parent_comment_id))
+  if "is_own_comment" in inner_b and ("is_reply_to_comment" in inner_b or "parent_comment_id" in inner_b):
+   is_own = bool(_deep_get_path(current_json, "body.is_own_comment") or _deep_get_path(current_json, "is_own_comment"))
+   is_rep = bool(_deep_get_path(current_json, "body.is_reply_to_comment") or _deep_get_path(current_json, "is_reply_to_comment"))
+   p_cid = str(_deep_get_path(current_json, "body.parent_comment_id") or _deep_get_path(current_json, "parent_comment_id") or "").strip()
+   return bool((not is_own) or is_rep or bool(p_cid))
+  val = _eval_n8n_js_expression(inner_b, current_json, node_outputs)
+  if isinstance(val, str):
+   return val.lower() not in ("", "false", "0", "null", "undefined", "none")
+  return bool(val)
+ # Negation !expr
+ if t.startswith("!"):
+  inner_v = _eval_n8n_js_expression(t[1:].strip(), current_json, node_outputs)
+  return not bool(inner_v)
+ # $('Node Name').item.json.xyz or $('Node Name').first().json.xyz
+ m_node = re.match(r"^\$\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:item|first\(\))\.json\.?(.*)$", t)
+ if m_node:
+  ref_node_name = m_node.group(1).strip()
+  ref_path = m_node.group(2).strip()
+  target_data = node_outputs.get(ref_node_name)
+  if target_data is None:
+   # Fallback to any trigger node output if name differs slightly (e.g. 'Webhook' vs 'Webhook Trigger')
+   for k_out, v_out in node_outputs.items():
+    if "webhook" in k_out.lower() or "trigger" in k_out.lower():
+     target_data = v_out
+     break
+  if target_data is None:
+   target_data = current_json
+  return _deep_get_path(target_data, ref_path)
+ # $json.xyz or $input.first().json.xyz or $input.item.json.xyz
+ m_json = re.match(r"^(?:\$json|\$input\.(?:first\(\)|item)\.json)\.?(.*)$", t)
+ if m_json:
+  return _deep_get_path(current_json, m_json.group(1).strip())
+ # Safeguard against inline IIFE `(() => { ... })()` inside JSON.stringify object literals
+ if t.startswith("(() =>") or "const rawReply" in t:
+  raw_rep = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
+  return raw_rep
+ # Support GlennBot Automations + TikTok (@glennbot.automation) / Instagram (@glennard.tasico.va) / WhatsApp (Glennard Tasico +63 917 549 7760 / +63 995 260 1753) ternary account filter expressions
+ if ("glennbot.automation" in t or "glennard.tasico.va" in t or "9175497760" in t or "9952601753" in t) and "account_name" in t:
+  raw_acc = str(_deep_get_path(current_json, "body.account_name") or _deep_get_path(current_json, "account_name") or "").strip()
+  raw_un = str(_deep_get_path(current_json, "body.username") or _deep_get_path(current_json, "username") or "").strip()
+  raw_phone = str(_deep_get_path(current_json, "body.recipient_phone") or _deep_get_path(current_json, "body.sender_phone") or _deep_get_path(current_json, "recipient_phone") or _deep_get_path(current_json, "sender_phone") or "").strip()
+  raw_aid = str(_deep_get_path(current_json, "body.account_id") or _deep_get_path(current_json, "account_id") or "").strip()
+  raw_cid = str(_deep_get_path(current_json, "body.conversation_id") or _deep_get_path(current_json, "conversation_id") or "").strip()
+  raw_plat = str(_deep_get_path(current_json, "body.platform") or _deep_get_path(current_json, "platform") or "").strip().lower()
+  raw_rec = str(_deep_get_path(current_json, "body.record_id") or _deep_get_path(current_json, "record_id") or "").strip()
+  raw_pid = str(_deep_get_path(current_json, "body.post_id") or _deep_get_path(current_json, "post_id") or "").strip()
+  if "!== 'tiktok'" in t and raw_plat == "tiktok":
+   return raw_acc or "tiktok_excluded"
+  if "glennbot.automation" in t and ("glennbot.automation" in raw_acc.lower() or raw_rec == "post_ext_19fdfb7f26" or raw_pid == "7706791793546906901"):
+   return "GlennBot Automations (@glennbot.automation)"
+  compact_str = (raw_acc + " " + raw_un + " " + raw_phone).replace(" ", "")
+  if (
+  "glennbot automations" in raw_acc.lower()
+  or "glennard.tasico.va" in raw_acc.lower()
+  or "glennard.tasico.va" in raw_un.lower()
+  or "glennard tasico" in raw_acc.lower()
+  or "9175497760" in compact_str
+  or "9952601753" in compact_str
+  or "happyfinds" in raw_acc.lower()
+  or raw_plat == "whatsapp"
+  or raw_aid in ("6ad9e9b2e5d470e468e58d87", "6af0b109818eb5c88d1e87a6", "6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
+  or raw_cid.startswith(("ig_live_", "fb_live_", "wa_live_", "portfolio_"))
+  or (raw_plat == "instagram" and raw_aid != "6ad9ee49e4e4ef78ebbb24c1")
+  ):
+   return "GlennBot Automations (Facebook / Instagram / WhatsApp Glennard Tasico +63 917 549 7760)"
+  return raw_acc
+ # Support Email account filter expression for glennard.tasico.va@gmail.com (`email_gmail_ca_svlaQjI-x1S7`)
+ if "glennard.tasico.va@gmail.com" in t and ("account_email" in t or "sender_email" in t or "email_gmail_ca_" in t):
+  raw_acc_em = str(
+  _deep_get_path(current_json, "body.account_email")
+  or _deep_get_path(current_json, "account_email")
+  or _deep_get_path(current_json, "body.to")
+  or _deep_get_path(current_json, "to")
+  or ""
+  ).strip().lower()
+  raw_acc_id_em = str(
+  _deep_get_path(current_json, "body.account_id")
+  or _deep_get_path(current_json, "account_id")
+  or ""
+  ).strip()
+  raw_sender_em = str(
+  _deep_get_path(current_json, "body.sender_email")
+  or _deep_get_path(current_json, "sender_email")
+  or _deep_get_path(current_json, "body.sender")
+  or _deep_get_path(current_json, "sender")
+  or ""
+  ).strip().lower()
+  raw_mid_em = str(
+  _deep_get_path(current_json, "body.message_id")
+  or _deep_get_path(current_json, "message_id")
+  or ""
+  ).strip()
+  if "glennard.tasico.va@gmail.com" in raw_sender_em and not raw_mid_em.startswith("test_"):
+   return "self_email_excluded"
+  if (
+  "glennard.tasico.va@gmail.com" in raw_acc_em
+  or raw_acc_id_em in ("email_gmail_ca_svlaQjI-x1S7", "email_gmail_glennard")
+  or raw_mid_em.startswith("test_")
+  ):
+   return "glennard.tasico.va@gmail.com"
+  return raw_acc_em
+ return t
 def _eval_n8n_js_expression(expr: str, current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Any:
-    """
+ """
     Evaluates n8n JS expressions inside `{{ ... }}`, supporting fallback chains (`||`, `??`),
     ternary operators (`cond ? a : b`), `JSON.stringify({...})`, and string concatenation.
     """
-    s = str(expr or "").strip()
-    if not s:
-        return ""
-
-    # Strip balanced outer parentheses before scanning for top-level operators
-    while s.startswith("(") and s.endswith(")"):
-        depth_p = 0
-        balanced_p = True
-        in_q_p: Optional[str] = None
-        for idx_p, ch_p in enumerate(s):
-            if in_q_p:
-                if ch_p == in_q_p and (idx_p == 0 or s[idx_p - 1] != "\\"):
-                    in_q_p = None
-                continue
-            if ch_p in ("'", '"'):
-                in_q_p = ch_p
-                continue
-            if ch_p == "(":
-                depth_p += 1
-            elif ch_p == ")":
-                depth_p -= 1
-                if depth_p == 0 and idx_p < len(s) - 1:
-                    balanced_p = False
-                    break
-        if balanced_p:
-            s = s[1:-1].strip()
-        else:
-            break
-
-    # Handle JSON.stringify({ ... })
-    m_strf = re.match(r"^JSON\.stringify\(\s*(\{.*\})\s*\)$", s, re.DOTALL)
-    if m_strf:
-        obj_literal = m_strf.group(1).strip()
-        evaluated_dict = _eval_n8n_object_literal(obj_literal, current_json, node_outputs)
-        return json.dumps(evaluated_dict, ensure_ascii=False)
-
-    # Handle fallback chains with || or ?? at top level (ignoring inside quotes/parens)
-    parts: List[str] = []
-    ops: List[str] = []
-    depth = 0
-    in_quote: Optional[str] = None
-    curr_buf: List[str] = []
-    i = 0
-    while i < len(s):
-        ch = s[i]
-        if in_quote:
-            curr_buf.append(ch)
-            if ch == in_quote and (i == 0 or s[i - 1] != "\\"):
-                in_quote = None
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            in_quote = ch
-            curr_buf.append(ch)
-            i += 1
-            continue
-        if ch in ("(", "{", "["):
-            depth += 1
-            curr_buf.append(ch)
-            i += 1
-            continue
-        if ch in (")", "}", "]"):
-            depth = max(0, depth - 1)
-            curr_buf.append(ch)
-            i += 1
-            continue
-        if depth == 0 and s[i:i + 2] in ("||", "??"):
-            parts.append("".join(curr_buf).strip())
-            ops.append(s[i:i + 2])
-            curr_buf = []
-            i += 2
-            continue
-        curr_buf.append(ch)
-        i += 1
-    if curr_buf:
-        parts.append("".join(curr_buf).strip())
-
-    if len(parts) > 1:
-        acc_val = _eval_single_n8n_js_token(parts[0], current_json, node_outputs)
-        for idx_op, op_str in enumerate(ops):
-            next_candidate = parts[idx_op + 1]
-            if op_str == "??":
-                need_fallback = acc_val is None or acc_val == ""
-            else:
-                need_fallback = acc_val is None or acc_val == "" or acc_val is False or acc_val == 0
-            if need_fallback:
-                acc_val = _eval_single_n8n_js_token(next_candidate, current_json, node_outputs)
-        return acc_val if acc_val is not None else ""
-
-    return _eval_single_n8n_js_token(s, current_json, node_outputs)
-
-
+ s = str(expr or "").strip()
+ if not s:
+  return ""
+ # Strip balanced outer parentheses before scanning for top-level operators
+ while s.startswith("(") and s.endswith(")"):
+  depth_p = 0
+  balanced_p = True
+  in_q_p: Optional[str] = None
+  for idx_p, ch_p in enumerate(s):
+   if in_q_p:
+    if ch_p == in_q_p and (idx_p == 0 or s[idx_p - 1] != "\\"):
+     in_q_p = None
+    continue
+   if ch_p in ("'", '"'):
+    in_q_p = ch_p
+    continue
+   if ch_p == "(":
+    depth_p += 1
+   elif ch_p == ")":
+    depth_p -= 1
+    if depth_p == 0 and idx_p < len(s) - 1:
+     balanced_p = False
+     break
+  if balanced_p:
+   s = s[1:-1].strip()
+  else:
+   break
+ # Handle JSON.stringify({ ... })
+ m_strf = re.match(r"^JSON\.stringify\(\s*(\{.*\})\s*\)$", s, re.DOTALL)
+ if m_strf:
+  obj_literal = m_strf.group(1).strip()
+  evaluated_dict = _eval_n8n_object_literal(obj_literal, current_json, node_outputs)
+  return json.dumps(evaluated_dict, ensure_ascii=False)
+ # Handle fallback chains with || or ?? at top level (ignoring inside quotes/parens)
+ parts: List[str] = []
+ ops: List[str] = []
+ depth = 0
+ in_quote: Optional[str] = None
+ curr_buf: List[str] = []
+ i = 0
+ while i < len(s):
+  ch = s[i]
+  if in_quote:
+   curr_buf.append(ch)
+   if ch == in_quote and (i == 0 or s[i - 1] != "\\"):
+    in_quote = None
+   i += 1
+   continue
+  if ch in ("'", '"'):
+   in_quote = ch
+   curr_buf.append(ch)
+   i += 1
+   continue
+  if ch in ("(", "{", "["):
+   depth += 1
+   curr_buf.append(ch)
+   i += 1
+   continue
+  if ch in (")", "}", "]"):
+   depth = max(0, depth - 1)
+   curr_buf.append(ch)
+   i += 1
+   continue
+  if depth == 0 and s[i:i + 2] in ("||", "??"):
+   parts.append("".join(curr_buf).strip())
+   ops.append(s[i:i + 2])
+   curr_buf = []
+   i += 2
+   continue
+  curr_buf.append(ch)
+  i += 1
+ if curr_buf:
+  parts.append("".join(curr_buf).strip())
+ if len(parts) > 1:
+  acc_val = _eval_single_n8n_js_token(parts[0], current_json, node_outputs)
+  for idx_op, op_str in enumerate(ops):
+   next_candidate = parts[idx_op + 1]
+   if op_str == "??":
+    need_fallback = acc_val is None or acc_val == ""
+   else:
+    need_fallback = acc_val is None or acc_val == "" or acc_val is False or acc_val == 0
+   if need_fallback:
+    acc_val = _eval_single_n8n_js_token(next_candidate, current_json, node_outputs)
+  return acc_val if acc_val is not None else ""
+ return _eval_single_n8n_js_token(s, current_json, node_outputs)
 def _eval_n8n_object_literal(obj_str: str, current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Parses a JS object literal inside `JSON.stringify({ ... })` into a Python dict."""
-    s = str(obj_str or "").strip()
-    if s.startswith("{") and s.endswith("}"):
-        s = s[1:-1].strip()
-    result: Dict[str, Any] = {}
-    # Split top-level key: value pairs by comma
-    pairs: List[str] = []
-    depth = 0
-    in_quote: Optional[str] = None
-    buf: List[str] = []
-    for idx, ch in enumerate(s):
-        if in_quote:
-            buf.append(ch)
-            if ch == in_quote and (idx == 0 or s[idx - 1] != "\\"):
-                in_quote = None
-            continue
-        if ch in ("'", '"'):
-            in_quote = ch
-            buf.append(ch)
-            continue
-        if ch in ("(", "{", "["):
-            depth += 1
-            buf.append(ch)
-            continue
-        if ch in (")", "}", "]"):
-            depth = max(0, depth - 1)
-            buf.append(ch)
-            continue
-        if ch == "," and depth == 0:
-            pairs.append("".join(buf).strip())
-            buf = []
-            continue
-        buf.append(ch)
-    if buf:
-        pairs.append("".join(buf).strip())
-
-    for pair in pairs:
-        if ":" not in pair:
-            continue
-        # Split on first colon outside quotes
-        colon_idx = -1
-        in_q = None
-        for idx, ch in enumerate(pair):
-            if in_q:
-                if ch == in_q and (idx == 0 or pair[idx - 1] != "\\"):
-                    in_q = None
-                continue
-            if ch in ("'", '"'):
-                in_q = ch
-                continue
-            if ch == ":":
-                colon_idx = idx
-                break
-        if colon_idx < 0:
-            continue
-        raw_k = pair[:colon_idx].strip().strip('"').strip("'")
-        raw_v = pair[colon_idx + 1:].strip()
-        if raw_v.startswith("{") and raw_v.endswith("}"):
-            result[raw_k] = _eval_n8n_object_literal(raw_v, current_json, node_outputs)
-        else:
-            result[raw_k] = _eval_n8n_js_expression(raw_v, current_json, node_outputs)
-    return result
-
-
+ """Parses a JS object literal inside `JSON.stringify({ ... })` into a Python dict."""
+ s = str(obj_str or "").strip()
+ if s.startswith("{") and s.endswith("}"):
+  s = s[1:-1].strip()
+ result: Dict[str, Any] = {}
+ # Split top-level key: value pairs by comma
+ pairs: List[str] = []
+ depth = 0
+ in_quote: Optional[str] = None
+ buf: List[str] = []
+ for idx, ch in enumerate(s):
+  if in_quote:
+   buf.append(ch)
+   if ch == in_quote and (idx == 0 or s[idx - 1] != "\\"):
+    in_quote = None
+   continue
+  if ch in ("'", '"'):
+   in_quote = ch
+   buf.append(ch)
+   continue
+  if ch in ("(", "{", "["):
+   depth += 1
+   buf.append(ch)
+   continue
+  if ch in (")", "}", "]"):
+   depth = max(0, depth - 1)
+   buf.append(ch)
+   continue
+  if ch == "," and depth == 0:
+   pairs.append("".join(buf).strip())
+   buf = []
+   continue
+  buf.append(ch)
+ if buf:
+  pairs.append("".join(buf).strip())
+ for pair in pairs:
+  if ":" not in pair:
+   continue
+  # Split on first colon outside quotes
+  colon_idx = -1
+  in_q = None
+  for idx, ch in enumerate(pair):
+   if in_q:
+    if ch == in_q and (idx == 0 or pair[idx - 1] != "\\"):
+     in_q = None
+    continue
+   if ch in ("'", '"'):
+    in_q = ch
+    continue
+   if ch == ":":
+    colon_idx = idx
+    break
+  if colon_idx < 0:
+   continue
+  raw_k = pair[:colon_idx].strip().strip('"').strip("'")
+  raw_v = pair[colon_idx + 1:].strip()
+  if raw_v.startswith("{") and raw_v.endswith("}"):
+   result[raw_k] = _eval_n8n_object_literal(raw_v, current_json, node_outputs)
+  else:
+   result[raw_k] = _eval_n8n_js_expression(raw_v, current_json, node_outputs)
+ return result
 def _resolve_n8n_parameter_value(raw_val: Any, current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Any:
-    """Resolves an n8n parameter string (which may start with `=` and contain `{{ ... }}` blocks)."""
-    if isinstance(raw_val, dict):
-        return {k: _resolve_n8n_parameter_value(v, current_json, node_outputs) for k, v in raw_val.items()}
-    if isinstance(raw_val, list):
-        return [_resolve_n8n_parameter_value(x, current_json, node_outputs) for x in raw_val]
-    if not isinstance(raw_val, str):
-        return raw_val
-
-    s = raw_val
-    is_expr_prefixed = s.startswith("=")
-    if is_expr_prefixed:
-        s = s[1:].strip()
-
-    # Exact single {{ ... }} block
-    m_single = re.match(r"^\{\{\s*(.*?)\s*\}\}$", s, re.DOTALL)
-    if m_single:
-        return _eval_n8n_js_expression(m_single.group(1), current_json, node_outputs)
-
-    # Multiple {{ ... }} blocks interpolated inside a string (e.g. URL query params)
-    if "{{" in s and "}}" in s:
-        def _repl(match_obj):
-            inner = match_obj.group(1).strip()
-            val = _eval_n8n_js_expression(inner, current_json, node_outputs)
-            if val is None:
-                return ""
-            if isinstance(val, (dict, list)):
-                return json.dumps(val, ensure_ascii=False)
-            return str(val)
-        return re.sub(r"\{\{\s*(.*?)\s*\}\}", _repl, s, flags=re.DOTALL)
-
-    return s
-
-
+ """Resolves an n8n parameter string (which may start with `=` and contain `{{ ... }}` blocks)."""
+ if isinstance(raw_val, dict):
+  return {k: _resolve_n8n_parameter_value(v, current_json, node_outputs) for k, v in raw_val.items()}
+ if isinstance(raw_val, list):
+  return [_resolve_n8n_parameter_value(x, current_json, node_outputs) for x in raw_val]
+ if not isinstance(raw_val, str):
+  return raw_val
+ s = raw_val
+ is_expr_prefixed = s.startswith("=")
+ if is_expr_prefixed:
+  s = s[1:].strip()
+ # Exact single {{ ... }} block
+ m_single = re.match(r"^\{\{\s*(.*?)\s*\}\}$", s, re.DOTALL)
+ if m_single:
+  return _eval_n8n_js_expression(m_single.group(1), current_json, node_outputs)
+ # Multiple {{ ... }} blocks interpolated inside a string (e.g. URL query params)
+ if "{{" in s and "}}" in s:
+  def _repl(match_obj):
+   inner = match_obj.group(1).strip()
+   val = _eval_n8n_js_expression(inner, current_json, node_outputs)
+   if val is None:
+    return ""
+   if isinstance(val, (dict, list)):
+    return json.dumps(val, ensure_ascii=False)
+   return str(val)
+  return re.sub(r"\{\{\s*(.*?)\s*\}\}", _repl, s, flags=re.DOTALL)
+ return s
 def _evaluate_n8n_if_node(node: Dict[str, Any], current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
-    """
+ """
     Evaluates an `n8n-nodes-base.if` or `n8n-nodes-base.filter` node (both v1 and v2 schemas).
     Returns (passed_boolean, condition_details).
     """
-    params = node.get("parameters") or {}
-    conds_root = params.get("conditions") or {}
-    combine_op = str(params.get("combineOperation") or conds_root.get("combinator") or "all").strip().lower()
-    use_any = combine_op in ("any", "or")
-
-    results: List[bool] = []
-    details: List[Dict[str, Any]] = []
-
-    def _check_single(v1_raw: Any, op: str, v2_raw: Any, data_type: str = "string") -> bool:
-        v1 = _resolve_n8n_parameter_value(v1_raw, current_json, node_outputs)
-        v2 = _resolve_n8n_parameter_value(v2_raw, current_json, node_outputs)
-        op_low = str(op or "equal").strip().lower()
-
-        if data_type == "boolean" or isinstance(v2_raw, bool) or op_low in ("true", "false"):
-            b1 = bool(v1) if not isinstance(v1, str) else v1.strip().lower() in ("true", "1", "yes")
-            b2 = True if op_low == "true" else (False if op_low == "false" else (bool(v2) if not isinstance(v2, str) else v2.strip().lower() in ("true", "1", "yes")))
-            res_b = (b1 == b2) if op_low not in ("notequal", "notequals") else (b1 != b2)
-            details.append({"left": b1, "operation": op_low, "right": b2, "passed": res_b})
-            return res_b
-
-        if data_type == "number":
-            try:
-                n1 = float(v1 or 0)
-                n2 = float(v2 or 0)
-            except Exception:
-                n1, n2 = 0.0, 0.0
-            if op_low in ("larger", "gt", ">"):
-                res_n = n1 > n2
-            elif op_low in ("largerequal", "gte", ">="):
-                res_n = n1 >= n2
-            elif op_low in ("smaller", "lt", "<"):
-                res_n = n1 < n2
-            elif op_low in ("smallerequal", "lte", "<="):
-                res_n = n1 <= n2
-            elif op_low in ("notequal", "notequals", "!="):
-                res_n = n1 != n2
-            else:
-                res_n = n1 == n2
-            details.append({"left": n1, "operation": op_low, "right": n2, "passed": res_n})
-            return res_n
-
-        s1 = str(v1 if v1 is not None else "").strip()
-        s2 = str(v2 if v2 is not None else "").strip()
-        s1_low = s1.lower()
-        s2_low = s2.lower()
-
-        if op_low == "contains":
-            res_s = (s2_low in s1_low) or (s2_low == "glennbot automations" and "glennbot.automation" in s1_low)
-        elif op_low in ("notcontains", "not_contains"):
-            res_s = s2_low not in s1_low
-        elif op_low in ("startswith", "starts_with"):
-            res_s = s1_low.startswith(s2_low)
-        elif op_low in ("endswith", "ends_with"):
-            res_s = s1_low.endswith(s2_low)
-        elif op_low in ("isempty", "empty"):
-            res_s = len(s1) == 0
-        elif op_low in ("isnotempty", "notempty", "not_empty"):
-            res_s = len(s1) > 0
-        elif op_low in ("notequal", "notequals", "!="):
-            res_s = s1_low != s2_low
-        elif op_low == "regex":
-            try:
-                res_s = bool(re.search(s2, s1, re.IGNORECASE))
-            except Exception:
-                res_s = False
-        else:
-            res_s = s1_low == s2_low
-
-        details.append({"left": s1[:120], "operation": op_low, "right": s2[:120], "passed": res_s})
-        return res_s
-
-    # v1 schema: conditions.string, conditions.boolean, conditions.number
-    for dtype in ("string", "boolean", "number"):
-        c_list = conds_root.get(dtype)
-        if isinstance(c_list, list):
-            for c_item in c_list:
-                if isinstance(c_item, dict):
-                    results.append(_check_single(
-                        c_item.get("value1"),
-                        c_item.get("operation", "equal"),
-                        c_item.get("value2", True if dtype == "boolean" else ""),
-                        dtype
-                    ))
-
-    # v2 schema: conditions.conditions (list of {leftValue, rightValue, operator: {type, operation}})
-    v2_list = conds_root.get("conditions")
-    if isinstance(v2_list, list):
-        for c_item in v2_list:
-            if isinstance(c_item, dict):
-                op_obj = c_item.get("operator") or {}
-                dtype = str(op_obj.get("type") or "string").lower()
-                op_name = str(op_obj.get("operation") or "equals").lower()
-                results.append(_check_single(
-                    c_item.get("leftValue"),
-                    op_name,
-                    c_item.get("rightValue"),
-                    dtype
-                ))
-
-    if not results:
-        return True, details
-
-    passed = any(results) if use_any else all(results)
-    return passed, details
-
-
+ params = node.get("parameters") or {}
+ conds_root = params.get("conditions") or {}
+ combine_op = str(params.get("combineOperation") or conds_root.get("combinator") or "all").strip().lower()
+ use_any = combine_op in ("any", "or")
+ results: List[bool] = []
+ details: List[Dict[str, Any]] = []
+ def _check_single(v1_raw: Any, op: str, v2_raw: Any, data_type: str = "string") -> bool:
+  v1 = _resolve_n8n_parameter_value(v1_raw, current_json, node_outputs)
+  v2 = _resolve_n8n_parameter_value(v2_raw, current_json, node_outputs)
+  op_low = str(op or "equal").strip().lower()
+  if data_type == "boolean" or isinstance(v2_raw, bool) or op_low in ("true", "false"):
+   b1 = bool(v1) if not isinstance(v1, str) else v1.strip().lower() in ("true", "1", "yes")
+   b2 = True if op_low == "true" else (False if op_low == "false" else (bool(v2) if not isinstance(v2, str) else v2.strip().lower() in ("true", "1", "yes")))
+   res_b = (b1 == b2) if op_low not in ("notequal", "notequals") else (b1 != b2)
+   details.append({"left": b1, "operation": op_low, "right": b2, "passed": res_b})
+   return res_b
+  if data_type == "number":
+   try:
+    n1 = float(v1 or 0)
+    n2 = float(v2 or 0)
+   except Exception:
+    n1, n2 = 0.0, 0.0
+   if op_low in ("larger", "gt", ">"):
+    res_n = n1 > n2
+   elif op_low in ("largerequal", "gte", ">="):
+    res_n = n1 >= n2
+   elif op_low in ("smaller", "lt", "<"):
+    res_n = n1 < n2
+   elif op_low in ("smallerequal", "lte", "<="):
+    res_n = n1 <= n2
+   elif op_low in ("notequal", "notequals", "!="):
+    res_n = n1 != n2
+   else:
+    res_n = n1 == n2
+   details.append({"left": n1, "operation": op_low, "right": n2, "passed": res_n})
+   return res_n
+  s1 = str(v1 if v1 is not None else "").strip()
+  s2 = str(v2 if v2 is not None else "").strip()
+  s1_low = s1.lower()
+  s2_low = s2.lower()
+  if op_low == "contains":
+   res_s = (s2_low in s1_low) or (s2_low == "glennbot automations" and "glennbot.automation" in s1_low)
+  elif op_low in ("notcontains", "not_contains"):
+   res_s = s2_low not in s1_low
+  elif op_low in ("startswith", "starts_with"):
+   res_s = s1_low.startswith(s2_low)
+  elif op_low in ("endswith", "ends_with"):
+   res_s = s1_low.endswith(s2_low)
+  elif op_low in ("isempty", "empty"):
+   res_s = len(s1) == 0
+  elif op_low in ("isnotempty", "notempty", "not_empty"):
+   res_s = len(s1) > 0
+  elif op_low in ("notequal", "notequals", "!="):
+   res_s = s1_low != s2_low
+  elif op_low == "regex":
+   try:
+    res_s = bool(re.search(s2, s1, re.IGNORECASE))
+   except Exception:
+    res_s = False
+  else:
+   res_s = s1_low == s2_low
+  details.append({"left": s1[:120], "operation": op_low, "right": s2[:120], "passed": res_s})
+  return res_s
+ # v1 schema: conditions.string, conditions.boolean, conditions.number
+ for dtype in ("string", "boolean", "number"):
+  c_list = conds_root.get(dtype)
+  if isinstance(c_list, list):
+   for c_item in c_list:
+    if isinstance(c_item, dict):
+     results.append(_check_single(
+     c_item.get("value1"),
+     c_item.get("operation", "equal"),
+     c_item.get("value2", True if dtype == "boolean" else ""),
+     dtype
+     ))
+ # v2 schema: conditions.conditions (list of {leftValue, rightValue, operator: {type, operation}})
+ v2_list = conds_root.get("conditions")
+ if isinstance(v2_list, list):
+  for c_item in v2_list:
+   if isinstance(c_item, dict):
+    op_obj = c_item.get("operator") or {}
+    dtype = str(op_obj.get("type") or "string").lower()
+    op_name = str(op_obj.get("operation") or "equals").lower()
+    results.append(_check_single(
+    c_item.get("leftValue"),
+    op_name,
+    c_item.get("rightValue"),
+    dtype
+    ))
+ if not results:
+  return True, details
+ passed = any(results) if use_any else all(results)
+ return passed, details
 def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], node_outputs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """
+ """
     Executes an `n8n-nodes-base.code` or `n8n-nodes-base.function` node.
     Supports:
     1) Thread-grouping JS code (like `Group Thread & Find Matching Row` for Conversations.xlsx) natively in Python!
     2) General JavaScript `jsCode` via Node.js subprocess (if `node` binary is available on host) or Python fallback.
     """
-    params = node.get("parameters") or {}
-    js_code = str(params.get("jsCode") or params.get("functionCode") or "").strip()
-    if not js_code:
-        return current_json
-
-    # 0. Native fast-path for Supabase FIFO Comment Queue Code nodes (`Supabase FIFO Comment Queue` & `Complete & Release Turn in Supabase Queue`)
-    node_name_low = str(node.get("name") or "").lower()
-    node_id_low = str(node.get("id") or "").lower()
-    if (
-        "node-supabase-fifo-comment-queue" in node_id_low
-        or "node-supabase-fifo-dm-queue" in node_id_low
-        or "node-supabase-fifo-email-queue" in node_id_low
-        or ("supabase" in node_name_low and ("enqueue" in node_name_low or "fifo" in node_name_low or "acquire" in node_name_low))
-        or "SUPABASE_QUEUE_ACTION = 'enqueue_and_acquire'" in js_code
-    ):
-        wh_data = (
-            node_outputs.get("Webhook Trigger")
-            or node_outputs.get("Webhook")
-            or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
-            or current_json
-        )
-        return enqueue_and_acquire_supabase_comment_queue_turn(wh_data, is_test_run=False)
-
-    if (
-        "node-supabase-complete-comment-queue" in node_id_low
-        or "node-supabase-complete-dm-queue" in node_id_low
-        or "node-supabase-complete-email-queue" in node_id_low
-        or ("supabase" in node_name_low and ("complete" in node_name_low or "release" in node_name_low or "dequeue" in node_name_low))
-        or "SUPABASE_QUEUE_ACTION = 'complete_and_release'" in js_code
-    ):
-        q_node = (
-            node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
-            or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
-            or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
-            or node_outputs.get("Build Thread ID & Pipe Conversation")
-            or node_outputs.get("Build DM Thread ID & Pipe Conversation")
-            or node_outputs.get("Build Email Thread ID & Pipe Conversation")
-            or current_json
-            or {}
-        )
-        fmt_node = (
-            node_outputs.get("Format AI Reply & Update Pipe History")
-            or node_outputs.get("Format Email Reply & Update Sheet3 Pipe History")
-            or {}
-        )
-        wh_data = node_outputs.get("Webhook Trigger") or {}
-        wh_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
-        qid = str(
-            q_node.get("queueId")
-            or q_node.get("queue_id")
-            or current_json.get("queueId")
-            or current_json.get("queue_id")
-            or ""
-        ).strip()
-        cid = str(
-            q_node.get("comment_id")
-            or q_node.get("targetCommentId")
-            or q_node.get("messageId")
-            or q_node.get("dmThreadId")
-            or q_node.get("emailThreadId")
-            or wh_body.get("comment_id")
-            or wh_body.get("message_id")
-            or wh_body.get("thread_id")
-            or wh_body.get("conversation_id")
-            or ""
-        ).strip()
-        ai_rep = str(
-            fmt_node.get("aiReplyText")
-            or fmt_node.get("emailBodyText")
-            or fmt_node.get("reply")
-            or current_json.get("aiReplyText")
-            or current_json.get("reply")
-            or ""
-        ).strip()
-        is_own_c = bool(wh_body.get("is_own_comment") or wh_body.get("is_own") or wh_body.get("is_own_message") or q_node.get("is_own_comment"))
-        final_q_status = "skipped_own_comment" if (is_own_c and not ai_rep) else "completed"
-        comp_res = complete_supabase_comment_queue_turn(
-            queue_id=qid,
-            comment_id=cid,
-            ai_reply=ai_rep,
-            status=final_q_status
-        )
-        return {
-            **(current_json if isinstance(current_json, dict) else {}),
-            **comp_res,
-        }
-
-    # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
-    is_custom_pipe_or_dm_code = any(
-        k in js_code for k in (
-            "colAThreadId",
-            "colBConversation",
-            "dmThreadId",
-            "emailThreadId",
-            "pipeConversation",
-            "aiContextPrompt",
-            "shouldAiReply",
-            "aiReplyText",
-            "emailBodyText",
-            "colBWithAiReply"
-        )
+ params = node.get("parameters") or {}
+ js_code = str(params.get("jsCode") or params.get("functionCode") or "").strip()
+ if not js_code:
+  return current_json
+ # 0. Native fast-path for Supabase FIFO Comment Queue Code nodes (`Supabase FIFO Comment Queue` & `Complete & Release Turn in Supabase Queue`)
+ node_name_low = str(node.get("name") or "").lower()
+ node_id_low = str(node.get("id") or "").lower()
+ if (
+ "node-supabase-fifo-comment-queue" in node_id_low
+ or "node-supabase-fifo-dm-queue" in node_id_low
+ or "node-supabase-fifo-email-queue" in node_id_low
+ or ("supabase" in node_name_low and ("enqueue" in node_name_low or "fifo" in node_name_low or "acquire" in node_name_low))
+ or "SUPABASE_QUEUE_ACTION = 'enqueue_and_acquire'" in js_code
+ ):
+  wh_data = (
+  node_outputs.get("Webhook Trigger")
+  or node_outputs.get("Webhook")
+  or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+  or current_json
+  )
+  return enqueue_and_acquire_supabase_comment_queue_turn(wh_data, is_test_run=False)
+ if (
+ "node-supabase-complete-comment-queue" in node_id_low
+ or "node-supabase-complete-dm-queue" in node_id_low
+ or "node-supabase-complete-email-queue" in node_id_low
+ or ("supabase" in node_name_low and ("complete" in node_name_low or "release" in node_name_low or "dequeue" in node_name_low))
+ or "SUPABASE_QUEUE_ACTION = 'complete_and_release'" in js_code
+ ):
+  q_node = (
+  node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+  or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
+  or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
+  or node_outputs.get("Build Thread ID & Pipe Conversation")
+  or node_outputs.get("Build DM Thread ID & Pipe Conversation")
+  or node_outputs.get("Build Email Thread ID & Pipe Conversation")
+  or current_json
+  or {}
+  )
+  fmt_node = (
+  node_outputs.get("Format AI Reply & Update Pipe History")
+  or node_outputs.get("Format Email Reply & Update Sheet3 Pipe History")
+  or {}
+  )
+  wh_data = node_outputs.get("Webhook Trigger") or {}
+  wh_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+  qid = str(
+  q_node.get("queueId")
+  or q_node.get("queue_id")
+  or current_json.get("queueId")
+  or current_json.get("queue_id")
+  or ""
+  ).strip()
+  cid = str(
+  q_node.get("comment_id")
+  or q_node.get("targetCommentId")
+  or q_node.get("messageId")
+  or q_node.get("dmThreadId")
+  or q_node.get("emailThreadId")
+  or wh_body.get("comment_id")
+  or wh_body.get("message_id")
+  or wh_body.get("thread_id")
+  or wh_body.get("conversation_id")
+  or ""
+  ).strip()
+  ai_rep = str(
+  fmt_node.get("aiReplyText")
+  or fmt_node.get("emailBodyText")
+  or fmt_node.get("reply")
+  or current_json.get("aiReplyText")
+  or current_json.get("reply")
+  or ""
+  ).strip()
+  is_own_c = bool(wh_body.get("is_own_comment") or wh_body.get("is_own") or wh_body.get("is_own_message") or q_node.get("is_own_comment"))
+  final_q_status = "skipped_own_comment" if (is_own_c and not ai_rep) else "completed"
+  comp_res = complete_supabase_comment_queue_turn(
+  queue_id=qid,
+  comment_id=cid,
+  ai_reply=ai_rep,
+  status=final_q_status
+  )
+  return {
+  **(current_json if isinstance(current_json, dict) else {}),
+  **comp_res,
+  }
+ # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
+ is_custom_pipe_or_dm_code = any(
+ k in js_code for k in (
+ "colAThreadId",
+ "colBConversation",
+ "dmThreadId",
+ "emailThreadId",
+ "pipeConversation",
+ "aiContextPrompt",
+ "shouldAiReply",
+ "aiReplyText",
+ "emailBodyText",
+ "colBWithAiReply"
+ )
+ )
+ is_thread_grouping_code = (
+ not is_custom_pipe_or_dm_code
+ and (
+ any(k in js_code for k in (
+ "targetRowNumber",
+ "matchedRow",
+ "target_row",
+ "[Thread:",
+ "thread_transcript",
+ "updated_existing_thread_row",
+ "created_new_thread_row"
+ ))
+ or ("thread" in node_name_low and "row" in node_name_low)
+ )
+ )
+ if is_thread_grouping_code:
+  wh_data = (
+  node_outputs.get("Webhook Trigger")
+  or node_outputs.get("Webhook")
+  or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+  or current_json
+  )
+  wb_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+  if isinstance(wb_body.get("data"), dict) and not wb_body.get("comment_id"):
+   wb_body = {**wb_body["data"], **wb_body}
+  sheet_resp = current_json if isinstance(current_json, dict) else {}
+  existing_rows = sheet_resp.get("rows") if isinstance(sheet_resp.get("rows"), list) else []
+  cells_dict = sheet_resp.get("cells") if isinstance(sheet_resp.get("cells"), dict) else {}
+  def _norm_id(v: Any) -> str:
+   s_id = str(v or "").strip()
+   return s_id.split("_")[-1].strip() if "_" in s_id else s_id
+  cid = str(wb_body.get("comment_id") or "").strip()
+  parent_cid = str(wb_body.get("parent_comment_id") or wb_body.get("replied_to_id") or "").strip()
+  raw_root = str(wb_body.get("thread_id") or wb_body.get("root_comment_id") or parent_cid or cid).strip()
+  thread_id = _norm_id(raw_root) or _norm_id(cid) or "unknown_thread"
+  candidate_ids: List[str] = []
+  for cand_raw in [thread_id, _norm_id(parent_cid), _norm_id(cid)] + list(wb_body.get("thread_comment_ids") or []):
+   c_norm = _norm_id(cand_raw)
+   if c_norm and c_norm not in candidate_ids:
+    candidate_ids.append(c_norm)
+  is_own = bool(wb_body.get("is_own_comment") or wb_body.get("is_own"))
+  acc_name = str(wb_body.get("account_name") or "Savvy Finds").strip()
+  commenter_id = str(
+  (wb_body.get("parent_author_id") or wb_body.get("author_id") or wb_body.get("author_name") or "Commenter")
+  if is_own
+  else (wb_body.get("author_id") or wb_body.get("author_name") or "Commenter")
+  ).strip()
+  commenter_name = str(
+  (wb_body.get("parent_author_name") or "Commenter")
+  if is_own
+  else (wb_body.get("author_name") or "Commenter")
+  ).strip()
+  speaker_label = f"{acc_name} (Page)" if is_own else commenter_name
+  msg_text = str(wb_body.get("message") or "").strip()
+  new_line = f"{speaker_label}: {msg_text}" if msg_text else f"{speaker_label}: (Comment)"
+  full_transcript = str(wb_body.get("thread_transcript") or "").strip()
+  parent_msg = str(wb_body.get("parent_message") or "").strip()
+  # Normalize rows from either structured_rows (`_row_number`, `A`, `B`) or legacy (`row_number`, `values.A`, `values.B`)
+  normalized_sheet_rows: List[Tuple[int, str, str]] = []
+  seen_row_nums = set()
+  for r_item in existing_rows:
+   if not isinstance(r_item, dict):
+    continue
+   r_num = int(r_item.get("_row_number") or r_item.get("row_number") or 0)
+   if r_num < 1:
+    continue
+   vals = r_item.get("values") if isinstance(r_item.get("values"), dict) else r_item
+   a_val = str(vals.get("A") or "").strip()
+   b_val = str(vals.get("B") or "").strip()
+   normalized_sheet_rows.append((r_num, a_val, b_val))
+   seen_row_nums.add(r_num)
+  # Also inspect `cells` map if any row wasn't in `rows`
+  row_nums_from_cells = set()
+  for coord_k in cells_dict.keys():
+   m_c = re.match(r"^([A-Za-z]+)(\d+)$", str(coord_k).strip())
+   if m_c:
+    row_nums_from_cells.add(int(m_c.group(2)))
+  for r_num in sorted(row_nums_from_cells):
+   if r_num not in seen_row_nums:
+    a_val = str(cells_dict.get(f"A{r_num}") or "").strip()
+    b_val = str(cells_dict.get(f"B{r_num}") or "").strip()
+    normalized_sheet_rows.append((r_num, a_val, b_val))
+    seen_row_nums.add(r_num)
+  matched_row_num: Optional[int] = None
+  existing_col_a = ""
+  existing_col_b = ""
+  # Pass 1: Match by `[Thread: ...]` tag in Column A
+  for r_num, a_val, b_val in normalized_sheet_rows:
+   m_th = re.search(r"\[Thread:\s*([^\]]+)\]", a_val, re.I)
+   if m_th:
+    tracked = [_norm_id(x) for x in m_th.group(1).split(",") if x.strip()]
+    if any(cid_cand in tracked for cid_cand in candidate_ids):
+     matched_row_num = r_num
+     existing_col_a = a_val
+     existing_col_b = b_val
+     break
+  # Pass 2: Legacy row fallback (if top-level comment was logged before `[Thread: ...]` tag was added)
+  if matched_row_num is None and (parent_cid or is_own):
+   for r_num, a_val, b_val in normalized_sheet_rows:
+    if "[Thread:" in a_val:
+     continue
+    clean_a = re.sub(r"\s*\[Thread:[^\]]*\]", "", a_val).strip()
+    if parent_msg and parent_msg in b_val:
+     matched_row_num = r_num
+     existing_col_a = a_val
+     existing_col_b = b_val
+     break
+    if commenter_id and clean_a and clean_a == commenter_id:
+     matched_row_num = r_num
+     existing_col_a = a_val
+     existing_col_b = b_val
+     break
+  # Build updated `[Thread: id1,id2]` tag
+  merged_thread_ids: List[str] = []
+  if existing_col_a:
+   m_ex = re.search(r"\[Thread:\s*([^\]]+)\]", existing_col_a, re.I)
+   if m_ex:
+    for x in m_ex.group(1).split(","):
+     nx = _norm_id(x)
+     if nx and nx not in merged_thread_ids:
+      merged_thread_ids.append(nx)
+  for c_id_item in candidate_ids:
+   if c_id_item and c_id_item not in merged_thread_ids:
+    merged_thread_ids.append(c_id_item)
+  if not merged_thread_ids:
+   merged_thread_ids.append(thread_id)
+  base_author_a = re.sub(r"\s*\[Thread:[^\]]*\]", "", existing_col_a).strip() if existing_col_a else ""
+  if not base_author_a or base_author_a.lower() == "savvy finds":
+   base_author_a = commenter_id or commenter_name or "Commenter"
+  final_col_a = f"{base_author_a} [Thread: {','.join(merged_thread_ids)}]".strip()
+  max_existing_row = max((r_num for r_num, _, _ in normalized_sheet_rows), default=0)
+  next_empty = int(sheet_resp.get("next_empty_row") or (max_existing_row + 1) or 2)
+  target_row_num = matched_row_num if matched_row_num is not None else max(1, next_empty)
+  if matched_row_num is not None and existing_col_b:
+   if full_transcript and len(full_transcript) >= len(existing_col_b):
+    final_col_b = full_transcript
+   else:
+    lines = [ln.strip() for ln in existing_col_b.splitlines() if ln.strip()]
+    if new_line and new_line not in existing_col_b:
+     lines.append(new_line)
+    final_col_b = "\n".join(lines)
+  elif full_transcript:
+   final_col_b = full_transcript
+  elif is_own and parent_msg and parent_msg not in new_line:
+   final_col_b = f"{commenter_name}: {parent_msg}\n{new_line}"
+  else:
+   final_col_b = new_line
+  row_dict_payload = (
+  {f"A{matched_row_num}": final_col_a, f"B{matched_row_num}": final_col_b}
+  if matched_row_num is not None
+  else {"A": final_col_a, "B": final_col_b}
+  )
+  return {
+  "action": "updated_existing_thread_row" if matched_row_num is not None else "created_new_thread_row",
+  "thread_id": thread_id,
+  "threadId": thread_id,
+  "target_row": target_row_num,
+  "targetRowNumber": target_row_num,
+  "colA": final_col_a,
+  "colB": final_col_b,
+  "row": row_dict_payload,
+  "isUpdate": matched_row_num is not None
+  }
+ # 2. Native In-Memory Python Fast-Path (<0.4ms) for `Format AI Reply & Update Pipe History`,
+ # `Format Email Reply & Update Sheet3 Pipe History`, `Build Thread ID & Pipe Conversation`,
+ # `Build DM Thread ID & Pipe Conversation`, and `Build Email Thread ID & Pipe Conversation`
+ # so 4+ simultaneous workflow executions NEVER spawn OS Node.js subprocesses!
+ if (
+ "aiReplyText" in js_code
+ or "emailBodyText" in js_code
+ or "colBWithAiReply" in js_code
+ or "format ai reply" in node_name_low
+ or "format email reply" in node_name_low
+ ):
+  email_pipe_node = (
+  node_outputs.get("Build Email Thread ID & Pipe Conversation")
+  or node_outputs.get("Build Email Thread ID & Pipe Conversation + Match Script.xlsx")
+  or next((v for k, v in node_outputs.items() if "build email thread" in k.lower()), None)
+  )
+  pipe_node = (
+  email_pipe_node
+  or node_outputs.get("Build DM Thread ID & Pipe Conversation")
+  or node_outputs.get("Build Thread ID & Pipe Conversation")
+  or {}
+  )
+  is_email_fmt = bool(
+  email_pipe_node
+  or "format email reply" in node_name_low
+  or "emailBodyText" in js_code
+  or str(pipe_node.get("platform") or "").lower() == "email"
+  )
+  raw_reply = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
+  raw_reply = re.sub(r"^[\"'\u201c\u201d\u2018\u2019]+|[\"'\u201c\u201d\u2018\u2019]+$", "", raw_reply).strip()
+  raw_reply = re.sub(
+  r"^(?:Glennard(?:\s+R\.?\s+Tasico|\s+Tasico)?|GlennBot\s+Automations(?:\s*\([^)]+\))?|@?glennard\.tasico\.va|@?glennbot\.automation|HappyFinds\s+Hub)\s*:\s*",
+  "",
+  raw_reply,
+  flags=re.I
+  ).strip()
+  if is_email_fmt:
+   sender_name_val = str(pipe_node.get("senderName") or pipe_node.get("participantName") or "Valued Client").strip() or "Valued Client"
+   # Strip any duplicate leading "Dear ...," and trailing "Regards, Glennard" so we wrap cleanly in Email Format
+   body_core = raw_reply.replace("\r\n", "\n").strip()
+   body_core = re.sub(r"^dear\s+[^\n,]+[,:]?\s*\n*", "", body_core, flags=re.I).strip()
+   body_core = re.sub(
+   r"\n*(?:best\s+regards|warm\s+regards|kind\s+regards|regards|sincerely|best|cheers)[,:]?\s*\n+glennard(?:\s+r\.?\s+tasico|\s+tasico)?\s*$",
+   "",
+   body_core,
+   flags=re.I
+   ).strip()
+   if not body_core or "apologies for the brief delay" in body_core.lower():
+    guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
+    lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
+    if guide:
+     body_core = guide
+    elif "tagalog" in lang_low or "taglish" in lang_low:
+     body_core = (
+     "Maraming salamat sa pag-email! Nandito ako para tumulong sa inyong Automation at Web App Projects "
+     "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
+     "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
+     )
+    else:
+     body_core = (
+     "Thank you for reaching out via email! I am ready to help with your Automation and Web App Projects—"
+     "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
+     "What specific automation or web app project can I help you build?"
+     )
+   formatted_email_reply = f"Dear {sender_name_val},\n\n{body_core}\n\nRegards,\nGlennard"
+   single_line_email = re.sub(r"\s+", " ", formatted_email_reply.replace("|", "/")).strip()
+   page_label = str(pipe_node.get("pageName") or "Glennard (glennard.tasico.va@gmail.com)").strip()
+   prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
+   reply_entry = f"{page_label}: {single_line_email}"
+   updated_pipe = prev_pipe
+   if single_line_email:
+    last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
+    if not prev_pipe:
+     updated_pipe = reply_entry
+    elif body_core[:40].lower() not in last_seg_low:
+     updated_pipe = f"{prev_pipe} | {reply_entry}"
+   return {
+   **pipe_node,
+   "aiReplyText": formatted_email_reply,
+   "emailBodyText": formatted_email_reply,
+   "colBWithAiReply": updated_pipe,
+   "pipeConversationWithReply": updated_pipe,
+   }
+  clean_reply = re.sub(r"\s+", " ", raw_reply.replace("|", "/")).strip()
+  if not clean_reply or "apologies for the brief delay" in clean_reply.lower():
+   guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
+   lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
+   if guide:
+    clean_reply = guide
+   elif "tagalog" in lang_low or "taglish" in lang_low:
+    clean_reply = (
+    "Salamat sa comment/message! Nandito ako para tumulong sa inyong Automation at Web App Projects "
+    "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
+    "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
     )
-    is_thread_grouping_code = (
-        not is_custom_pipe_or_dm_code
-        and (
-            any(k in js_code for k in (
-                "targetRowNumber",
-                "matchedRow",
-                "target_row",
-                "[Thread:",
-                "thread_transcript",
-                "updated_existing_thread_row",
-                "created_new_thread_row"
-            ))
-            or ("thread" in node_name_low and "row" in node_name_low)
-        )
+   else:
+    clean_reply = (
+    "Thanks for reaching out! I'm right here and ready to help with your Automation and Web App Projects—"
+    "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
+    "What specific automation or web app project can I help you build?"
     )
-    if is_thread_grouping_code:
-        wh_data = (
-            node_outputs.get("Webhook Trigger")
-            or node_outputs.get("Webhook")
-            or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
-            or current_json
-        )
-        wb_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
-        if isinstance(wb_body.get("data"), dict) and not wb_body.get("comment_id"):
-            wb_body = {**wb_body["data"], **wb_body}
-
-        sheet_resp = current_json if isinstance(current_json, dict) else {}
-        existing_rows = sheet_resp.get("rows") if isinstance(sheet_resp.get("rows"), list) else []
-        cells_dict = sheet_resp.get("cells") if isinstance(sheet_resp.get("cells"), dict) else {}
-
-        def _norm_id(v: Any) -> str:
-            s_id = str(v or "").strip()
-            return s_id.split("_")[-1].strip() if "_" in s_id else s_id
-
-        cid = str(wb_body.get("comment_id") or "").strip()
-        parent_cid = str(wb_body.get("parent_comment_id") or wb_body.get("replied_to_id") or "").strip()
-        raw_root = str(wb_body.get("thread_id") or wb_body.get("root_comment_id") or parent_cid or cid).strip()
-        thread_id = _norm_id(raw_root) or _norm_id(cid) or "unknown_thread"
-
-        candidate_ids: List[str] = []
-        for cand_raw in [thread_id, _norm_id(parent_cid), _norm_id(cid)] + list(wb_body.get("thread_comment_ids") or []):
-            c_norm = _norm_id(cand_raw)
-            if c_norm and c_norm not in candidate_ids:
-                candidate_ids.append(c_norm)
-
-        is_own = bool(wb_body.get("is_own_comment") or wb_body.get("is_own"))
-        acc_name = str(wb_body.get("account_name") or "Savvy Finds").strip()
-        commenter_id = str(
-            (wb_body.get("parent_author_id") or wb_body.get("author_id") or wb_body.get("author_name") or "Commenter")
-            if is_own
-            else (wb_body.get("author_id") or wb_body.get("author_name") or "Commenter")
-        ).strip()
-        commenter_name = str(
-            (wb_body.get("parent_author_name") or "Commenter")
-            if is_own
-            else (wb_body.get("author_name") or "Commenter")
-        ).strip()
-        speaker_label = f"{acc_name} (Page)" if is_own else commenter_name
-        msg_text = str(wb_body.get("message") or "").strip()
-        new_line = f"{speaker_label}: {msg_text}" if msg_text else f"{speaker_label}: (Comment)"
-        full_transcript = str(wb_body.get("thread_transcript") or "").strip()
-        parent_msg = str(wb_body.get("parent_message") or "").strip()
-
-        # Normalize rows from either structured_rows (`_row_number`, `A`, `B`) or legacy (`row_number`, `values.A`, `values.B`)
-        normalized_sheet_rows: List[Tuple[int, str, str]] = []
-        seen_row_nums = set()
-        for r_item in existing_rows:
-            if not isinstance(r_item, dict):
-                continue
-            r_num = int(r_item.get("_row_number") or r_item.get("row_number") or 0)
-            if r_num < 1:
-                continue
-            vals = r_item.get("values") if isinstance(r_item.get("values"), dict) else r_item
-            a_val = str(vals.get("A") or "").strip()
-            b_val = str(vals.get("B") or "").strip()
-            normalized_sheet_rows.append((r_num, a_val, b_val))
-            seen_row_nums.add(r_num)
-
-        # Also inspect `cells` map if any row wasn't in `rows`
-        row_nums_from_cells = set()
-        for coord_k in cells_dict.keys():
-            m_c = re.match(r"^([A-Za-z]+)(\d+)$", str(coord_k).strip())
-            if m_c:
-                row_nums_from_cells.add(int(m_c.group(2)))
-        for r_num in sorted(row_nums_from_cells):
-            if r_num not in seen_row_nums:
-                a_val = str(cells_dict.get(f"A{r_num}") or "").strip()
-                b_val = str(cells_dict.get(f"B{r_num}") or "").strip()
-                normalized_sheet_rows.append((r_num, a_val, b_val))
-                seen_row_nums.add(r_num)
-
-        matched_row_num: Optional[int] = None
-        existing_col_a = ""
-        existing_col_b = ""
-
-        # Pass 1: Match by `[Thread: ...]` tag in Column A
-        for r_num, a_val, b_val in normalized_sheet_rows:
-            m_th = re.search(r"\[Thread:\s*([^\]]+)\]", a_val, re.I)
-            if m_th:
-                tracked = [_norm_id(x) for x in m_th.group(1).split(",") if x.strip()]
-                if any(cid_cand in tracked for cid_cand in candidate_ids):
-                    matched_row_num = r_num
-                    existing_col_a = a_val
-                    existing_col_b = b_val
-                    break
-
-        # Pass 2: Legacy row fallback (if top-level comment was logged before `[Thread: ...]` tag was added)
-        if matched_row_num is None and (parent_cid or is_own):
-            for r_num, a_val, b_val in normalized_sheet_rows:
-                if "[Thread:" in a_val:
-                    continue
-                clean_a = re.sub(r"\s*\[Thread:[^\]]*\]", "", a_val).strip()
-                if parent_msg and parent_msg in b_val:
-                    matched_row_num = r_num
-                    existing_col_a = a_val
-                    existing_col_b = b_val
-                    break
-                if commenter_id and clean_a and clean_a == commenter_id:
-                    matched_row_num = r_num
-                    existing_col_a = a_val
-                    existing_col_b = b_val
-                    break
-
-        # Build updated `[Thread: id1,id2]` tag
-        merged_thread_ids: List[str] = []
-        if existing_col_a:
-            m_ex = re.search(r"\[Thread:\s*([^\]]+)\]", existing_col_a, re.I)
-            if m_ex:
-                for x in m_ex.group(1).split(","):
-                    nx = _norm_id(x)
-                    if nx and nx not in merged_thread_ids:
-                        merged_thread_ids.append(nx)
-        for c_id_item in candidate_ids:
-            if c_id_item and c_id_item not in merged_thread_ids:
-                merged_thread_ids.append(c_id_item)
-        if not merged_thread_ids:
-            merged_thread_ids.append(thread_id)
-
-        base_author_a = re.sub(r"\s*\[Thread:[^\]]*\]", "", existing_col_a).strip() if existing_col_a else ""
-        if not base_author_a or base_author_a.lower() == "savvy finds":
-            base_author_a = commenter_id or commenter_name or "Commenter"
-
-        final_col_a = f"{base_author_a} [Thread: {','.join(merged_thread_ids)}]".strip()
-
-        max_existing_row = max((r_num for r_num, _, _ in normalized_sheet_rows), default=0)
-        next_empty = int(sheet_resp.get("next_empty_row") or (max_existing_row + 1) or 2)
-        target_row_num = matched_row_num if matched_row_num is not None else max(1, next_empty)
-
-        if matched_row_num is not None and existing_col_b:
-            if full_transcript and len(full_transcript) >= len(existing_col_b):
-                final_col_b = full_transcript
-            else:
-                lines = [ln.strip() for ln in existing_col_b.splitlines() if ln.strip()]
-                if new_line and new_line not in existing_col_b:
-                    lines.append(new_line)
-                final_col_b = "\n".join(lines)
-        elif full_transcript:
-            final_col_b = full_transcript
-        elif is_own and parent_msg and parent_msg not in new_line:
-            final_col_b = f"{commenter_name}: {parent_msg}\n{new_line}"
-        else:
-            final_col_b = new_line
-
-        row_dict_payload = (
-            {f"A{matched_row_num}": final_col_a, f"B{matched_row_num}": final_col_b}
-            if matched_row_num is not None
-            else {"A": final_col_a, "B": final_col_b}
-        )
-
-        return {
-            "action": "updated_existing_thread_row" if matched_row_num is not None else "created_new_thread_row",
-            "thread_id": thread_id,
-            "threadId": thread_id,
-            "target_row": target_row_num,
-            "targetRowNumber": target_row_num,
-            "colA": final_col_a,
-            "colB": final_col_b,
-            "row": row_dict_payload,
-            "isUpdate": matched_row_num is not None
-        }
-
-    # 2. Native In-Memory Python Fast-Path (<0.4ms) for `Format AI Reply & Update Pipe History`,
-    # `Format Email Reply & Update Sheet3 Pipe History`, `Build Thread ID & Pipe Conversation`,
-    # `Build DM Thread ID & Pipe Conversation`, and `Build Email Thread ID & Pipe Conversation`
-    # so 4+ simultaneous workflow executions NEVER spawn OS Node.js subprocesses!
-    if (
-        "aiReplyText" in js_code
-        or "emailBodyText" in js_code
-        or "colBWithAiReply" in js_code
-        or "format ai reply" in node_name_low
-        or "format email reply" in node_name_low
-    ):
-        email_pipe_node = (
-            node_outputs.get("Build Email Thread ID & Pipe Conversation")
-            or node_outputs.get("Build Email Thread ID & Pipe Conversation + Match Script.xlsx")
-            or next((v for k, v in node_outputs.items() if "build email thread" in k.lower()), None)
-        )
-        pipe_node = (
-            email_pipe_node
-            or node_outputs.get("Build DM Thread ID & Pipe Conversation")
-            or node_outputs.get("Build Thread ID & Pipe Conversation")
-            or {}
-        )
-        is_email_fmt = bool(
-            email_pipe_node
-            or "format email reply" in node_name_low
-            or "emailBodyText" in js_code
-            or str(pipe_node.get("platform") or "").lower() == "email"
-        )
-        raw_reply = str(current_json.get("reply") or current_json.get("response") or current_json.get("text") or "").strip()
-        raw_reply = re.sub(r"^[\"'\u201c\u201d\u2018\u2019]+|[\"'\u201c\u201d\u2018\u2019]+$", "", raw_reply).strip()
-        raw_reply = re.sub(
-            r"^(?:Glennard(?:\s+R\.?\s+Tasico|\s+Tasico)?|GlennBot\s+Automations(?:\s*\([^)]+\))?|@?glennard\.tasico\.va|@?glennbot\.automation|HappyFinds\s+Hub)\s*:\s*",
-            "",
-            raw_reply,
-            flags=re.I
-        ).strip()
-
-        if is_email_fmt:
-            sender_name_val = str(pipe_node.get("senderName") or pipe_node.get("participantName") or "Valued Client").strip() or "Valued Client"
-            # Strip any duplicate leading "Dear ...," and trailing "Regards, Glennard" so we wrap cleanly in Email Format
-            body_core = raw_reply.replace("\r\n", "\n").strip()
-            body_core = re.sub(r"^dear\s+[^\n,]+[,:]?\s*\n*", "", body_core, flags=re.I).strip()
-            body_core = re.sub(
-                r"\n*(?:best\s+regards|warm\s+regards|kind\s+regards|regards|sincerely|best|cheers)[,:]?\s*\n+glennard(?:\s+r\.?\s+tasico|\s+tasico)?\s*$",
-                "",
-                body_core,
-                flags=re.I
-            ).strip()
-            if not body_core or "apologies for the brief delay" in body_core.lower():
-                guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
-                lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
-                if guide:
-                    body_core = guide
-                elif "tagalog" in lang_low or "taglish" in lang_low:
-                    body_core = (
-                        "Maraming salamat sa pag-email! Nandito ako para tumulong sa inyong Automation at Web App Projects "
-                        "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
-                        "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
-                    )
-                else:
-                    body_core = (
-                        "Thank you for reaching out via email! I am ready to help with your Automation and Web App Projects—"
-                        "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
-                        "What specific automation or web app project can I help you build?"
-                    )
-            formatted_email_reply = f"Dear {sender_name_val},\n\n{body_core}\n\nRegards,\nGlennard"
-            single_line_email = re.sub(r"\s+", " ", formatted_email_reply.replace("|", "/")).strip()
-            page_label = str(pipe_node.get("pageName") or "Glennard (glennard.tasico.va@gmail.com)").strip()
-            prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
-            reply_entry = f"{page_label}: {single_line_email}"
-            updated_pipe = prev_pipe
-            if single_line_email:
-                last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
-                if not prev_pipe:
-                    updated_pipe = reply_entry
-                elif body_core[:40].lower() not in last_seg_low:
-                    updated_pipe = f"{prev_pipe} | {reply_entry}"
-            return {
-                **pipe_node,
-                "aiReplyText": formatted_email_reply,
-                "emailBodyText": formatted_email_reply,
-                "colBWithAiReply": updated_pipe,
-                "pipeConversationWithReply": updated_pipe,
-            }
-
-        clean_reply = re.sub(r"\s+", " ", raw_reply.replace("|", "/")).strip()
-        if not clean_reply or "apologies for the brief delay" in clean_reply.lower():
-            guide = re.sub(r"\s+", " ", str(pipe_node.get("matchedScriptGuide") or "")).strip()
-            lang_low = str(pipe_node.get("detectedLanguage") or "").lower()
-            if guide:
-                clean_reply = guide
-            elif "tagalog" in lang_low or "taglish" in lang_low:
-                clean_reply = (
-                    "Salamat sa comment/message! Nandito ako para tumulong sa inyong Automation at Web App Projects "
-                    "(tulad ng AI chatbots, webhook/API integrations, at workflow automations). "
-                    "Anong specific na automation o web app project ang gusto ninyong ipagawa o i-automate?"
-                )
-            else:
-                clean_reply = (
-                    "Thanks for reaching out! I'm right here and ready to help with your Automation and Web App Projects—"
-                    "whether you need custom workflow automations, webhook/API integrations, AI chatbots, or a full web application. "
-                    "What specific automation or web app project can I help you build?"
-                )
-        page_label = str(pipe_node.get("pageName") or "GlennBot Automations").strip()
-        prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
-        reply_entry = f"{page_label}: {clean_reply}"
-        updated_pipe = prev_pipe
-        if clean_reply:
-            last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
-            if not prev_pipe:
-                updated_pipe = reply_entry
-            elif clean_reply.lower() not in last_seg_low:
-                updated_pipe = f"{prev_pipe} | {reply_entry}"
-        return {
-            **pipe_node,
-            "aiReplyText": clean_reply,
-            "colBWithAiReply": updated_pipe,
-            "pipeConversationWithReply": updated_pipe,
-        }
-
-    if is_custom_pipe_or_dm_code:
-        wh_data = (
-            node_outputs.get("Webhook Trigger")
-            or node_outputs.get("Webhook")
-            or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
-            or current_json
-        )
-        root_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
-        wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
-
-        is_email_workflow = (
-            "emailThreadId" in js_code
-            or "build email thread" in node_name_low
-            or "Read Conversations.xlsx Sheet3" in js_code
-            or "Sheet3" in js_code
-        )
-        is_dm_workflow = (
-            not is_email_workflow
-            and (
-                "dmThreadId" in js_code
-                or "build dm thread" in node_name_low
-                or "Read Conversations.xlsx Sheet2" in js_code
-            )
-        )
-        if is_email_workflow:
-            conv_sheet = (
-                node_outputs.get("Read Conversations.xlsx Sheet3")
-                or node_outputs.get("Read Conversations.xlsx (Sheet3 - Files Modal)")
-                or next((v for k, v in node_outputs.items() if "conversations.xlsx" in k.lower() and "read" in k.lower()), None)
-                or {}
-            )
-        elif is_dm_workflow:
-            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
-        else:
-            conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet1") or {}
-        script_sheet = (
-            node_outputs.get("Read Script.xlsx Sheet1")
-            or node_outputs.get("Read Script.xlsx (Files Modal Knowledge Base)")
-            or next((v for k, v in node_outputs.items() if "script.xlsx" in k.lower() and "read" in k.lower()), None)
-            or current_json
-            or {}
-        )
-
-        conv_rows = conv_sheet.get("rows") if isinstance(conv_sheet.get("rows"), list) else []
-        conv_cells = conv_sheet.get("cells") if isinstance(conv_sheet.get("cells"), dict) else {}
-        script_rows = script_sheet.get("rows") if isinstance(script_sheet.get("rows"), list) else []
-        script_cells = script_sheet.get("cells") if isinstance(script_sheet.get("cells"), dict) else {}
-
-        def _extract_ab_pairs(rows_arr: List[Any], cells_map: Dict[str, Any]) -> List[Dict[str, Any]]:
-            out_pairs: List[Dict[str, Any]] = []
-            seen_r: Set[int] = set()
-            for r_obj in rows_arr:
-                if not isinstance(r_obj, dict):
-                    continue
-                rn = int(r_obj.get("_row_number") or r_obj.get("row_number") or 0)
-                v_map = r_obj.get("values") if isinstance(r_obj.get("values"), dict) else r_obj
-                ca = str(v_map.get("A") or v_map.get("Thread ID") or v_map.get("Questions") or v_map.get("Question") or v_map.get("Keywords") or "").strip()
-                cb = str(v_map.get("B") or v_map.get("Conversations") or v_map.get("Conversation") or v_map.get("Answers") or v_map.get("Answer") or v_map.get("Script") or "").strip()
-                if not ca or not cb:
-                    raw_keys = [k for k in v_map.keys() if not str(k).startswith("_") and str(k) not in ("row_number", "values")]
-                    if not ca and len(raw_keys) >= 1:
-                        ca = str(v_map.get(raw_keys[0]) or "").strip()
-                    if not cb and len(raw_keys) >= 2:
-                        cb = str(v_map.get(raw_keys[1]) or "").strip()
-                if rn > 0:
-                    seen_r.add(rn)
-                if ca or cb:
-                    out_pairs.append({"rowNum": rn, "colA": ca, "colB": cb})
-            r_nums_set: Set[int] = set()
-            for ck in cells_map.keys():
-                mc = re.match(r"^([A-Za-z]+)(\d+)$", str(ck).strip())
-                if mc:
-                    rn_c = int(mc.group(2))
-                    if rn_c >= 1 and rn_c not in seen_r:
-                        r_nums_set.add(rn_c)
-            for rn_c in sorted(r_nums_set):
-                ca = str(cells_map.get(f"A{rn_c}") or cells_map.get(f"a{rn_c}") or "").strip()
-                cb = str(cells_map.get(f"B{rn_c}") or cells_map.get(f"b{rn_c}") or "").strip()
-                if ca or cb:
-                    out_pairs.append({"rowNum": rn_c, "colA": ca, "colB": cb})
-            return out_pairs
-
-        parsed_conv_rows = _extract_ab_pairs(conv_rows, conv_cells)
-        script_wb_title = str(script_sheet.get("workbook_title") or script_sheet.get("title") or "Script.xlsx").lower()
-        parsed_script_rows = _extract_ab_pairs(script_rows, script_cells) if "conversation" not in script_wb_title else []
-
-        # Helper for typo-tolerant Script.xlsx Column A -> Column B matching in Python
-        stop_words_py = {
-            "the", "is", "are", "was", "were", "be", "to", "of", "and", "a", "in", "that", "have", "it",
-            "for", "on", "with", "as", "do", "at", "this", "but", "by", "from", "or", "an", "so", "if",
-            "can", "you", "your", "me", "my", "we", "our", "what", "how", "when", "where", "who", "why",
-            "glennbot", "glennard", "tasico", "automations",
-            "ang", "ng", "mga", "sa", "na", "pa", "po", "opo", "ba", "kasi", "naman", "lang", "din", "rin",
-            "ito", "iyan", "iyon", "ung", "yung", "yong", "ko", "mo", "niya", "natin", "namin", "nyo",
-            "at", "ay", "may", "para", "kung", "kapag", "pag", "nga", "daw", "raw", "pala", "muna"
-        }
-
-        tagalog_to_english_kw = {
-            "magkano": ["pricing", "rates", "cost", "quote"],
-            "presyo": ["pricing", "rates", "cost"],
-            "bayad": ["pricing", "cost"],
-            "serbisyo": ["services", "offer"],
-            "alok": ["services", "offer"],
-            "gawa": ["build", "services"],
-            "paano": ["inquire", "started", "contact"],
-            "pano": ["inquire", "started", "contact"],
-            "tawag": ["call", "schedule", "meeting"],
-            "usap": ["call", "contact", "inquire"],
-            "katagal": ["timeline", "turnaround", "long"],
-            "araw": ["timeline", "days"],
-        }
-
-        def _tokenize_py(txt: str) -> List[str]:
-            words = re.sub(r"[^a-z0-9\u00c0-\u024f]+", " ", str(txt or "").lower()).strip().split()
-            tokens: List[str] = []
-            for w in words:
-                if w in tagalog_to_english_kw:
-                    for eq_w in tagalog_to_english_kw[w]:
-                        if eq_w not in tokens:
-                            tokens.append(eq_w)
-                if len(w) >= 2 and w not in stop_words_py and w not in tokens:
-                    tokens.append(w)
-            return tokens
-
-        def _stem_py(w: str) -> str:
-            return re.sub(r"(?:ing|ed|es|s)$", "", str(w or "").lower())
-
-        def _dl_dist_py(s1: str, s2: str) -> int:
-            a_s, b_s = s1.lower(), s2.lower()
-            if a_s == b_s:
-                return 0
-            m_l, n_l = len(a_s), len(b_s)
-            if not m_l:
-                return n_l
-            if not n_l:
-                return m_l
-            dp = [[0] * (n_l + 1) for _ in range(m_l + 1)]
-            for i_idx in range(m_l + 1):
-                dp[i_idx][0] = i_idx
-            for j_idx in range(n_l + 1):
-                dp[0][j_idx] = j_idx
-            for i_idx in range(1, m_l + 1):
-                for j_idx in range(1, n_l + 1):
-                    cost = 0 if a_s[i_idx - 1] == b_s[j_idx - 1] else 1
-                    dp[i_idx][j_idx] = min(
-                        dp[i_idx - 1][j_idx] + 1,
-                        dp[i_idx][j_idx - 1] + 1,
-                        dp[i_idx - 1][j_idx - 1] + cost
-                    )
-                    if i_idx > 1 and j_idx > 1 and a_s[i_idx - 1] == b_s[j_idx - 2] and a_s[i_idx - 2] == b_s[j_idx - 1]:
-                        dp[i_idx][j_idx] = min(dp[i_idx][j_idx], dp[i_idx - 2][j_idx - 2] + 1)
-            return dp[m_l][n_l]
-
-        def _word_sim_py(w1: str, w2: str) -> float:
-            if not w1 or not w2:
-                return 0.0
-            if w1 == w2:
-                return 1.0
-            st1, st2 = _stem_py(w1), _stem_py(w2)
-            if len(st1) >= 3 and st1 == st2:
-                return 0.95
-            if len(w1) >= 4 and len(w2) >= 4 and (w1 in w2 or w2 in w1):
-                return 0.88
-            if len(st1) >= 4 and len(st2) >= 4 and (st1 in st2 or st2 in st1):
-                return 0.85
-            max_l = max(len(st1), len(st2))
-            if max_l < 4:
-                return 0.0
-            sim = 1.0 - (_dl_dist_py(st1, st2) / float(max_l))
-            return sim if sim >= 0.72 else 0.0
-
-        def _score_script_rows_py(query_text: str, thread_text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-            header_tokens_a = ("keyword", "keywords", "key sentence", "key phrases", "question", "questions", "tanong", "column a", "trigger", "topic", "thread id")
-            header_tokens_b = ("script", "answer", "answers", "reply", "replies", "sagot", "response", "column b", "conversations")
-            valid_entries: List[Dict[str, Any]] = []
-            for idx_sr, sr in enumerate(parsed_script_rows):
-                rn_s = int(sr.get("rowNum") or (idx_sr + 1))
-                ca_s = re.sub(r"\s+", " ", str(sr.get("colA") or "")).strip()
-                cb_s = re.sub(r"\s+", " ", str(sr.get("colB") or "")).strip()
-                if not ca_s or not cb_s:
-                    continue
-                if rn_s == 1 and (any(h in ca_s.lower() for h in header_tokens_a) or any(h in cb_s.lower() for h in header_tokens_b)):
-                    continue
-                valid_entries.append({"rowNumber": rn_s, "keywordsRaw": ca_s, "answerGuide": cb_s})
-
-            q_clean = re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", str(query_text or "").lower())
-            q_clean = re.sub(r"\s+", " ", q_clean).strip()
-            q_tokens = _tokenize_py(query_text)
-            ctx_tokens = _tokenize_py(thread_text)
-
-            scored_list: List[Dict[str, Any]] = []
-            for ent in valid_entries:
-                kw_raw = ent["keywordsRaw"]
-                kw_low = kw_raw.lower()
-                kw_clean = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", kw_low)).strip()
-                phrases = [
-                    re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", p)).strip()
-                    for p in re.split(r"[,;|/\n?]+", kw_low)
-                ]
-                phrases = [p for p in phrases if p]
-                kw_tokens = _tokenize_py(kw_raw)
-                sc = 0
-                if kw_clean and q_clean and (kw_clean in q_clean or (len(q_clean) >= 4 and q_clean in kw_clean)):
-                    sc += 45
-                for ph in phrases:
-                    if len(ph) >= 3 and ph in q_clean:
-                        sc += 30 + min(len(ph.split()) * 5, 20)
-                t_hits = 0.0
-                for kt in kw_tokens:
-                    best_s = max((_word_sim_py(mt, kt) for mt in q_tokens), default=0.0)
-                    if best_s >= 0.72:
-                        t_hits += best_s
-                        sc += round(14 * best_s)
-                if t_hits > 0:
-                    for kt in kw_tokens:
-                        if any(_word_sim_py(ct, kt) >= 0.8 for ct in ctx_tokens):
-                            sc += 2
-                    if kw_tokens:
-                        sc += round((t_hits / len(kw_tokens)) * 18)
-                scored_list.append({**ent, "score": sc})
-            scored_list.sort(key=lambda x: x["score"], reverse=True)
-            return valid_entries, [s for s in scored_list if s["score"] >= 8][:3]
-
-        if is_email_workflow:
-            sb_em_q = node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)") or {}
-            msg_nested_em = wb.get("message") if isinstance(wb.get("message"), dict) else {}
-            acc_id_em = str(wb.get("account_id") or "email_gmail_ca_svlaQjI-x1S7").strip()
-            acc_email_em = str(wb.get("account_email") or wb.get("to") or msg_nested_em.get("to") or "glennard.tasico.va@gmail.com").strip()
-            msg_id_em = str(wb.get("message_id") or wb.get("id") or msg_nested_em.get("id") or "").strip()
-            thread_id_em = str(wb.get("thread_id") or msg_nested_em.get("thread_id") or msg_id_em or "").strip()
-            subject_em = str(wb.get("subject") or msg_nested_em.get("subject") or "Inquiry").strip() or "Inquiry"
-            reply_subject_em = subject_em if subject_em.lower().startswith("re:") else f"Re: {subject_em}"
-
-            raw_sender_str = str(wb.get("sender") or msg_nested_em.get("sender") or "").strip()
-            raw_s_name = str(wb.get("sender_name") or msg_nested_em.get("sender_name") or "").strip()
-            raw_s_email = str(wb.get("sender_email") or msg_nested_em.get("sender_email") or "").strip()
-            m_em = re.match(r'^"?([^"<]+)"?\s*<([^>]+)>$', raw_sender_str)
-            if m_em:
-                if not raw_s_name or "@" in raw_s_name:
-                    raw_s_name = m_em.group(1).strip()
-                if not raw_s_email:
-                    raw_s_email = m_em.group(2).strip()
-            if not raw_s_email:
-                found_ems = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", f"{raw_sender_str} {raw_s_name}")
-                raw_s_email = found_ems[0] if found_ems else ""
-
-            clean_sender_name = re.sub(r"<[^>]+>", "", raw_s_name).strip().strip('"').strip("'")
-            if not clean_sender_name or "@" in clean_sender_name:
-                local_part = (raw_s_email.split("@")[0] if "@" in raw_s_email else clean_sender_name).strip()
-                local_words = [w.capitalize() for w in re.split(r"[._\-+\d]+", local_part) if len(w) >= 2]
-                clean_sender_name = " ".join(local_words) if local_words else "Valued Client"
-
-            raw_body_em = str(
-                wb.get("body")
-                or msg_nested_em.get("body")
-                or wb.get("snippet")
-                or msg_nested_em.get("snippet")
-                or (wb.get("message") if isinstance(wb.get("message"), str) else "")
-                or ""
-            ).strip()
-            # Strip quoted email reply chains ("On ... wrote:", "-----Original Message-----", "> ...")
-            body_lines_clean: List[str] = []
-            for ln in raw_body_em.splitlines():
-                ln_s = ln.strip()
-                if re.match(r"^on\s+.+wrote:\s*$", ln_s, re.I) or ln_s.startswith("-----Original Message-----") or ln_s.startswith("From: "):
-                    break
-                if ln_s.startswith(">"):
-                    continue
-                body_lines_clean.append(ln_s)
-            latest_email_body = re.sub(r"\s+", " ", " ".join(body_lines_clean).replace("|", "/")).strip()
-            if not latest_email_body:
-                latest_email_body = re.sub(r"\s+", " ", raw_body_em.replace("|", "/")).strip() or subject_em
-
-            email_thread_id = thread_id_em or msg_id_em or raw_s_email or "email_thread"
-            is_own_email = bool(
-                wb.get("is_own")
-                or (raw_s_email and "glennard.tasico.va@gmail.com" in raw_s_email.lower() and not msg_id_em.startswith("test_"))
-            )
-            speaker_em = "Glennard (glennard.tasico.va@gmail.com)" if is_own_email else f"{clean_sender_name} ({raw_s_email})"
-            new_entry_em = f"{speaker_em} [Subject: {subject_em}]: {latest_email_body}" if latest_email_body else ""
-
-            matched_row_idx_em: Optional[int] = None
-            existing_pipe_em = ""
-            cand_em_tids = {email_thread_id, thread_id_em, msg_id_em, raw_s_email} - {""}
-            for pr in parsed_conv_rows:
-                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "email", "sender"):
-                    continue
-                if pr["colA"] and (pr["colA"] in cand_em_tids or any(cid_k in pr["colA"] for cid_k in cand_em_tids if len(cid_k) >= 6)):
-                    matched_row_idx_em = pr["rowNum"]
-                    existing_pipe_em = pr["colB"]
-                    break
-
-            next_empty_em = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
-            if next_empty_em < 2:
-                next_empty_em = 2
-            target_row_idx_em = matched_row_idx_em if matched_row_idx_em is not None else next_empty_em
-
-            em_segments: List[str] = []
-            def _add_em_seg(s_raw: str) -> None:
-                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
-                if not sc:
-                    return
-                if em_segments and em_segments[-1].lower() == sc.lower():
-                    return
-                em_segments.append(sc)
-
-            if existing_pipe_em:
-                for pt in existing_pipe_em.split("|"):
-                    for sl in pt.splitlines():
-                        _add_em_seg(sl)
-            if new_entry_em:
-                _add_em_seg(new_entry_em)
-            pipe_conv_em = " | ".join(em_segments)
-
-            query_for_script = f"{subject_em} {latest_email_body}".strip()
-            valid_scripts_em, top_matches_em = _score_script_rows_py(query_for_script, pipe_conv_em)
-            best_match_em = top_matches_em[0] if top_matches_em else None
-            has_match_em = bool(best_match_em and best_match_em.get("score", 0) >= 8)
-
-            faq_block_em = "\n".join(
-                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
-                for s in valid_scripts_em
-            ) or "(No rows found in Script.xlsx Sheet1 yet)"
-            closest_block_em = "\n\n".join(
-                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
-                for idx_m, m in enumerate(top_matches_em)
-            ) if has_match_em else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
-
-            ai_prompt_em = (
-                f"You are replying to an incoming client Email sent to glennard.tasico.va@gmail.com as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin').\n\n"
-                f"SCRIPT-BASED EMAIL REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet3 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
-                f"1. Read the Full Email Thread History in Sheet3 (separated by '|') carefully so you remember the ongoing topic and context.\n"
-                f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match {clean_sender_name}'s Latest Email Subject (\"{subject_em}\") and Message (\"{latest_email_body}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
-                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom email reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
-                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the email is NOT related to any information in \"Script.xlsx\", warmly acknowledge their email and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
-                f"5. MANDATORY EMAIL FORMAT: Format your response as a complete email starting with:\n"
-                f"Dear {clean_sender_name},\n\n"
-                f"[Your custom helpful response in the sender's language]\n\n"
-                f"Regards,\n"
-                f"Glennard\n\n"
-                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block_em}\n\n"
-                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block_em}\n\n"
-                f"Email Thread ID: {email_thread_id}\n"
-                f"Full Email Thread History in Sheet3 (separated by |):\n{pipe_conv_em}\n\n"
-                f"Sender Name: {clean_sender_name} ({raw_s_email})\n"
-                f"Email Subject: \"{subject_em}\"\n"
-                f"Latest Email from {clean_sender_name} ({raw_s_email}): \"{latest_email_body}\"\n\n"
-                f"Write your custom email reply to {clean_sender_name} in the exact same language as their email, starting with 'Dear {clean_sender_name},' and ending with 'Regards,\\nGlennard':"
-            )
-            return {
-                "queueId": str(sb_em_q.get("queueId") or sb_em_q.get("queue_id") or ""),
-                "queuePosition": int(sb_em_q.get("queuePosition") or 1),
-                "sheetRowIdx": target_row_idx_em,
-                "targetRowNumber": target_row_idx_em,
-                "isExistingThread": matched_row_idx_em is not None,
-                "emailThreadId": email_thread_id,
-                "colAThreadId": email_thread_id,
-                "pipeConversation": pipe_conv_em,
-                "colBConversation": pipe_conv_em,
-                "threadId": thread_id_em or email_thread_id,
-                "messageId": msg_id_em,
-                "accountId": acc_id_em,
-                "accountEmail": acc_email_em,
-                "pageName": "Glennard (glennard.tasico.va@gmail.com)",
-                "senderName": clean_sender_name,
-                "senderEmail": raw_s_email,
-                "emailSubject": subject_em,
-                "replySubject": reply_subject_em,
-                "latestEmailBody": latest_email_body,
-                "isOwnEmail": is_own_email,
-                "shouldAiReply": (not is_own_email) and bool(raw_s_email) and len(latest_email_body) > 0,
-                "detectedLanguage": "Auto-Detect (Match Sender Language)",
-                "hasScriptMatch": has_match_em,
-                "matchedScriptRow": best_match_em["rowNumber"] if best_match_em else None,
-                "matchedScriptKeywords": best_match_em["keywordsRaw"] if best_match_em else "",
-                "matchedScriptGuide": best_match_em["answerGuide"] if best_match_em else "",
-                "aiContextPrompt": ai_prompt_em,
-                "platform": "email",
-            }
-
-        if is_dm_workflow:
-            sb_dm_q = node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)") or {}
-            msg_nested = wb.get("message") if isinstance(wb.get("message"), dict) else {}
-            conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or msg_nested.get("conversation_id") or "").strip()
-            participant_id = str(wb.get("participant_id") or msg_nested.get("sender_id") or wb.get("sender_id") or wb.get("sender_phone") or "").strip()
-            participant_name = str(wb.get("participant_name") or msg_nested.get("sender_name") or wb.get("sender_name") or "Client").strip()
-            msg_id = str(wb.get("message_id") or wb.get("id") or msg_nested.get("id") or "").strip()
-            raw_acc = str(wb.get("account_name") or wb.get("username") or "").strip()
-            raw_plat = str(wb.get("platform") or msg_nested.get("platform") or "").strip().lower()
-            compact_acc_dm = (raw_acc + " " + str(wb.get("username") or "") + " " + str(wb.get("recipient_phone") or "")).replace(" ", "")
-            is_wa = (
-                raw_plat == "whatsapp"
-                or str(wb.get("account_id") or "").strip() in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
-                or conv_id.startswith("wa_live_")
-                or "glennard tasico" in raw_acc.lower()
-                or "happyfinds" in raw_acc.lower()
-                or "9175497760" in compact_acc_dm
-                or "9952601753" in compact_acc_dm
-            )
-            is_ig = (
-                not is_wa
-                and (
-                    raw_plat == "instagram"
-                    or str(wb.get("account_id") or "").strip() == "6ad9e9b2e5d470e468e58d87"
-                    or conv_id.startswith("ig_live_")
-                    or "glennard.tasico.va" in raw_acc.lower()
-                )
-            )
-            raw_wb_aid = str(wb.get("account_id") or "").strip()
-            if is_wa and raw_wb_aid in ("", "6adda70399e7b30829e8859c", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87"):
-                acc_id = "6af6210fb722435238788b8f"
-            else:
-                acc_id = str(
-                    raw_wb_aid
-                    or ("6af6210fb722435238788b8f" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
-                ).strip()
-            acc_name = "Glennard Tasico (+63 917 549 7760)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
-            is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", msg_nested.get("is_own", False))))
-            raw_text = str(
-                wb.get("text")
-                or wb.get("message_text")
-                or msg_nested.get("message")
-                or msg_nested.get("text")
-                or (wb.get("message") if isinstance(wb.get("message"), str) else "")
-                or ""
-            ).strip()
-            clean_msg = re.sub(r"\s+", " ", raw_text.replace("|", "/")).strip()
-            def _norm_tid(val_str: str) -> str:
-                s_v = str(val_str or "").strip()
-                if s_v.startswith(("fb_", "ig_", "wa_", "dm_", "conv_", "portfolio_")):
-                    return s_v
-                return s_v.split("_")[-1].strip() if "_" in s_v else s_v
-
-            dm_thread_id = _norm_tid(conv_id or participant_id) or f"dm_{msg_id}"
-            speaker = acc_name if is_own_msg else participant_name
-            new_entry = f"{speaker}: {clean_msg}" if clean_msg else ""
-
-            matched_row_idx: Optional[int] = None
-            existing_pipe = ""
-            cand_tids = {dm_thread_id, conv_id, _norm_tid(conv_id), participant_id, _norm_tid(participant_id)} - {""}
-            for pr in parsed_conv_rows:
-                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "conversation_id", "conversation id"):
-                    continue
-                if pr["colA"] and (pr["colA"] in cand_tids or _norm_tid(pr["colA"]) in cand_tids):
-                    matched_row_idx = pr["rowNum"]
-                    existing_pipe = pr["colB"]
-                    break
-
-            next_empty = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
-            if next_empty < 2:
-                next_empty = 2
-            target_row_idx = matched_row_idx if matched_row_idx is not None else next_empty
-
-            segments_list: List[str] = []
-            def _add_dm_seg(s_raw: str) -> None:
-                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
-                if not sc:
-                    return
-                sc_low = sc.lower()
-                if segments_list and segments_list[-1].lower() == sc_low:
-                    return
-                segments_list.append(sc)
-
-            if existing_pipe:
-                for pt in existing_pipe.split("|"):
-                    for sl in pt.splitlines():
-                        _add_dm_seg(sl)
-            raw_dm_tr = str(wb.get("dm_transcript") or "").strip()
-            if raw_dm_tr:
-                for sl in raw_dm_tr.splitlines():
-                    for pt in sl.split("|"):
-                        _add_dm_seg(pt)
-            if new_entry:
-                _add_dm_seg(new_entry)
-            pipe_conv = " | ".join(segments_list)
-
-            valid_scripts, top_matches = _score_script_rows_py(clean_msg, pipe_conv)
-            best_match = top_matches[0] if top_matches else None
-            has_match = bool(best_match and best_match.get("score", 0) >= 8)
-
-            faq_block = "\n".join(
-                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
-                for s in valid_scripts
-            ) or "(No rows found in Script.xlsx Sheet1 yet)"
-            closest_block = "\n\n".join(
-                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
-                for idx_m, m in enumerate(top_matches)
-            ) if has_match else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
-
-            plat_label = (
-                "WhatsApp Direct Message (Glennard Tasico • +63 917 549 7760)" if is_wa
-                else ("Instagram Direct Message (@glennard.tasico.va — GlennBot Automations)" if is_ig else "Facebook Page (GlennBot Automations)")
-            )
-            ai_prompt = (
-                f"You are replying directly in a Private Direct Message via {plat_label} as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin') through \"{acc_name}\".\n\n"
-                f"SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet2 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
-                f"1. Read the Full DM Conversation History in Sheet2 (separated by '|') carefully so you remember the ongoing topic and context.\n"
-                f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match the client's Latest Direct Message (\"{clean_msg}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
-                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
-                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the message is NOT related to any information in \"Script.xlsx\" (e.g. \"I need you!!\" or unrelated remarks), warmly acknowledge their message and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n\n"
-                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
-                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
-                f"Conversation ID: {dm_thread_id}\n"
-                f"Full DM Conversation History in Sheet2 (separated by |):\n{pipe_conv}\n\n"
-                f"Latest Direct Message from {participant_name}: \"{clean_msg}\"\n\n"
-                f"Reply directly to {participant_name} in the exact same language as their latest message:"
-            )
-            return {
-                "queueId": str(sb_dm_q.get("queueId") or sb_dm_q.get("queue_id") or ""),
-                "queuePosition": int(sb_dm_q.get("queuePosition") or 1),
-                "sheetRowIdx": target_row_idx,
-                "targetRowNumber": target_row_idx,
-                "isExistingThread": matched_row_idx is not None,
-                "dmThreadId": dm_thread_id,
-                "colAThreadId": dm_thread_id,
-                "pipeConversation": pipe_conv,
-                "colBConversation": pipe_conv,
-                "conversationId": conv_id or dm_thread_id,
-                "accountId": acc_id,
-                "accountName": acc_name,
-                "pageName": acc_name,
-                "participantId": participant_id or dm_thread_id,
-                "participantName": participant_name,
-                "messageId": msg_id,
-                "latestMessage": clean_msg,
-                "isOwnMessage": is_own_msg,
-                "shouldAiReply": (not is_own_msg) and len(clean_msg) > 0,
-                "detectedLanguage": "Auto-Detect (Match Sender Language)",
-                "hasScriptMatch": has_match,
-                "matchedScriptRow": best_match["rowNumber"] if best_match else None,
-                "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
-                "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
-                "aiContextPrompt": ai_prompt,
-                "platform": "whatsapp" if is_wa else ("instagram" if is_ig else "facebook"),
-            }
-        else:
-            # Post Comment workflow (`Build Thread ID & Pipe Conversation`) Python execution
-            def _norm_cid(val_str: Any) -> str:
-                s_v = str(val_str or "").strip()
-                return s_v.split("_")[-1].strip() if "_" in s_v else s_v
-
-            raw_cid = str(wb.get("comment_id") or "").strip()
-            raw_parent = str(wb.get("parent_comment_id") or wb.get("replied_to_id") or "").strip()
-            raw_root = str(wb.get("thread_id") or wb.get("root_comment_id") or raw_parent or raw_cid).strip()
-            resolved_tid = _norm_cid(raw_root) or _norm_cid(raw_cid) or "unknown_thread"
-
-            cand_cids: Set[str] = {resolved_tid}
-            for raw_item in [raw_root, raw_parent, raw_cid] + list(wb.get("thread_comment_ids") or []):
-                nc = _norm_cid(raw_item)
-                if nc:
-                    cand_cids.add(nc)
-
-            is_own_c = bool(wb.get("is_own_comment") or wb.get("is_own"))
-            raw_plat = str(wb.get("platform") or "facebook").strip().lower()
-            raw_acc_id = str(wb.get("account_id") or "").strip()
-            raw_acc_name = str(wb.get("account_name") or wb.get("username") or "GlennBot Automations").strip()
-            raw_post_id = str(wb.get("post_id") or "").strip()
-
-            is_tt = (
-                "tiktok" in raw_plat
-                or raw_acc_id == "6af0b1b7818eb5c88d1e880e"
-                or "glennbot.automation" in raw_acc_name.lower()
-                or raw_post_id.startswith("tt_")
-            )
-            is_ig = (
-                not is_tt
-                and (
-                    "instagram" in raw_plat
-                    or raw_acc_id == "6ad9e9b2e5d470e468e58d87"
-                    or "glennard.tasico.va" in raw_acc_name.lower()
-                    or raw_post_id.startswith("18")
-                )
-            )
-            resolved_plat = "tiktok" if is_tt else ("instagram" if is_ig else "facebook")
-            resolved_acc_id = (
-                (raw_acc_id if raw_acc_id and raw_acc_id not in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87") else "6af0b1b7818eb5c88d1e880e")
-                if is_tt
-                else (
-                    (raw_acc_id if raw_acc_id and raw_acc_id != "6af0b109818eb5c88d1e87a6" else "6ad9e9b2e5d470e468e58d87")
-                    if is_ig
-                    else (raw_acc_id or "6af0b109818eb5c88d1e87a6")
-                )
-            )
-            page_name = "@glennbot.automation" if is_tt else ("@glennard.tasico.va" if is_ig else (raw_acc_name or "GlennBot Automations"))
-            commenter_name = str(
-                (wb.get("parent_author_name") or "Commenter")
-                if is_own_c
-                else (wb.get("author_name") or "Commenter")
-            ).strip()
-            speaker_name = page_name if is_own_c else commenter_name
-            raw_msg = re.sub(r"\s+", " ", str(wb.get("message") or wb.get("text") or "")).strip()
-            clean_comment_for_match = re.sub(
-                r"^(?:@?glennbot\s+automations|@?glennbot\.automation|@?glennard\.tasico\.va|@?glennard\s+tasico)[\s,:;\-]*",
-                "",
-                raw_msg,
-                flags=re.I
-            ).strip() or raw_msg
-
-            matched_row_idx_c: Optional[int] = None
-            existing_pipe_c = ""
-            for pr in parsed_conv_rows:
-                if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "comment id", "id"):
-                    continue
-                if pr["colA"] and (_norm_cid(pr["colA"]) in cand_cids or pr["colA"] in cand_cids):
-                    matched_row_idx_c = pr["rowNum"]
-                    existing_pipe_c = pr["colB"]
-                    break
-
-            next_empty_c = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
-            if next_empty_c < 2:
-                next_empty_c = 2
-            sheet_row_idx = matched_row_idx_c if matched_row_idx_c is not None else next_empty_c
-
-            segs_c: List[str] = []
-            def _add_c_seg(s_raw: str) -> None:
-                sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
-                if not sc:
-                    return
-                sc_low = sc.lower()
-                for ex_s in segs_c:
-                    if ex_s.lower() == sc_low:
-                        return
-                segs_c.append(sc)
-
-            if existing_pipe_c:
-                for pt in existing_pipe_c.split("|"):
-                    for sl in pt.splitlines():
-                        _add_c_seg(sl)
-            raw_tr = str(wb.get("thread_transcript") or "").strip()
-            if raw_tr:
-                for sl in raw_tr.splitlines():
-                    for pt in sl.split("|"):
-                        _add_c_seg(pt)
-            if raw_msg:
-                _add_c_seg(f"{speaker_name}: {raw_msg}")
-            col_b_conv = " | ".join(segs_c)
-
-            valid_scripts, top_matches = _score_script_rows_py(clean_comment_for_match, col_b_conv)
-            best_match = top_matches[0] if top_matches else None
-            has_match = bool(best_match and best_match.get("score", 0) >= 8)
-
-            faq_block = "\n".join(
-                f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
-                for s in valid_scripts
-            ) or "(No rows found in Script.xlsx Sheet1 yet)"
-            closest_block = "\n\n".join(
-                f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
-                for idx_m, m in enumerate(top_matches)
-            ) if has_match else "NONE — The commenter's message did not directly match any keyword/question in Column A of Script.xlsx. First double-check the Complete Script.xlsx Sheet1 Reference Table below; if genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
-
-            ai_prompt_c = (
-                f"You are replying to a public social media post comment as Glennard R. Tasico (speaking in FIRST-PERSON: 'I', 'me', 'my' in English, or 'ako', 'ko', 'akin' in Tagalog/Taglish) through \"{page_name}\".\n\n"
-                f"SCRIPT-BASED REPLY INSTRUCTIONS (FROM \"Script.xlsx\" Sheet1 & \"Conversations.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
-                f"1. FIRST, read the Full Thread Conversation History in Sheet1 (separated by '|') so you remember the full context.\n"
-                f"2. SECOND — SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Compare {commenter_name}'s Latest Comment (\"{clean_comment_for_match}\") against Column A (Keywords / Possible Questions) of \"Script.xlsx\" (Sheet1), including similar phrasing or typos (e.g., \"wehbooks\" -> \"webhooks\").\n"
-                f"3. WHEN A MATCH IS FOUND IN COLUMN A: Check its corresponding Column B (Reference Script / Core Answer) in \"Script.xlsx\" and use Column B's core answer to construct a natural, custom first-person reply in the commenter's language (DO NOT copy-paste Column B verbatim).\n"
-                f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If {commenter_name}'s comment (\"{clean_comment_for_match}\") is NOT related to any information in \"Script.xlsx\" (for example, general remarks like \"I need you!!\" or unrelated questions), warmly acknowledge their comment and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
-                f"5. NEVER output generic delay apologies like \"My apologies for the brief delay!\".\n\n"
-                f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
-                f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
-                f"Thread ID: {resolved_tid}\n"
-                f"Full Thread Conversation History in Sheet1 (separated by |):\n{col_b_conv}\n\n"
-                f"Latest Comment from {commenter_name}: \"{raw_msg}\"\n\n"
-                f"Write your custom first-person reply as Glennard (via {page_name}) in the exact language of the commenter:"
-            )
-            q_node_out = node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)") or {}
-            return {
-                "queueId": str(q_node_out.get("queueId") or q_node_out.get("queue_id") or ""),
-                "sheetRowIdx": sheet_row_idx,
-                "targetRowNumber": sheet_row_idx,
-                "colAThreadId": resolved_tid,
-                "threadId": resolved_tid,
-                "colBConversation": col_b_conv,
-                "pipeConversation": col_b_conv,
-                "shouldAiReply": (not is_own_c) and len(raw_msg) > 0,
-                "detectedLanguage": "Auto-Detect (Match Commenter Language)",
-                "hasScriptMatch": has_match,
-                "matchedScriptRow": best_match["rowNumber"] if best_match else None,
-                "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
-                "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
-                "aiContextPrompt": ai_prompt_c,
-                "targetCommentId": raw_cid,
-                "postId": raw_post_id,
-                "accountId": resolved_acc_id,
-                "pageName": page_name,
-                "platform": resolved_plat,
-                "commenterName": commenter_name,
-                "authorId": str(wb.get("author_id") or ""),
-            }
-
-    # 3. Fallback for arbitrary custom user-authored JS nodes via `node` CLI using stdin
-    try:
-        runner_payload = {
-            "current_json": current_json,
-            "node_outputs": node_outputs,
-            "js_code": js_code
-        }
-        wrapper_js = """
+  page_label = str(pipe_node.get("pageName") or "GlennBot Automations").strip()
+  prev_pipe = str(pipe_node.get("colBConversation") or pipe_node.get("pipeConversation") or "").strip()
+  reply_entry = f"{page_label}: {clean_reply}"
+  updated_pipe = prev_pipe
+  if clean_reply:
+   last_seg_low = prev_pipe.split("|")[-1].strip().lower() if prev_pipe else ""
+   if not prev_pipe:
+    updated_pipe = reply_entry
+   elif clean_reply.lower() not in last_seg_low:
+    updated_pipe = f"{prev_pipe} | {reply_entry}"
+  return {
+  **pipe_node,
+  "aiReplyText": clean_reply,
+  "colBWithAiReply": updated_pipe,
+  "pipeConversationWithReply": updated_pipe,
+  }
+ if is_custom_pipe_or_dm_code:
+  wh_data = (
+  node_outputs.get("Webhook Trigger")
+  or node_outputs.get("Webhook")
+  or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+  or current_json
+  )
+  root_body = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+  wb = root_body.get("data") if isinstance(root_body.get("data"), dict) else root_body
+  is_email_workflow = (
+  "emailThreadId" in js_code
+  or "build email thread" in node_name_low
+  or "Read Conversations.xlsx Sheet3" in js_code
+  or "Sheet3" in js_code
+  )
+  is_dm_workflow = (
+  not is_email_workflow
+  and (
+  "dmThreadId" in js_code
+  or "build dm thread" in node_name_low
+  or "Read Conversations.xlsx Sheet2" in js_code
+  )
+  )
+  if is_email_workflow:
+   conv_sheet = (
+   node_outputs.get("Read Conversations.xlsx Sheet3")
+   or node_outputs.get("Read Conversations.xlsx (Sheet3 - Files Modal)")
+   or next((v for k, v in node_outputs.items() if "conversations.xlsx" in k.lower() and "read" in k.lower()), None)
+   or {}
+   )
+  elif is_dm_workflow:
+   conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet2") or {}
+  else:
+   conv_sheet = node_outputs.get("Read Conversations.xlsx Sheet1") or {}
+  script_sheet = (
+  node_outputs.get("Read Script.xlsx Sheet1")
+  or node_outputs.get("Read Script.xlsx (Files Modal Knowledge Base)")
+  or next((v for k, v in node_outputs.items() if "script.xlsx" in k.lower() and "read" in k.lower()), None)
+  or current_json
+  or {}
+  )
+  conv_rows = conv_sheet.get("rows") if isinstance(conv_sheet.get("rows"), list) else []
+  conv_cells = conv_sheet.get("cells") if isinstance(conv_sheet.get("cells"), dict) else {}
+  script_rows = script_sheet.get("rows") if isinstance(script_sheet.get("rows"), list) else []
+  script_cells = script_sheet.get("cells") if isinstance(script_sheet.get("cells"), dict) else {}
+  def _extract_ab_pairs(rows_arr: List[Any], cells_map: Dict[str, Any]) -> List[Dict[str, Any]]:
+   out_pairs: List[Dict[str, Any]] = []
+   seen_r: Set[int] = set()
+   for r_obj in rows_arr:
+    if not isinstance(r_obj, dict):
+     continue
+    rn = int(r_obj.get("_row_number") or r_obj.get("row_number") or 0)
+    v_map = r_obj.get("values") if isinstance(r_obj.get("values"), dict) else r_obj
+    ca = str(v_map.get("A") or v_map.get("Thread ID") or v_map.get("Questions") or v_map.get("Question") or v_map.get("Keywords") or "").strip()
+    cb = str(v_map.get("B") or v_map.get("Conversations") or v_map.get("Conversation") or v_map.get("Answers") or v_map.get("Answer") or v_map.get("Script") or "").strip()
+    if not ca or not cb:
+     raw_keys = [k for k in v_map.keys() if not str(k).startswith("_") and str(k) not in ("row_number", "values")]
+     if not ca and len(raw_keys) >= 1:
+      ca = str(v_map.get(raw_keys[0]) or "").strip()
+     if not cb and len(raw_keys) >= 2:
+      cb = str(v_map.get(raw_keys[1]) or "").strip()
+    if rn > 0:
+     seen_r.add(rn)
+    if ca or cb:
+     out_pairs.append({"rowNum": rn, "colA": ca, "colB": cb})
+   r_nums_set: Set[int] = set()
+   for ck in cells_map.keys():
+    mc = re.match(r"^([A-Za-z]+)(\d+)$", str(ck).strip())
+    if mc:
+     rn_c = int(mc.group(2))
+     if rn_c >= 1 and rn_c not in seen_r:
+      r_nums_set.add(rn_c)
+   for rn_c in sorted(r_nums_set):
+    ca = str(cells_map.get(f"A{rn_c}") or cells_map.get(f"a{rn_c}") or "").strip()
+    cb = str(cells_map.get(f"B{rn_c}") or cells_map.get(f"b{rn_c}") or "").strip()
+    if ca or cb:
+     out_pairs.append({"rowNum": rn_c, "colA": ca, "colB": cb})
+   return out_pairs
+  parsed_conv_rows = _extract_ab_pairs(conv_rows, conv_cells)
+  script_wb_title = str(script_sheet.get("workbook_title") or script_sheet.get("title") or "Script.xlsx").lower()
+  parsed_script_rows = _extract_ab_pairs(script_rows, script_cells) if "conversation" not in script_wb_title else []
+  # Helper for typo-tolerant Script.xlsx Column A -> Column B matching in Python
+  stop_words_py = {
+  "the", "is", "are", "was", "were", "be", "to", "of", "and", "a", "in", "that", "have", "it",
+  "for", "on", "with", "as", "do", "at", "this", "but", "by", "from", "or", "an", "so", "if",
+  "can", "you", "your", "me", "my", "we", "our", "what", "how", "when", "where", "who", "why",
+  "glennbot", "glennard", "tasico", "automations",
+  "ang", "ng", "mga", "sa", "na", "pa", "po", "opo", "ba", "kasi", "naman", "lang", "din", "rin",
+  "ito", "iyan", "iyon", "ung", "yung", "yong", "ko", "mo", "niya", "natin", "namin", "nyo",
+  "at", "ay", "may", "para", "kung", "kapag", "pag", "nga", "daw", "raw", "pala", "muna"
+  }
+  tagalog_to_english_kw = {
+  "magkano": ["pricing", "rates", "cost", "quote"],
+  "presyo": ["pricing", "rates", "cost"],
+  "bayad": ["pricing", "cost"],
+  "serbisyo": ["services", "offer"],
+  "alok": ["services", "offer"],
+  "gawa": ["build", "services"],
+  "paano": ["inquire", "started", "contact"],
+  "pano": ["inquire", "started", "contact"],
+  "tawag": ["call", "schedule", "meeting"],
+  "usap": ["call", "contact", "inquire"],
+  "katagal": ["timeline", "turnaround", "long"],
+  "araw": ["timeline", "days"],
+  }
+  def _tokenize_py(txt: str) -> List[str]:
+   words = re.sub(r"[^a-z0-9\u00c0-\u024f]+", " ", str(txt or "").lower()).strip().split()
+   tokens: List[str] = []
+   for w in words:
+    if w in tagalog_to_english_kw:
+     for eq_w in tagalog_to_english_kw[w]:
+      if eq_w not in tokens:
+       tokens.append(eq_w)
+    if len(w) >= 2 and w not in stop_words_py and w not in tokens:
+     tokens.append(w)
+   return tokens
+  def _stem_py(w: str) -> str:
+   return re.sub(r"(?:ing|ed|es|s)$", "", str(w or "").lower())
+  def _dl_dist_py(s1: str, s2: str) -> int:
+   a_s, b_s = s1.lower(), s2.lower()
+   if a_s == b_s:
+    return 0
+   m_l, n_l = len(a_s), len(b_s)
+   if not m_l:
+    return n_l
+   if not n_l:
+    return m_l
+   dp = [[0] * (n_l + 1) for _ in range(m_l + 1)]
+   for i_idx in range(m_l + 1):
+    dp[i_idx][0] = i_idx
+   for j_idx in range(n_l + 1):
+    dp[0][j_idx] = j_idx
+   for i_idx in range(1, m_l + 1):
+    for j_idx in range(1, n_l + 1):
+     cost = 0 if a_s[i_idx - 1] == b_s[j_idx - 1] else 1
+     dp[i_idx][j_idx] = min(
+     dp[i_idx - 1][j_idx] + 1,
+     dp[i_idx][j_idx - 1] + 1,
+     dp[i_idx - 1][j_idx - 1] + cost
+     )
+     if i_idx > 1 and j_idx > 1 and a_s[i_idx - 1] == b_s[j_idx - 2] and a_s[i_idx - 2] == b_s[j_idx - 1]:
+      dp[i_idx][j_idx] = min(dp[i_idx][j_idx], dp[i_idx - 2][j_idx - 2] + 1)
+   return dp[m_l][n_l]
+  def _word_sim_py(w1: str, w2: str) -> float:
+   if not w1 or not w2:
+    return 0.0
+   if w1 == w2:
+    return 1.0
+   st1, st2 = _stem_py(w1), _stem_py(w2)
+   if len(st1) >= 3 and st1 == st2:
+    return 0.95
+   if len(w1) >= 4 and len(w2) >= 4 and (w1 in w2 or w2 in w1):
+    return 0.88
+   if len(st1) >= 4 and len(st2) >= 4 and (st1 in st2 or st2 in st1):
+    return 0.85
+   max_l = max(len(st1), len(st2))
+   if max_l < 4:
+    return 0.0
+   sim = 1.0 - (_dl_dist_py(st1, st2) / float(max_l))
+   return sim if sim >= 0.72 else 0.0
+  def _score_script_rows_py(query_text: str, thread_text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+   header_tokens_a = ("keyword", "keywords", "key sentence", "key phrases", "question", "questions", "tanong", "column a", "trigger", "topic", "thread id")
+   header_tokens_b = ("script", "answer", "answers", "reply", "replies", "sagot", "response", "column b", "conversations")
+   valid_entries: List[Dict[str, Any]] = []
+   for idx_sr, sr in enumerate(parsed_script_rows):
+    rn_s = int(sr.get("rowNum") or (idx_sr + 1))
+    ca_s = re.sub(r"\s+", " ", str(sr.get("colA") or "")).strip()
+    cb_s = re.sub(r"\s+", " ", str(sr.get("colB") or "")).strip()
+    if not ca_s or not cb_s:
+     continue
+    if rn_s == 1 and (any(h in ca_s.lower() for h in header_tokens_a) or any(h in cb_s.lower() for h in header_tokens_b)):
+     continue
+    valid_entries.append({"rowNumber": rn_s, "keywordsRaw": ca_s, "answerGuide": cb_s})
+   q_clean = re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", str(query_text or "").lower())
+   q_clean = re.sub(r"\s+", " ", q_clean).strip()
+   q_tokens = _tokenize_py(query_text)
+   ctx_tokens = _tokenize_py(thread_text)
+   scored_list: List[Dict[str, Any]] = []
+   for ent in valid_entries:
+    kw_raw = ent["keywordsRaw"]
+    kw_low = kw_raw.lower()
+    kw_clean = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", kw_low)).strip()
+    phrases = [
+    re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\u00c0-\u024f\s]+", " ", p)).strip()
+    for p in re.split(r"[,;|/\n?]+", kw_low)
+    ]
+    phrases = [p for p in phrases if p]
+    kw_tokens = _tokenize_py(kw_raw)
+    sc = 0
+    if kw_clean and q_clean and (kw_clean in q_clean or (len(q_clean) >= 4 and q_clean in kw_clean)):
+     sc += 45
+    for ph in phrases:
+     if len(ph) >= 3 and ph in q_clean:
+      sc += 30 + min(len(ph.split()) * 5, 20)
+    t_hits = 0.0
+    for kt in kw_tokens:
+     best_s = max((_word_sim_py(mt, kt) for mt in q_tokens), default=0.0)
+     if best_s >= 0.72:
+      t_hits += best_s
+      sc += round(14 * best_s)
+    if t_hits > 0:
+     for kt in kw_tokens:
+      if any(_word_sim_py(ct, kt) >= 0.8 for ct in ctx_tokens):
+       sc += 2
+     if kw_tokens:
+      sc += round((t_hits / len(kw_tokens)) * 18)
+    scored_list.append({**ent, "score": sc})
+   scored_list.sort(key=lambda x: x["score"], reverse=True)
+   return valid_entries, [s for s in scored_list if s["score"] >= 8][:3]
+  if is_email_workflow:
+   sb_em_q = node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)") or {}
+   msg_nested_em = wb.get("message") if isinstance(wb.get("message"), dict) else {}
+   acc_id_em = str(wb.get("account_id") or "email_gmail_ca_svlaQjI-x1S7").strip()
+   acc_email_em = str(wb.get("account_email") or wb.get("to") or msg_nested_em.get("to") or "glennard.tasico.va@gmail.com").strip()
+   msg_id_em = str(wb.get("message_id") or wb.get("id") or msg_nested_em.get("id") or "").strip()
+   thread_id_em = str(wb.get("thread_id") or msg_nested_em.get("thread_id") or msg_id_em or "").strip()
+   subject_em = str(wb.get("subject") or msg_nested_em.get("subject") or "Inquiry").strip() or "Inquiry"
+   reply_subject_em = subject_em if subject_em.lower().startswith("re:") else f"Re: {subject_em}"
+   raw_sender_str = str(wb.get("sender") or msg_nested_em.get("sender") or "").strip()
+   raw_s_name = str(wb.get("sender_name") or msg_nested_em.get("sender_name") or "").strip()
+   raw_s_email = str(wb.get("sender_email") or msg_nested_em.get("sender_email") or "").strip()
+   m_em = re.match(r'^"?([^"<]+)"?\s*<([^>]+)>$', raw_sender_str)
+   if m_em:
+    if not raw_s_name or "@" in raw_s_name:
+     raw_s_name = m_em.group(1).strip()
+    if not raw_s_email:
+     raw_s_email = m_em.group(2).strip()
+   if not raw_s_email:
+    found_ems = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", f"{raw_sender_str} {raw_s_name}")
+    raw_s_email = found_ems[0] if found_ems else ""
+   clean_sender_name = re.sub(r"<[^>]+>", "", raw_s_name).strip().strip('"').strip("'")
+   if not clean_sender_name or "@" in clean_sender_name:
+    local_part = (raw_s_email.split("@")[0] if "@" in raw_s_email else clean_sender_name).strip()
+    local_words = [w.capitalize() for w in re.split(r"[._\-+\d]+", local_part) if len(w) >= 2]
+    clean_sender_name = " ".join(local_words) if local_words else "Valued Client"
+   raw_body_em = str(
+   wb.get("body")
+   or msg_nested_em.get("body")
+   or wb.get("snippet")
+   or msg_nested_em.get("snippet")
+   or (wb.get("message") if isinstance(wb.get("message"), str) else "")
+   or ""
+   ).strip()
+   # Strip quoted email reply chains ("On ... wrote:", "-----Original Message-----", "> ...")
+   body_lines_clean: List[str] = []
+   for ln in raw_body_em.splitlines():
+    ln_s = ln.strip()
+    if re.match(r"^on\s+.+wrote:\s*$", ln_s, re.I) or ln_s.startswith("-----Original Message-----") or ln_s.startswith("From: "):
+     break
+    if ln_s.startswith(">"):
+     continue
+    body_lines_clean.append(ln_s)
+   latest_email_body = re.sub(r"\s+", " ", " ".join(body_lines_clean).replace("|", "/")).strip()
+   if not latest_email_body:
+    latest_email_body = re.sub(r"\s+", " ", raw_body_em.replace("|", "/")).strip() or subject_em
+   email_thread_id = thread_id_em or msg_id_em or raw_s_email or "email_thread"
+   is_own_email = bool(
+   wb.get("is_own")
+   or (raw_s_email and "glennard.tasico.va@gmail.com" in raw_s_email.lower() and not msg_id_em.startswith("test_"))
+   )
+   speaker_em = "Glennard (glennard.tasico.va@gmail.com)" if is_own_email else f"{clean_sender_name} ({raw_s_email})"
+   new_entry_em = f"{speaker_em} [Subject: {subject_em}]: {latest_email_body}" if latest_email_body else ""
+   matched_row_idx_em: Optional[int] = None
+   existing_pipe_em = ""
+   cand_em_tids = {email_thread_id, thread_id_em, msg_id_em, raw_s_email} - {""}
+   for pr in parsed_conv_rows:
+    if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "email", "sender"):
+     continue
+    if pr["colA"] and (pr["colA"] in cand_em_tids or any(cid_k in pr["colA"] for cid_k in cand_em_tids if len(cid_k) >= 6)):
+     matched_row_idx_em = pr["rowNum"]
+     existing_pipe_em = pr["colB"]
+     break
+   next_empty_em = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+   if next_empty_em < 2:
+    next_empty_em = 2
+   target_row_idx_em = matched_row_idx_em if matched_row_idx_em is not None else next_empty_em
+   em_segments: List[str] = []
+   def _add_em_seg(s_raw: str) -> None:
+    sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+    if not sc:
+     return
+    if em_segments and em_segments[-1].lower() == sc.lower():
+     return
+    em_segments.append(sc)
+   if existing_pipe_em:
+    for pt in existing_pipe_em.split("|"):
+     for sl in pt.splitlines():
+      _add_em_seg(sl)
+   if new_entry_em:
+    _add_em_seg(new_entry_em)
+   pipe_conv_em = " | ".join(em_segments)
+   query_for_script = f"{subject_em} {latest_email_body}".strip()
+   valid_scripts_em, top_matches_em = _score_script_rows_py(query_for_script, pipe_conv_em)
+   best_match_em = top_matches_em[0] if top_matches_em else None
+   has_match_em = bool(best_match_em and best_match_em.get("score", 0) >= 8)
+   faq_block_em = "\n".join(
+   f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+   for s in valid_scripts_em
+   ) or "(No rows found in Script.xlsx Sheet1 yet)"
+   closest_block_em = "\n\n".join(
+   f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+   for idx_m, m in enumerate(top_matches_em)
+   ) if has_match_em else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+   ai_prompt_em = (
+   f"You are replying to an incoming client Email sent to glennard.tasico.va@gmail.com as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin').\n\n"
+   f"SCRIPT-BASED EMAIL REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet3 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
+   f"1. Read the Full Email Thread History in Sheet3 (separated by '|') carefully so you remember the ongoing topic and context.\n"
+   f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match {clean_sender_name}'s Latest Email Subject (\"{subject_em}\") and Message (\"{latest_email_body}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
+   f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom email reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
+   f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the email is NOT related to any information in \"Script.xlsx\", warmly acknowledge their email and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
+   f"5. MANDATORY EMAIL FORMAT: Format your response as a complete email starting with:\n"
+   f"Dear {clean_sender_name},\n\n"
+   f"[Your custom helpful response in the sender's language]\n\n"
+   f"Regards,\n"
+   f"Glennard\n\n"
+   f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block_em}\n\n"
+   f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block_em}\n\n"
+   f"Email Thread ID: {email_thread_id}\n"
+   f"Full Email Thread History in Sheet3 (separated by |):\n{pipe_conv_em}\n\n"
+   f"Sender Name: {clean_sender_name} ({raw_s_email})\n"
+   f"Email Subject: \"{subject_em}\"\n"
+   f"Latest Email from {clean_sender_name} ({raw_s_email}): \"{latest_email_body}\"\n\n"
+   f"Write your custom email reply to {clean_sender_name} in the exact same language as their email, starting with 'Dear {clean_sender_name},' and ending with 'Regards,\\nGlennard':"
+   )
+   return {
+   "queueId": str(sb_em_q.get("queueId") or sb_em_q.get("queue_id") or ""),
+   "queuePosition": int(sb_em_q.get("queuePosition") or 1),
+   "sheetRowIdx": target_row_idx_em,
+   "targetRowNumber": target_row_idx_em,
+   "isExistingThread": matched_row_idx_em is not None,
+   "emailThreadId": email_thread_id,
+   "colAThreadId": email_thread_id,
+   "pipeConversation": pipe_conv_em,
+   "colBConversation": pipe_conv_em,
+   "threadId": thread_id_em or email_thread_id,
+   "messageId": msg_id_em,
+   "accountId": acc_id_em,
+   "accountEmail": acc_email_em,
+   "pageName": "Glennard (glennard.tasico.va@gmail.com)",
+   "senderName": clean_sender_name,
+   "senderEmail": raw_s_email,
+   "emailSubject": subject_em,
+   "replySubject": reply_subject_em,
+   "latestEmailBody": latest_email_body,
+   "isOwnEmail": is_own_email,
+   "shouldAiReply": (not is_own_email) and bool(raw_s_email) and len(latest_email_body) > 0,
+   "detectedLanguage": "Auto-Detect (Match Sender Language)",
+   "hasScriptMatch": has_match_em,
+   "matchedScriptRow": best_match_em["rowNumber"] if best_match_em else None,
+   "matchedScriptKeywords": best_match_em["keywordsRaw"] if best_match_em else "",
+   "matchedScriptGuide": best_match_em["answerGuide"] if best_match_em else "",
+   "aiContextPrompt": ai_prompt_em,
+   "platform": "email",
+   }
+  if is_dm_workflow:
+   sb_dm_q = node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)") or {}
+   msg_nested = wb.get("message") if isinstance(wb.get("message"), dict) else {}
+   conv_id = str(wb.get("conversation_id") or wb.get("thread_id") or msg_nested.get("conversation_id") or "").strip()
+   participant_id = str(wb.get("participant_id") or msg_nested.get("sender_id") or wb.get("sender_id") or wb.get("sender_phone") or "").strip()
+   participant_name = str(wb.get("participant_name") or msg_nested.get("sender_name") or wb.get("sender_name") or "Client").strip()
+   msg_id = str(wb.get("message_id") or wb.get("id") or msg_nested.get("id") or "").strip()
+   raw_acc = str(wb.get("account_name") or wb.get("username") or "").strip()
+   raw_plat = str(wb.get("platform") or msg_nested.get("platform") or "").strip().lower()
+   compact_acc_dm = (raw_acc + " " + str(wb.get("username") or "") + " " + str(wb.get("recipient_phone") or "")).replace(" ", "")
+   is_wa = (
+   raw_plat == "whatsapp"
+   or str(wb.get("account_id") or "").strip() in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c")
+   or conv_id.startswith("wa_live_")
+   or "glennard tasico" in raw_acc.lower()
+   or "happyfinds" in raw_acc.lower()
+   or "9175497760" in compact_acc_dm
+   or "9952601753" in compact_acc_dm
+   )
+   is_ig = (
+   not is_wa
+   and (
+   raw_plat == "instagram"
+   or str(wb.get("account_id") or "").strip() == "6ad9e9b2e5d470e468e58d87"
+   or conv_id.startswith("ig_live_")
+   or "glennard.tasico.va" in raw_acc.lower()
+   )
+   )
+   raw_wb_aid = str(wb.get("account_id") or "").strip()
+   if is_wa and raw_wb_aid in ("", "6adda70399e7b30829e8859c", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87"):
+    acc_id = "6af6210fb722435238788b8f"
+   else:
+    acc_id = str(
+    raw_wb_aid
+    or ("6af6210fb722435238788b8f" if is_wa else ("6ad9e9b2e5d470e468e58d87" if is_ig else "6af0b109818eb5c88d1e87a6"))
+    ).strip()
+   acc_name = "Glennard Tasico (+63 917 549 7760)" if is_wa else ("@glennard.tasico.va" if is_ig else "GlennBot Automations")
+   is_own_msg = bool(wb.get("is_own", wb.get("is_own_message", msg_nested.get("is_own", False))))
+   raw_text = str(
+   wb.get("text")
+   or wb.get("message_text")
+   or msg_nested.get("message")
+   or msg_nested.get("text")
+   or (wb.get("message") if isinstance(wb.get("message"), str) else "")
+   or ""
+   ).strip()
+   clean_msg = re.sub(r"\s+", " ", raw_text.replace("|", "/")).strip()
+   def _norm_tid(val_str: str) -> str:
+    s_v = str(val_str or "").strip()
+    if s_v.startswith(("fb_", "ig_", "wa_", "dm_", "conv_", "portfolio_")):
+     return s_v
+    return s_v.split("_")[-1].strip() if "_" in s_v else s_v
+   dm_thread_id = _norm_tid(conv_id or participant_id) or f"dm_{msg_id}"
+   speaker = acc_name if is_own_msg else participant_name
+   new_entry = f"{speaker}: {clean_msg}" if clean_msg else ""
+   matched_row_idx: Optional[int] = None
+   existing_pipe = ""
+   cand_tids = {dm_thread_id, conv_id, _norm_tid(conv_id), participant_id, _norm_tid(participant_id)} - {""}
+   for pr in parsed_conv_rows:
+    if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "conversation_id", "conversation id"):
+     continue
+    if pr["colA"] and (pr["colA"] in cand_tids or _norm_tid(pr["colA"]) in cand_tids):
+     matched_row_idx = pr["rowNum"]
+     existing_pipe = pr["colB"]
+     break
+   next_empty = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+   if next_empty < 2:
+    next_empty = 2
+   target_row_idx = matched_row_idx if matched_row_idx is not None else next_empty
+   segments_list: List[str] = []
+   def _add_dm_seg(s_raw: str) -> None:
+    sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+    if not sc:
+     return
+    sc_low = sc.lower()
+    if segments_list and segments_list[-1].lower() == sc_low:
+     return
+    segments_list.append(sc)
+   if existing_pipe:
+    for pt in existing_pipe.split("|"):
+     for sl in pt.splitlines():
+      _add_dm_seg(sl)
+   raw_dm_tr = str(wb.get("dm_transcript") or "").strip()
+   if raw_dm_tr:
+    for sl in raw_dm_tr.splitlines():
+     for pt in sl.split("|"):
+      _add_dm_seg(pt)
+   if new_entry:
+    _add_dm_seg(new_entry)
+   pipe_conv = " | ".join(segments_list)
+   valid_scripts, top_matches = _score_script_rows_py(clean_msg, pipe_conv)
+   best_match = top_matches[0] if top_matches else None
+   has_match = bool(best_match and best_match.get("score", 0) >= 8)
+   faq_block = "\n".join(
+   f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+   for s in valid_scripts
+   ) or "(No rows found in Script.xlsx Sheet1 yet)"
+   closest_block = "\n\n".join(
+   f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+   for idx_m, m in enumerate(top_matches)
+   ) if has_match else "NONE — No row in Column A of Script.xlsx matched. If genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+   plat_label = (
+   "WhatsApp Direct Message (Glennard Tasico • +63 917 549 7760)" if is_wa
+   else ("Instagram Direct Message (@glennard.tasico.va — GlennBot Automations)" if is_ig else "Facebook Page (GlennBot Automations)")
+   )
+   ai_prompt = (
+   f"You are replying directly in a Private Direct Message via {plat_label} as Glennard R. Tasico (speaking in FIRST-PERSON 'I'/'me'/'my' or 'ako'/'ko'/'akin') through \"{acc_name}\".\n\n"
+   f"SCRIPT-BASED REPLY & CONVERSATION MEMORY INSTRUCTIONS (FROM \"Conversations.xlsx\" Sheet2 & \"Script.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
+   f"1. Read the Full DM Conversation History in Sheet2 (separated by '|') carefully so you remember the ongoing topic and context.\n"
+   f"2. SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Match the client's Latest Direct Message (\"{clean_msg}\") against Column A (Keywords / Possible Questions) of Script.xlsx (Sheet1), including similar phrasing or typos (e.g. 'wehbooks' -> 'webhooks').\n"
+   f"3. WHEN A MATCH IS FOUND IN COLUMN A: Use its corresponding Column B (Reference Script / Core Answer) to construct your own natural, custom reply in the sender's language (do NOT copy-paste Column B verbatim).\n"
+   f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If the message is NOT related to any information in \"Script.xlsx\" (e.g. \"I need you!!\" or unrelated remarks), warmly acknowledge their message and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n\n"
+   f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
+   f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
+   f"Conversation ID: {dm_thread_id}\n"
+   f"Full DM Conversation History in Sheet2 (separated by |):\n{pipe_conv}\n\n"
+   f"Latest Direct Message from {participant_name}: \"{clean_msg}\"\n\n"
+   f"Reply directly to {participant_name} in the exact same language as their latest message:"
+   )
+   return {
+   "queueId": str(sb_dm_q.get("queueId") or sb_dm_q.get("queue_id") or ""),
+   "queuePosition": int(sb_dm_q.get("queuePosition") or 1),
+   "sheetRowIdx": target_row_idx,
+   "targetRowNumber": target_row_idx,
+   "isExistingThread": matched_row_idx is not None,
+   "dmThreadId": dm_thread_id,
+   "colAThreadId": dm_thread_id,
+   "pipeConversation": pipe_conv,
+   "colBConversation": pipe_conv,
+   "conversationId": conv_id or dm_thread_id,
+   "accountId": acc_id,
+   "accountName": acc_name,
+   "pageName": acc_name,
+   "participantId": participant_id or dm_thread_id,
+   "participantName": participant_name,
+   "messageId": msg_id,
+   "latestMessage": clean_msg,
+   "isOwnMessage": is_own_msg,
+   "shouldAiReply": (not is_own_msg) and len(clean_msg) > 0,
+   "detectedLanguage": "Auto-Detect (Match Sender Language)",
+   "hasScriptMatch": has_match,
+   "matchedScriptRow": best_match["rowNumber"] if best_match else None,
+   "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
+   "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
+   "aiContextPrompt": ai_prompt,
+   "platform": "whatsapp" if is_wa else ("instagram" if is_ig else "facebook"),
+   }
+  else:
+   # Post Comment workflow (`Build Thread ID & Pipe Conversation`) Python execution
+   def _norm_cid(val_str: Any) -> str:
+    s_v = str(val_str or "").strip()
+    return s_v.split("_")[-1].strip() if "_" in s_v else s_v
+   raw_cid = str(wb.get("comment_id") or "").strip()
+   raw_parent = str(wb.get("parent_comment_id") or wb.get("replied_to_id") or "").strip()
+   raw_root = str(wb.get("thread_id") or wb.get("root_comment_id") or raw_parent or raw_cid).strip()
+   resolved_tid = _norm_cid(raw_root) or _norm_cid(raw_cid) or "unknown_thread"
+   cand_cids: Set[str] = {resolved_tid}
+   for raw_item in [raw_root, raw_parent, raw_cid] + list(wb.get("thread_comment_ids") or []):
+    nc = _norm_cid(raw_item)
+    if nc:
+     cand_cids.add(nc)
+   is_own_c = bool(wb.get("is_own_comment") or wb.get("is_own"))
+   raw_plat = str(wb.get("platform") or "facebook").strip().lower()
+   raw_acc_id = str(wb.get("account_id") or "").strip()
+   raw_acc_name = str(wb.get("account_name") or wb.get("username") or "GlennBot Automations").strip()
+   raw_post_id = str(wb.get("post_id") or "").strip()
+   is_tt = (
+   "tiktok" in raw_plat
+   or raw_acc_id == "6af0b1b7818eb5c88d1e880e"
+   or "glennbot.automation" in raw_acc_name.lower()
+   or raw_post_id.startswith("tt_")
+   )
+   is_ig = (
+   not is_tt
+   and (
+   "instagram" in raw_plat
+   or raw_acc_id == "6ad9e9b2e5d470e468e58d87"
+   or "glennard.tasico.va" in raw_acc_name.lower()
+   or raw_post_id.startswith("18")
+   )
+   )
+   resolved_plat = "tiktok" if is_tt else ("instagram" if is_ig else "facebook")
+   resolved_acc_id = (
+   (raw_acc_id if raw_acc_id and raw_acc_id not in ("6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87") else "6af0b1b7818eb5c88d1e880e")
+   if is_tt
+   else (
+   (raw_acc_id if raw_acc_id and raw_acc_id != "6af0b109818eb5c88d1e87a6" else "6ad9e9b2e5d470e468e58d87")
+   if is_ig
+   else (raw_acc_id or "6af0b109818eb5c88d1e87a6")
+   )
+   )
+   page_name = "@glennbot.automation" if is_tt else ("@glennard.tasico.va" if is_ig else (raw_acc_name or "GlennBot Automations"))
+   commenter_name = str(
+   (wb.get("parent_author_name") or "Commenter")
+   if is_own_c
+   else (wb.get("author_name") or "Commenter")
+   ).strip()
+   speaker_name = page_name if is_own_c else commenter_name
+   raw_msg = re.sub(r"\s+", " ", str(wb.get("message") or wb.get("text") or "")).strip()
+   clean_comment_for_match = re.sub(
+   r"^(?:@?glennbot\s+automations|@?glennbot\.automation|@?glennard\.tasico\.va|@?glennard\s+tasico)[\s,:;\-]*",
+   "",
+   raw_msg,
+   flags=re.I
+   ).strip() or raw_msg
+   matched_row_idx_c: Optional[int] = None
+   existing_pipe_c = ""
+   for pr in parsed_conv_rows:
+    if pr["rowNum"] == 1 and pr["colA"].lower() in ("thread id", "thread_id", "author", "comment id", "id"):
+     continue
+    if pr["colA"] and (_norm_cid(pr["colA"]) in cand_cids or pr["colA"] in cand_cids):
+     matched_row_idx_c = pr["rowNum"]
+     existing_pipe_c = pr["colB"]
+     break
+   next_empty_c = int(conv_sheet.get("next_empty_row") or (len(conv_rows) + 2))
+   if next_empty_c < 2:
+    next_empty_c = 2
+   sheet_row_idx = matched_row_idx_c if matched_row_idx_c is not None else next_empty_c
+   segs_c: List[str] = []
+   def _add_c_seg(s_raw: str) -> None:
+    sc = re.sub(r"\s+", " ", str(s_raw or "")).strip()
+    if not sc:
+     return
+    sc_low = sc.lower()
+    for ex_s in segs_c:
+     if ex_s.lower() == sc_low:
+      return
+    segs_c.append(sc)
+   if existing_pipe_c:
+    for pt in existing_pipe_c.split("|"):
+     for sl in pt.splitlines():
+      _add_c_seg(sl)
+   raw_tr = str(wb.get("thread_transcript") or "").strip()
+   if raw_tr:
+    for sl in raw_tr.splitlines():
+     for pt in sl.split("|"):
+      _add_c_seg(pt)
+   if raw_msg:
+    _add_c_seg(f"{speaker_name}: {raw_msg}")
+   col_b_conv = " | ".join(segs_c)
+   valid_scripts, top_matches = _score_script_rows_py(clean_comment_for_match, col_b_conv)
+   best_match = top_matches[0] if top_matches else None
+   has_match = bool(best_match and best_match.get("score", 0) >= 8)
+   faq_block = "\n".join(
+   f"Row {s['rowNumber']} | Column A (Keywords / Questions): \"{s['keywordsRaw']}\" -> Column B (Reference Script / Core Answer): \"{s['answerGuide']}\""
+   for s in valid_scripts
+   ) or "(No rows found in Script.xlsx Sheet1 yet)"
+   closest_block = "\n\n".join(
+   f"#{idx_m + 1} Closest Match (Row {m['rowNumber']}, Score {m['score']}):\n  - Column A (Matched Keywords/Question): \"{m['keywordsRaw']}\"\n  - Column B (Base Script Answer to Rephrase): \"{m['answerGuide']}\""
+   for idx_m, m in enumerate(top_matches)
+   ) if has_match else "NONE — The commenter's message did not directly match any keyword/question in Column A of Script.xlsx. First double-check the Complete Script.xlsx Sheet1 Reference Table below; if genuinely unrelated to Script.xlsx, follow the UNMATCHED / OUT-OF-SCOPE PIVOT RULE below."
+   ai_prompt_c = (
+   f"You are replying to a public social media post comment as Glennard R. Tasico (speaking in FIRST-PERSON: 'I', 'me', 'my' in English, or 'ako', 'ko', 'akin' in Tagalog/Taglish) through \"{page_name}\".\n\n"
+   f"SCRIPT-BASED REPLY INSTRUCTIONS (FROM \"Script.xlsx\" Sheet1 & \"Conversations.xlsx\" Sheet1 IN FILES MODAL / GOOGLE DRIVE):\n"
+   f"1. FIRST, read the Full Thread Conversation History in Sheet1 (separated by '|') so you remember the full context.\n"
+   f"2. SECOND — SEARCH \"Script.xlsx\" (Sheet1) COLUMN A FIRST: Compare {commenter_name}'s Latest Comment (\"{clean_comment_for_match}\") against Column A (Keywords / Possible Questions) of \"Script.xlsx\" (Sheet1), including similar phrasing or typos (e.g., \"wehbooks\" -> \"webhooks\").\n"
+   f"3. WHEN A MATCH IS FOUND IN COLUMN A: Check its corresponding Column B (Reference Script / Core Answer) in \"Script.xlsx\" and use Column B's core answer to construct a natural, custom first-person reply in the commenter's language (DO NOT copy-paste Column B verbatim).\n"
+   f"4. UNMATCHED / OUT-OF-SCOPE PIVOT RULE (WHEN NO ROW IN \"Script.xlsx\" COLUMN A MATCHES): If {commenter_name}'s comment (\"{clean_comment_for_match}\") is NOT related to any information in \"Script.xlsx\" (for example, general remarks like \"I need you!!\" or unrelated questions), warmly acknowledge their comment and PROACTIVELY STEER/PIVOT the conversation toward asking how you can help them when it comes to their Automation or Web App Projects.\n"
+   f"5. NEVER output generic delay apologies like \"My apologies for the brief delay!\".\n\n"
+   f"CLOSEST PRE-SCORED MATCH(ES) FROM Script.xlsx (Sheet1):\n{closest_block}\n\n"
+   f"COMPLETE Script.xlsx (Sheet1) KNOWLEDGE BASE (Column A -> Column B):\n{faq_block}\n\n"
+   f"Thread ID: {resolved_tid}\n"
+   f"Full Thread Conversation History in Sheet1 (separated by |):\n{col_b_conv}\n\n"
+   f"Latest Comment from {commenter_name}: \"{raw_msg}\"\n\n"
+   f"Write your custom first-person reply as Glennard (via {page_name}) in the exact language of the commenter:"
+   )
+   q_node_out = node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)") or {}
+   return {
+   "queueId": str(q_node_out.get("queueId") or q_node_out.get("queue_id") or ""),
+   "sheetRowIdx": sheet_row_idx,
+   "targetRowNumber": sheet_row_idx,
+   "colAThreadId": resolved_tid,
+   "threadId": resolved_tid,
+   "colBConversation": col_b_conv,
+   "pipeConversation": col_b_conv,
+   "shouldAiReply": (not is_own_c) and len(raw_msg) > 0,
+   "detectedLanguage": "Auto-Detect (Match Commenter Language)",
+   "hasScriptMatch": has_match,
+   "matchedScriptRow": best_match["rowNumber"] if best_match else None,
+   "matchedScriptKeywords": best_match["keywordsRaw"] if best_match else "",
+   "matchedScriptGuide": best_match["answerGuide"] if best_match else "",
+   "aiContextPrompt": ai_prompt_c,
+   "targetCommentId": raw_cid,
+   "postId": raw_post_id,
+   "accountId": resolved_acc_id,
+   "pageName": page_name,
+   "platform": resolved_plat,
+   "commenterName": commenter_name,
+   "authorId": str(wb.get("author_id") or ""),
+   }
+ # 3. Fallback for arbitrary custom user-authored JS nodes via `node` CLI using stdin
+ try:
+  runner_payload = {
+  "current_json": current_json,
+  "node_outputs": node_outputs,
+  "js_code": js_code
+  }
+  wrapper_js = """
 const fs = require('fs');
 const payload = JSON.parse(fs.readFileSync(0, 'utf-8'));
 const $json = payload.current_json || {};
@@ -1999,31 +1857,28 @@ const $ = (name) => {
   process.exit(1);
 });
 """
-        proc = subprocess.run(
-            ["node", "-e", wrapper_js],
-            input=json.dumps(runner_payload, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-            timeout=6
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            last_line = proc.stdout.strip().splitlines()[-1]
-            parsed_out = json.loads(last_line)
-            if isinstance(parsed_out, dict):
-                return parsed_out
-    except Exception:
-        pass
-
-    return current_json
-
-
+  proc = subprocess.run(
+  ["node", "-e", wrapper_js],
+  input=json.dumps(runner_payload, ensure_ascii=False),
+  capture_output=True,
+  text=True,
+  timeout=6
+  )
+  if proc.returncode == 0 and proc.stdout.strip():
+   last_line = proc.stdout.strip().splitlines()[-1]
+   parsed_out = json.loads(last_line)
+   if isinstance(parsed_out, dict):
+    return parsed_out
+ except Exception:
+  pass
+ return current_json
 def _execute_n8n_workflow_json_natively(
-    workflow_json: Dict[str, Any],
-    event_type: str,
-    event_data: Dict[str, Any],
-    is_test_run: bool = False
+workflow_json: Dict[str, Any],
+event_type: str,
+event_data: Dict[str, Any],
+is_test_run: bool = False
 ) -> Dict[str, Any]:
-    """
+ """
     Executes an n8n Workflow `.json` graph directly inside GlennBot's Python engine!
     Supports:
     - `n8n-nodes-base.webhook` / `glennbot.dashboardTrigger` (In-Dashboard Event Trigger)
@@ -2033,983 +1888,880 @@ def _execute_n8n_workflow_json_natively(
     - `n8n-nodes-base.httpRequest` (Calls GlennBot `/api/v1/*` or external REST endpoints)
     - `n8n-nodes-base.set` (Edit / Set fields)
     """
-    start_ts = time.time()
-    now_dt = datetime.now(MANILA_TZ)
-    now_str = now_dt.strftime("%Y-%m-%d %I:%M:%S %p")
-
-    nodes_list = workflow_json.get("nodes") if isinstance(workflow_json.get("nodes"), list) else []
-    connections_map = workflow_json.get("connections") if isinstance(workflow_json.get("connections"), dict) else {}
-
-    if not nodes_list:
-        return {
-            "status": "error",
-            "message": "Workflow JSON has no nodes to execute.",
-            "trace": []
-        }
-
-    # Build lookup maps by node name and node id
-    nodes_by_name: Dict[str, Dict[str, Any]] = {}
-    for n in nodes_list:
-        if isinstance(n, dict) and n.get("name"):
-            nodes_by_name[str(n["name"])] = n
-
-    # Find entry trigger node (Webhook / Dashboard Trigger / Schedule Trigger / or first node without incoming edges)
-    incoming_counts: Dict[str, int] = {name: 0 for name in nodes_by_name}
-    for src_name, conn_obj in connections_map.items():
-        if not isinstance(conn_obj, dict):
-            continue
-        main_branches = conn_obj.get("main")
-        if isinstance(main_branches, list):
-            for branch in main_branches:
-                if isinstance(branch, list):
-                    for edge in branch:
-                        if isinstance(edge, dict) and edge.get("node") in incoming_counts:
-                            incoming_counts[str(edge["node"])] += 1
-
-    trigger_node = None
-    for n in nodes_list:
-        if not isinstance(n, dict):
-            continue
-        ntype = str(n.get("type") or "").lower()
-        if any(k in ntype for k in ("webhook", "trigger", "manual")):
-            trigger_node = n
-            break
-    if not trigger_node:
-        for name, cnt in incoming_counts.items():
-            if cnt == 0:
-                trigger_node = nodes_by_name[name]
-                break
-    if not trigger_node:
-        trigger_node = nodes_list[0]
-
-    # Build initial trigger output matching n8n's exact Webhook item structure (`$json.body.<field>` and `$json.<field>`)
-    envelope_body: Dict[str, Any] = {
-        "event": event_type,
-        "source": "glennbot_automations_canvas",
-        "timestamp_manila": now_str,
-        "timestamp_iso": now_dt.isoformat(),
-        "data": event_data
+ start_ts = time.time()
+ now_dt = datetime.now(MANILA_TZ)
+ now_str = now_dt.strftime("%Y-%m-%d %I:%M:%S %p")
+ nodes_list = workflow_json.get("nodes") if isinstance(workflow_json.get("nodes"), list) else []
+ connections_map = workflow_json.get("connections") if isinstance(workflow_json.get("connections"), dict) else {}
+ if not nodes_list:
+  return {
+  "status": "error",
+  "message": "Workflow JSON has no nodes to execute.",
+  "trace": []
+  }
+ # Build lookup maps by node name and node id
+ nodes_by_name: Dict[str, Dict[str, Any]] = {}
+ for n in nodes_list:
+  if isinstance(n, dict) and n.get("name"):
+   nodes_by_name[str(n["name"])] = n
+ # Find entry trigger node (Webhook / Dashboard Trigger / Schedule Trigger / or first node without incoming edges)
+ incoming_counts: Dict[str, int] = {name: 0 for name in nodes_by_name}
+ for src_name, conn_obj in connections_map.items():
+  if not isinstance(conn_obj, dict):
+   continue
+  main_branches = conn_obj.get("main")
+  if isinstance(main_branches, list):
+   for branch in main_branches:
+    if isinstance(branch, list):
+     for edge in branch:
+      if isinstance(edge, dict) and edge.get("node") in incoming_counts:
+       incoming_counts[str(edge["node"])] += 1
+ trigger_node = None
+ for n in nodes_list:
+  if not isinstance(n, dict):
+   continue
+  ntype = str(n.get("type") or "").lower()
+  if any(k in ntype for k in ("webhook", "trigger", "manual")):
+   trigger_node = n
+   break
+ if not trigger_node:
+  for name, cnt in incoming_counts.items():
+   if cnt == 0:
+    trigger_node = nodes_by_name[name]
+    break
+ if not trigger_node:
+  trigger_node = nodes_list[0]
+ # Build initial trigger output matching n8n's exact Webhook item structure (`$json.body.<field>` and `$json.<field>`)
+ envelope_body: Dict[str, Any] = {
+ "event": event_type,
+ "source": "glennbot_automations_canvas",
+ "timestamp_manila": now_str,
+ "timestamp_iso": now_dt.isoformat(),
+ "data": event_data
+ }
+ if isinstance(event_data, dict):
+  for k_f, v_f in event_data.items():
+   if k_f not in envelope_body:
+    envelope_body[k_f] = v_f
+ initial_item_json: Dict[str, Any] = {
+ "headers": {"x-glennbot-event": event_type},
+ "params": {},
+ "query": {},
+ "body": envelope_body,
+ **envelope_body
+ }
+ node_outputs: Dict[str, Dict[str, Any]] = {}
+ execution_trace: List[Dict[str, Any]] = []
+ active_api_key = _get_active_internal_api_key_token()
+ _default_port = "5001" if os.name == "nt" else "3000"
+ local_port = os.getenv("PORT", _default_port).strip() or _default_port
+ local_base_origin = f"http://127.0.0.1:{local_port}"
+ # BFS / DFS execution queue: (node_name, input_json_dict)
+ queue: List[Tuple[str, Dict[str, Any]]] = [(str(trigger_node.get("name")), initial_item_json)]
+ steps_executed = 0
+ max_steps = 35
+ while queue and steps_executed < max_steps:
+  curr_name, curr_input = queue.pop(0)
+  node = nodes_by_name.get(curr_name)
+  if not node:
+   continue
+  if node.get("disabled") is True:
+   execution_trace.append({
+   "node_id": node.get("id") or curr_name,
+   "node_name": curr_name,
+   "node_type": node.get("type") or "",
+   "status": "skipped",
+   "detail": "Node is disabled"
+   })
+   continue
+  steps_executed += 1
+  step_t0 = time.time()
+  ntype = str(node.get("type") or "").strip()
+  ntype_low = ntype.lower()
+  params = node.get("parameters") or {}
+  out_json: Dict[str, Any] = dict(curr_input) if isinstance(curr_input, dict) else {"value": curr_input}
+  selected_branch_index: Optional[int] = 0
+  step_status = "success"
+  step_detail = ""
+  try:
+   # 1. TRIGGER / WEBHOOK NODE (Acts as Native GlennBot Dashboard Event Trigger!)
+   if any(k in ntype_low for k in ("webhook", "trigger", "manual")):
+    out_json = initial_item_json
+    node_outputs[curr_name] = out_json
+    # Also alias common trigger names so $('Webhook') and $('Webhook Trigger') both resolve
+    node_outputs.setdefault("Webhook", out_json)
+    node_outputs.setdefault("Webhook Trigger", out_json)
+    step_detail = f"Dashboard Event Trigger received '{event_type}'"
+   # 2. IF / FILTER NODE
+   elif ntype_low.endswith(".if") or ntype_low.endswith(".filter") or ntype_low == "if":
+    passed, cond_details = _evaluate_n8n_if_node(node, curr_input, node_outputs)
+    node_outputs[curr_name] = out_json
+    selected_branch_index = 0 if passed else 1
+    branch_label = "TRUE (Branch 0)" if passed else "FALSE (Branch 1)"
+    step_detail = f"Evaluated {len(cond_details)} condition(s) -> {branch_label}"
+   # 3. WAIT NODE
+   elif ntype_low.endswith(".wait") or ntype_low == "wait":
+    amt = float(params.get("amount") or 1)
+    unit = str(params.get("unit") or "seconds").strip().lower()
+    wait_seconds = amt
+    if unit.startswith("min"):
+     wait_seconds = amt * 60.0
+    elif unit.startswith("hour"):
+     wait_seconds = amt * 3600.0
+    if is_test_run:
+     # Cap test-run sleep at 1.0s so interactive UI testing responds quickly
+     time.sleep(min(wait_seconds, 1.0))
+     step_detail = f"Wait Timer ({amt} {unit}) — fast-forwarded in Test Mode"
+    else:
+     # Cap live sleep at 300s per worker thread safety
+     time.sleep(min(max(0.0, wait_seconds), 300.0))
+     step_detail = f"Waited {amt} {unit}"
+    node_outputs[curr_name] = out_json
+   # 4. CODE / FUNCTION NODE
+   elif ntype_low.endswith(".code") or ntype_low.endswith(".function") or ntype_low == "code":
+    out_json = _execute_n8n_code_node(node, curr_input, node_outputs)
+    node_outputs[curr_name] = out_json
+    step_detail = f"Executed Code node ({len(out_json)} output keys)"
+   # 5. SET / EDIT FIELDS NODE
+   elif ntype_low.endswith(".set") or ntype_low == "set":
+    out_json = dict(curr_input)
+    # v3 assignments or v1 values
+    assignments = ((params.get("assignments") or {}).get("assignments")) or []
+    if isinstance(assignments, list):
+     for a_item in assignments:
+      if isinstance(a_item, dict) and a_item.get("name"):
+       out_json[str(a_item["name"])] = _resolve_n8n_parameter_value(a_item.get("value"), curr_input, node_outputs)
+    vals_map = params.get("values") or {}
+    if isinstance(vals_map, dict):
+     for _, v_list in vals_map.items():
+      if isinstance(v_list, list):
+       for v_entry in v_list:
+        if isinstance(v_entry, dict) and v_entry.get("name"):
+         out_json[str(v_entry["name"])] = _resolve_n8n_parameter_value(v_entry.get("value"), curr_input, node_outputs)
+    node_outputs[curr_name] = out_json
+    step_detail = "Updated item fields"
+   # 6. HTTP REQUEST / GLENNBOT API NODE
+   elif "httprequest" in ntype_low or ntype_low == "http":
+    method_str = str(params.get("method") or "GET").strip().upper()
+    raw_url = str(params.get("url") or "").strip()
+    resolved_url = str(_resolve_n8n_parameter_value(raw_url, curr_input, node_outputs) or "").strip()
+    # Rewrite any external/ngrok `/api/v1/...` or `/api/...` URL to local GlennBot server for instant reliable execution
+    m_api_path = re.search(r"(/api/v1/[^\s\"']+|/api/[^\s\"']+)", resolved_url)
+    if m_api_path:
+     target_url = f"{local_base_origin}{m_api_path.group(1)}"
+    else:
+     target_url = resolved_url
+    req_headers: Dict[str, str] = {
+    "Content-Type": "application/json",
+    "X-API-Key": active_api_key
     }
-    if isinstance(event_data, dict):
-        for k_f, v_f in event_data.items():
-            if k_f not in envelope_body:
-                envelope_body[k_f] = v_f
-
-    initial_item_json: Dict[str, Any] = {
-        "headers": {"x-glennbot-event": event_type},
-        "params": {},
-        "query": {},
-        "body": envelope_body,
-        **envelope_body
-    }
-
-    node_outputs: Dict[str, Dict[str, Any]] = {}
-    execution_trace: List[Dict[str, Any]] = []
-    active_api_key = _get_active_internal_api_key_token()
-    _default_port = "5001" if os.name == "nt" else "3000"
-    local_port = os.getenv("PORT", _default_port).strip() or _default_port
-    local_base_origin = f"http://127.0.0.1:{local_port}"
-
-    # BFS / DFS execution queue: (node_name, input_json_dict)
-    queue: List[Tuple[str, Dict[str, Any]]] = [(str(trigger_node.get("name")), initial_item_json)]
-    steps_executed = 0
-    max_steps = 35
-
-    while queue and steps_executed < max_steps:
-        curr_name, curr_input = queue.pop(0)
-        node = nodes_by_name.get(curr_name)
-        if not node:
-            continue
-        if node.get("disabled") is True:
-            execution_trace.append({
-                "node_id": node.get("id") or curr_name,
-                "node_name": curr_name,
-                "node_type": node.get("type") or "",
-                "status": "skipped",
-                "detail": "Node is disabled"
-            })
-            continue
-
-        steps_executed += 1
-        step_t0 = time.time()
-        ntype = str(node.get("type") or "").strip()
-        ntype_low = ntype.lower()
-        params = node.get("parameters") or {}
-
-        out_json: Dict[str, Any] = dict(curr_input) if isinstance(curr_input, dict) else {"value": curr_input}
-        selected_branch_index: Optional[int] = 0
-        step_status = "success"
-        step_detail = ""
-
-        try:
-            # 1. TRIGGER / WEBHOOK NODE (Acts as Native GlennBot Dashboard Event Trigger!)
-            if any(k in ntype_low for k in ("webhook", "trigger", "manual")):
-                out_json = initial_item_json
-                node_outputs[curr_name] = out_json
-                # Also alias common trigger names so $('Webhook') and $('Webhook Trigger') both resolve
-                node_outputs.setdefault("Webhook", out_json)
-                node_outputs.setdefault("Webhook Trigger", out_json)
-                step_detail = f"Dashboard Event Trigger received '{event_type}'"
-
-            # 2. IF / FILTER NODE
-            elif ntype_low.endswith(".if") or ntype_low.endswith(".filter") or ntype_low == "if":
-                passed, cond_details = _evaluate_n8n_if_node(node, curr_input, node_outputs)
-                node_outputs[curr_name] = out_json
-                selected_branch_index = 0 if passed else 1
-                branch_label = "TRUE (Branch 0)" if passed else "FALSE (Branch 1)"
-                step_detail = f"Evaluated {len(cond_details)} condition(s) -> {branch_label}"
-
-            # 3. WAIT NODE
-            elif ntype_low.endswith(".wait") or ntype_low == "wait":
-                amt = float(params.get("amount") or 1)
-                unit = str(params.get("unit") or "seconds").strip().lower()
-                wait_seconds = amt
-                if unit.startswith("min"):
-                    wait_seconds = amt * 60.0
-                elif unit.startswith("hour"):
-                    wait_seconds = amt * 3600.0
-                if is_test_run:
-                    # Cap test-run sleep at 1.0s so interactive UI testing responds quickly
-                    time.sleep(min(wait_seconds, 1.0))
-                    step_detail = f"Wait Timer ({amt} {unit}) — fast-forwarded in Test Mode"
-                else:
-                    # Cap live sleep at 300s per worker thread safety
-                    time.sleep(min(max(0.0, wait_seconds), 300.0))
-                    step_detail = f"Waited {amt} {unit}"
-                node_outputs[curr_name] = out_json
-
-            # 4. CODE / FUNCTION NODE
-            elif ntype_low.endswith(".code") or ntype_low.endswith(".function") or ntype_low == "code":
-                out_json = _execute_n8n_code_node(node, curr_input, node_outputs)
-                node_outputs[curr_name] = out_json
-                step_detail = f"Executed Code node ({len(out_json)} output keys)"
-
-            # 5. SET / EDIT FIELDS NODE
-            elif ntype_low.endswith(".set") or ntype_low == "set":
-                out_json = dict(curr_input)
-                # v3 assignments or v1 values
-                assignments = ((params.get("assignments") or {}).get("assignments")) or []
-                if isinstance(assignments, list):
-                    for a_item in assignments:
-                        if isinstance(a_item, dict) and a_item.get("name"):
-                            out_json[str(a_item["name"])] = _resolve_n8n_parameter_value(a_item.get("value"), curr_input, node_outputs)
-                vals_map = params.get("values") or {}
-                if isinstance(vals_map, dict):
-                    for _, v_list in vals_map.items():
-                        if isinstance(v_list, list):
-                            for v_entry in v_list:
-                                if isinstance(v_entry, dict) and v_entry.get("name"):
-                                    out_json[str(v_entry["name"])] = _resolve_n8n_parameter_value(v_entry.get("value"), curr_input, node_outputs)
-                node_outputs[curr_name] = out_json
-                step_detail = "Updated item fields"
-
-            # 6. HTTP REQUEST / GLENNBOT API NODE
-            elif "httprequest" in ntype_low or ntype_low == "http":
-                method_str = str(params.get("method") or "GET").strip().upper()
-                raw_url = str(params.get("url") or "").strip()
-                resolved_url = str(_resolve_n8n_parameter_value(raw_url, curr_input, node_outputs) or "").strip()
-
-                # Rewrite any external/ngrok `/api/v1/...` or `/api/...` URL to local GlennBot server for instant reliable execution
-                m_api_path = re.search(r"(/api/v1/[^\s\"']+|/api/[^\s\"']+)", resolved_url)
-                if m_api_path:
-                    target_url = f"{local_base_origin}{m_api_path.group(1)}"
-                else:
-                    target_url = resolved_url
-
-                req_headers: Dict[str, str] = {
-                    "Content-Type": "application/json",
-                    "X-API-Key": active_api_key
-                }
-                hdr_params = ((params.get("headerParameters") or {}).get("parameters")) or []
-                if isinstance(hdr_params, list):
-                    for hp in hdr_params:
-                        if isinstance(hp, dict) and hp.get("name"):
-                            h_name = str(hp["name"]).strip()
-                            h_val = str(_resolve_n8n_parameter_value(hp.get("value", ""), curr_input, node_outputs) or "").strip()
-                            if h_name.lower() == "x-api-key" and (not h_val or "YOUR_" in h_val):
-                                h_val = active_api_key
-                            req_headers[h_name] = h_val
-
-                req_body_obj: Any = None
-                if method_str in ("POST", "PUT", "PATCH", "DELETE"):
-                    raw_json_body = params.get("jsonBody")
-                    if raw_json_body is not None:
-                        resolved_body = _resolve_n8n_parameter_value(raw_json_body, curr_input, node_outputs)
-                        if isinstance(resolved_body, (dict, list)):
-                            req_body_obj = resolved_body
-                        elif isinstance(resolved_body, str):
-                            s_body = resolved_body.strip()
-                            try:
-                                req_body_obj = json.loads(s_body)
-                            except Exception:
-                                req_body_obj = {"raw": s_body}
-                    else:
-                        body_params = ((params.get("bodyParameters") or {}).get("parameters")) or []
-                        if isinstance(body_params, list) and body_params:
-                            req_body_obj = {}
-                            for bp in body_params:
-                                if isinstance(bp, dict) and bp.get("name"):
-                                    req_body_obj[str(bp["name"])] = _resolve_n8n_parameter_value(bp.get("value"), curr_input, node_outputs)
-
-                api_path_matched = m_api_path.group(1) if m_api_path else ""
-                api_route_clean = api_path_matched.split("?")[0].rstrip("/")
-                api_query_str = api_path_matched.split("?", 1)[1] if "?" in api_path_matched else ""
-                api_query_params = dict(urllib.parse.parse_qsl(api_query_str)) if api_query_str else {}
-                body_dict = req_body_obj if isinstance(req_body_obj, dict) else {}
-
-                # --- ZERO-OVERHEAD IN-PROCESS FAST-PATHS FOR ALL INTERNAL GLENNBOT /api/v1/* NODES ---
-                if method_str == "POST" and api_route_clean in ("/api/v1/ai/ask", "/api/ai/ask"):
-                    u_topic = str(
-                        body_dict.get("topic")
-                        or body_dict.get("prompt")
-                        or body_dict.get("question")
-                        or body_dict.get("message")
-                        or body_dict.get("comment")
-                        or body_dict.get("query")
-                        or ""
-                    ).strip()
-                    ai_res = _execute_glennbot_ask_ai_core(
-                        user_topic=u_topic,
-                        tone_str=str(body_dict.get("tone") or "engaging").strip(),
-                        lang_str=str(body_dict.get("language") or "taglish").strip(),
-                        post_type_str=str(body_dict.get("post_type") or "dm_reply").strip(),
-                        platforms_list=body_dict.get("platforms") if isinstance(body_dict.get("platforms"), list) else None,
-                        force_reply_mode=True,
-                        use_search=bool(body_dict.get("use_search", False))
-                    )
-                    if isinstance(ai_res, dict):
-                        out_json = ai_res
-                        step_status = "success"
-                        step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process FastPath)"
-                    else:
-                        out_json = {"status": "error", "reply": ""}
-                        step_status = "error"
-                        step_detail = f"POST {api_route_clean} -> Error"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/enqueue":
-                    out_json = enqueue_and_acquire_supabase_comment_queue_turn(
-                        body_dict or curr_input,
-                        is_test_run=is_test_run
-                    )
-                    step_status = "success"
-                    step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Turn)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/complete":
-                    out_json = complete_supabase_comment_queue_turn(
-                        queue_id=str(body_dict.get("queue_id") or body_dict.get("queueId") or ""),
-                        comment_id=str(body_dict.get("comment_id") or body_dict.get("commentId") or ""),
-                        ai_reply=str(body_dict.get("ai_reply") or body_dict.get("aiReplyText") or body_dict.get("reply") or ""),
-                        status=str(body_dict.get("status") or "completed"),
-                        error_message=str(body_dict.get("error_message") or "")
-                    )
-                    step_status = "success"
-                    step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Complete)"
-                    node_outputs[curr_name] = out_json
-
-                elif api_route_clean == "/api/v1/spreadsheets/read":
-                    sync_flag_str = str(api_query_params.get("sync_gdrive", body_dict.get("sync_gdrive", "true"))).strip().lower()
-                    do_sync_fast = sync_flag_str not in ("false", "0", "no")
-                    read_res = _read_spreadsheet_cells_sync(
-                        workbook_id=str(api_query_params.get("workbook_id") or body_dict.get("workbook_id") or ""),
-                        file_id=str(api_query_params.get("file_id") or body_dict.get("file_id") or ""),
-                        sheet_name=str(api_query_params.get("sheet_name") or api_query_params.get("sheet") or body_dict.get("sheet_name") or ""),
-                        cell=str(api_query_params.get("cell") or body_dict.get("cell") or ""),
-                        row=int(api_query_params.get("row") or body_dict.get("row") or 0),
-                        column=str(api_query_params.get("column") or body_dict.get("column") or ""),
-                        lookup_column=str(api_query_params.get("lookup_column") or body_dict.get("lookup_column") or ""),
-                        lookup_value=str(api_query_params.get("lookup_value") or body_dict.get("lookup_value") or ""),
-                        sync_gdrive=do_sync_fast,
-                        body=body_dict,
-                    )
-                    out_json = read_res
-                    step_status = "success" if read_res.get("status") == "success" else "error"
-                    step_detail = f"{method_str} {api_path_matched} -> HTTP {200 if step_status == 'success' else 404} (In-Process FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/append-row":
-                    app_res = _append_spreadsheet_row_sync(body_dict)
-                    out_json = app_res
-                    step_status = "success" if app_res.get("status") == "success" else "error"
-                    step_detail = f"POST {api_route_clean} (Row #{app_res.get('appended_row_number')}) -> HTTP {200 if step_status == 'success' else 400} (In-Process Atomic FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/update-cells":
-                    upd_res = _update_spreadsheet_cells_sync(body_dict)
-                    out_json = upd_res
-                    step_status = "success" if upd_res.get("status") == "success" else "error"
-                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean in ("/api/v1/comments/reply", "/api/v1/comments/send-dm"):
-                    out_json = _execute_v1_comment_reply_or_dm_inprocess(
-                        body_dict,
-                        is_send_dm_route=api_route_clean.endswith("/send-dm"),
-                        is_test_run=is_test_run
-                    )
-                    step_status = "success" if out_json.get("status") == "success" else "error"
-                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/messages/send":
-                    out_json = _execute_v1_send_message_inprocess(body_dict, is_test_run=is_test_run)
-                    step_status = "success" if out_json.get("status") == "success" else "error"
-                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif method_str == "POST" and api_route_clean == "/api/v1/emails/send":
-                    out_json = _execute_v1_send_email_inprocess(body_dict, is_test_run=is_test_run)
-                    step_status = "success" if out_json.get("status") in ("success", "skipped") else "error"
-                    step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
-                    node_outputs[curr_name] = out_json
-
-                elif target_url.startswith("http"):
-                    def _do_http_req(u: str):
-                        if method_str == "GET":
-                            return HTTP_SESSION.get(u, headers=req_headers, timeout=30)
-                        return HTTP_SESSION.request(
-                            method_str,
-                            u,
-                            headers=req_headers,
-                            json=req_body_obj if req_body_obj is not None else {},
-                            timeout=90
-                        )
-                    try:
-                        r_http = _do_http_req(target_url)
-                    except Exception:
-                        if m_api_path:
-                            alt_port = "3000" if local_port == "5001" else "5001"
-                            r_http = _do_http_req(f"http://127.0.0.1:{alt_port}{m_api_path.group(1)}")
-                        else:
-                            raise
-                    try:
-                        out_json = r_http.json() if r_http.content else {"status_code": r_http.status_code}
-                        if not isinstance(out_json, dict):
-                            out_json = {"data": out_json, "status_code": r_http.status_code}
-                    except Exception:
-                        out_json = {"status_code": r_http.status_code, "text": (r_http.text or "")[:500]}
-                    node_outputs[curr_name] = out_json
-                    step_status = "success" if 200 <= r_http.status_code < 400 else "error"
-                    step_detail = f"{method_str} {m_api_path.group(1) if m_api_path else target_url} -> HTTP {r_http.status_code}"
-                else:
-                    step_status = "error"
-                    step_detail = f"Invalid HTTP URL: '{resolved_url}'"
-                    node_outputs[curr_name] = out_json
-
-            else:
-                # Generic pass-through node (Merge, NoOp, Switch, etc.)
-                node_outputs[curr_name] = out_json
-                step_detail = f"Executed node ({ntype})"
-
-        except Exception as step_exc:
-            step_status = "error"
-            step_detail = f"Error: {step_exc}"
-            node_outputs[curr_name] = out_json
-
-        step_ms = int((time.time() - step_t0) * 1000)
-        execution_trace.append({
-            "node_id": node.get("id") or curr_name,
-            "node_name": curr_name,
-            "node_type": ntype,
-            "status": step_status,
-            "branch_index": selected_branch_index,
-            "duration_ms": step_ms,
-            "detail": step_detail,
-            "output_preview": json.dumps(out_json, ensure_ascii=False)[:360]
-        })
-
-        allow_continue_on_err = bool(
-            node.get("continueOnFail")
-            or str(node.get("onError") or "").startswith("continue")
-        )
-        if step_status == "error" and not allow_continue_on_err:
-            break
-
-        # Enqueue connected downstream nodes on `selected_branch_index`
-        conn_entry = connections_map.get(curr_name)
-        if isinstance(conn_entry, dict):
-            main_branches = conn_entry.get("main")
-            if isinstance(main_branches, list) and selected_branch_index is not None:
-                if 0 <= selected_branch_index < len(main_branches):
-                    target_edges = main_branches[selected_branch_index]
-                    if isinstance(target_edges, list):
-                        for edge in target_edges:
-                            if isinstance(edge, dict) and edge.get("node"):
-                                queue.append((str(edge["node"]), out_json))
-
-    # Safety guard: if workflow acquired a Supabase queue lock (`queueId`) and exited early before the completion node ran,
-    # automatically release the turn in `glennbot_comment_automation_queue` so subsequent queued comments never stall.
-    sb_enqueue_out = (
-        node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
-        or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
-        or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
-    )
-    sb_complete_out = node_outputs.get("Complete & Release Turn in Supabase Queue")
-    if isinstance(sb_enqueue_out, dict) and sb_enqueue_out.get("queueId") and not sb_complete_out:
-        try:
-            complete_supabase_comment_queue_turn(
-                queue_id=str(sb_enqueue_out.get("queueId") or ""),
-                comment_id=str(sb_enqueue_out.get("comment_id") or ""),
-                status="failed" if any(t.get("status") == "error" for t in execution_trace) else "completed",
-                error_message="Auto-released on workflow exit"
-            )
-        except Exception:
-            pass
-
-    total_ms = int((time.time() - start_ts) * 1000)
-    any_err = any(t.get("status") == "error" for t in execution_trace)
-    summary_record = {
-        "execution_id": f"auto_exec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
-        "workflow_name": str(workflow_json.get("name") or "Automation Workflow"),
-        "event_type": event_type,
-        "is_test_run": is_test_run,
-        "worker_thread": threading.current_thread().name,
-        "status": "error" if any_err else "success",
-        "steps_count": len(execution_trace),
-        "duration_ms": total_ms,
-        "timestamp": now_str,
-        "trace": execution_trace
-    }
-
-    with AUTOMATIONS_CANVAS_LOCK:
-        hist = list(AUTOMATIONS_CANVAS_STATE.get("execution_history") or [])
-        hist.insert(0, summary_record)
-        AUTOMATIONS_CANVAS_STATE["execution_history"] = hist[:50]
-
-    _schedule_debounced_automations_canvas_save(delay_seconds=0.6)
-
-    with INTERNAL_API_LOCK:
-        logs = list(INTERNAL_API_STATE.get("recent_logs") or [])
-        logs.insert(0, {
-            "timestamp": now_str,
-            "method": "AUTOMATIONS CANVAS",
-            "endpoint": f"{event_type} -> {summary_record['workflow_name']}",
-            "key_name": f"{len(execution_trace)} nodes ({total_ms}ms)",
-            "status": "ERR" if any_err else "200 OK"
-        })
-        INTERNAL_API_STATE["recent_logs"] = logs[:40]
-
-    return summary_record
-
-
+    hdr_params = ((params.get("headerParameters") or {}).get("parameters")) or []
+    if isinstance(hdr_params, list):
+     for hp in hdr_params:
+      if isinstance(hp, dict) and hp.get("name"):
+       h_name = str(hp["name"]).strip()
+       h_val = str(_resolve_n8n_parameter_value(hp.get("value", ""), curr_input, node_outputs) or "").strip()
+       if h_name.lower() == "x-api-key" and (not h_val or "YOUR_" in h_val):
+        h_val = active_api_key
+       req_headers[h_name] = h_val
+    req_body_obj: Any = None
+    if method_str in ("POST", "PUT", "PATCH", "DELETE"):
+     raw_json_body = params.get("jsonBody")
+     if raw_json_body is not None:
+      resolved_body = _resolve_n8n_parameter_value(raw_json_body, curr_input, node_outputs)
+      if isinstance(resolved_body, (dict, list)):
+       req_body_obj = resolved_body
+      elif isinstance(resolved_body, str):
+       s_body = resolved_body.strip()
+       try:
+        req_body_obj = json.loads(s_body)
+       except Exception:
+        req_body_obj = {"raw": s_body}
+     else:
+      body_params = ((params.get("bodyParameters") or {}).get("parameters")) or []
+      if isinstance(body_params, list) and body_params:
+       req_body_obj = {}
+       for bp in body_params:
+        if isinstance(bp, dict) and bp.get("name"):
+         req_body_obj[str(bp["name"])] = _resolve_n8n_parameter_value(bp.get("value"), curr_input, node_outputs)
+    api_path_matched = m_api_path.group(1) if m_api_path else ""
+    api_route_clean = api_path_matched.split("?")[0].rstrip("/")
+    api_query_str = api_path_matched.split("?", 1)[1] if "?" in api_path_matched else ""
+    api_query_params = dict(urllib.parse.parse_qsl(api_query_str)) if api_query_str else {}
+    body_dict = req_body_obj if isinstance(req_body_obj, dict) else {}
+    # --- ZERO-OVERHEAD IN-PROCESS FAST-PATHS FOR ALL INTERNAL GLENNBOT /api/v1/* NODES ---
+    if method_str == "POST" and api_route_clean in ("/api/v1/ai/ask", "/api/ai/ask"):
+     u_topic = str(
+     body_dict.get("topic")
+     or body_dict.get("prompt")
+     or body_dict.get("question")
+     or body_dict.get("message")
+     or body_dict.get("comment")
+     or body_dict.get("query")
+     or ""
+     ).strip()
+     ai_res = _execute_glennbot_ask_ai_core(
+     user_topic=u_topic,
+     tone_str=str(body_dict.get("tone") or "engaging").strip(),
+     lang_str=str(body_dict.get("language") or "taglish").strip(),
+     post_type_str=str(body_dict.get("post_type") or "dm_reply").strip(),
+     platforms_list=body_dict.get("platforms") if isinstance(body_dict.get("platforms"), list) else None,
+     force_reply_mode=True,
+     use_search=bool(body_dict.get("use_search", False))
+     )
+     if isinstance(ai_res, dict):
+      out_json = ai_res
+      step_status = "success"
+      step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process FastPath)"
+     else:
+      out_json = {"status": "error", "reply": ""}
+      step_status = "error"
+      step_detail = f"POST {api_route_clean} -> Error"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/enqueue":
+     out_json = enqueue_and_acquire_supabase_comment_queue_turn(
+     body_dict or curr_input,
+     is_test_run=is_test_run
+     )
+     step_status = "success"
+     step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Turn)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/automations/supabase-queue/complete":
+     out_json = complete_supabase_comment_queue_turn(
+     queue_id=str(body_dict.get("queue_id") or body_dict.get("queueId") or ""),
+     comment_id=str(body_dict.get("comment_id") or body_dict.get("commentId") or ""),
+     ai_reply=str(body_dict.get("ai_reply") or body_dict.get("aiReplyText") or body_dict.get("reply") or ""),
+     status=str(body_dict.get("status") or "completed"),
+     error_message=str(body_dict.get("error_message") or "")
+     )
+     step_status = "success"
+     step_detail = f"POST {api_route_clean} -> HTTP 200 (In-Process Queue Complete)"
+     node_outputs[curr_name] = out_json
+    elif api_route_clean == "/api/v1/spreadsheets/read":
+     sync_flag_str = str(api_query_params.get("sync_gdrive", body_dict.get("sync_gdrive", "true"))).strip().lower()
+     do_sync_fast = sync_flag_str not in ("false", "0", "no")
+     read_res = _read_spreadsheet_cells_sync(
+     workbook_id=str(api_query_params.get("workbook_id") or body_dict.get("workbook_id") or ""),
+     file_id=str(api_query_params.get("file_id") or body_dict.get("file_id") or ""),
+     sheet_name=str(api_query_params.get("sheet_name") or api_query_params.get("sheet") or body_dict.get("sheet_name") or ""),
+     cell=str(api_query_params.get("cell") or body_dict.get("cell") or ""),
+     row=int(api_query_params.get("row") or body_dict.get("row") or 0),
+     column=str(api_query_params.get("column") or body_dict.get("column") or ""),
+     lookup_column=str(api_query_params.get("lookup_column") or body_dict.get("lookup_column") or ""),
+     lookup_value=str(api_query_params.get("lookup_value") or body_dict.get("lookup_value") or ""),
+     sync_gdrive=do_sync_fast,
+     body=body_dict,
+     )
+     out_json = read_res
+     step_status = "success" if read_res.get("status") == "success" else "error"
+     step_detail = f"{method_str} {api_path_matched} -> HTTP {200 if step_status == 'success' else 404} (In-Process FastPath)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/append-row":
+     app_res = _append_spreadsheet_row_sync(body_dict)
+     out_json = app_res
+     step_status = "success" if app_res.get("status") == "success" else "error"
+     step_detail = f"POST {api_route_clean} (Row #{app_res.get('appended_row_number')}) -> HTTP {200 if step_status == 'success' else 400} (In-Process Atomic FastPath)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/spreadsheets/update-cells":
+     upd_res = _update_spreadsheet_cells_sync(body_dict)
+     out_json = upd_res
+     step_status = "success" if upd_res.get("status") == "success" else "error"
+     step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean in ("/api/v1/comments/reply", "/api/v1/comments/send-dm"):
+     out_json = _execute_v1_comment_reply_or_dm_inprocess(
+     body_dict,
+     is_send_dm_route=api_route_clean.endswith("/send-dm"),
+     is_test_run=is_test_run
+     )
+     step_status = "success" if out_json.get("status") == "success" else "error"
+     step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/messages/send":
+     out_json = _execute_v1_send_message_inprocess(body_dict, is_test_run=is_test_run)
+     step_status = "success" if out_json.get("status") == "success" else "error"
+     step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+     node_outputs[curr_name] = out_json
+    elif method_str == "POST" and api_route_clean == "/api/v1/emails/send":
+     out_json = _execute_v1_send_email_inprocess(body_dict, is_test_run=is_test_run)
+     step_status = "success" if out_json.get("status") in ("success", "skipped") else "error"
+     step_detail = f"POST {api_route_clean} -> HTTP {200 if step_status == 'success' else 400} (In-Process FastPath)"
+     node_outputs[curr_name] = out_json
+    elif target_url.startswith("http"):
+     def _do_http_req(u: str):
+      if method_str == "GET":
+       return HTTP_SESSION.get(u, headers=req_headers, timeout=30)
+      return HTTP_SESSION.request(
+      method_str,
+      u,
+      headers=req_headers,
+      json=req_body_obj if req_body_obj is not None else {},
+      timeout=90
+      )
+     try:
+      r_http = _do_http_req(target_url)
+     except Exception:
+      if m_api_path:
+       alt_port = "3000" if local_port == "5001" else "5001"
+       r_http = _do_http_req(f"http://127.0.0.1:{alt_port}{m_api_path.group(1)}")
+      else:
+       raise
+     try:
+      out_json = r_http.json() if r_http.content else {"status_code": r_http.status_code}
+      if not isinstance(out_json, dict):
+       out_json = {"data": out_json, "status_code": r_http.status_code}
+     except Exception:
+      out_json = {"status_code": r_http.status_code, "text": (r_http.text or "")[:500]}
+     node_outputs[curr_name] = out_json
+     step_status = "success" if 200 <= r_http.status_code < 400 else "error"
+     step_detail = f"{method_str} {m_api_path.group(1) if m_api_path else target_url} -> HTTP {r_http.status_code}"
+    else:
+     step_status = "error"
+     step_detail = f"Invalid HTTP URL: '{resolved_url}'"
+     node_outputs[curr_name] = out_json
+   else:
+    # Generic pass-through node (Merge, NoOp, Switch, etc.)
+    node_outputs[curr_name] = out_json
+    step_detail = f"Executed node ({ntype})"
+  except Exception as step_exc:
+   step_status = "error"
+   step_detail = f"Error: {step_exc}"
+   node_outputs[curr_name] = out_json
+  step_ms = int((time.time() - step_t0) * 1000)
+  execution_trace.append({
+  "node_id": node.get("id") or curr_name,
+  "node_name": curr_name,
+  "node_type": ntype,
+  "status": step_status,
+  "branch_index": selected_branch_index,
+  "duration_ms": step_ms,
+  "detail": step_detail,
+  "output_preview": json.dumps(out_json, ensure_ascii=False)[:360]
+  })
+  allow_continue_on_err = bool(
+  node.get("continueOnFail")
+  or str(node.get("onError") or "").startswith("continue")
+  )
+  if step_status == "error" and not allow_continue_on_err:
+   break
+  # Enqueue connected downstream nodes on `selected_branch_index`
+  conn_entry = connections_map.get(curr_name)
+  if isinstance(conn_entry, dict):
+   main_branches = conn_entry.get("main")
+   if isinstance(main_branches, list) and selected_branch_index is not None:
+    if 0 <= selected_branch_index < len(main_branches):
+     target_edges = main_branches[selected_branch_index]
+     if isinstance(target_edges, list):
+      for edge in target_edges:
+       if isinstance(edge, dict) and edge.get("node"):
+        queue.append((str(edge["node"]), out_json))
+ # Safety guard: if workflow acquired a Supabase queue lock (`queueId`) and exited early before the completion node ran,
+ # automatically release the turn in `glennbot_comment_automation_queue` so subsequent queued comments never stall.
+ sb_enqueue_out = (
+ node_outputs.get("Supabase FIFO Comment Queue (Enqueue & Acquire Turn)")
+ or node_outputs.get("Supabase FIFO DM Queue (Enqueue & Acquire Turn)")
+ or node_outputs.get("Supabase FIFO Email Queue (Enqueue & Acquire Turn)")
+ )
+ sb_complete_out = node_outputs.get("Complete & Release Turn in Supabase Queue")
+ if isinstance(sb_enqueue_out, dict) and sb_enqueue_out.get("queueId") and not sb_complete_out:
+  try:
+   complete_supabase_comment_queue_turn(
+   queue_id=str(sb_enqueue_out.get("queueId") or ""),
+   comment_id=str(sb_enqueue_out.get("comment_id") or ""),
+   status="failed" if any(t.get("status") == "error" for t in execution_trace) else "completed",
+   error_message="Auto-released on workflow exit"
+   )
+  except Exception:
+   pass
+ total_ms = int((time.time() - start_ts) * 1000)
+ any_err = any(t.get("status") == "error" for t in execution_trace)
+ summary_record = {
+ "execution_id": f"auto_exec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+ "workflow_name": str(workflow_json.get("name") or "Automation Workflow"),
+ "event_type": event_type,
+ "is_test_run": is_test_run,
+ "worker_thread": threading.current_thread().name,
+ "status": "error" if any_err else "success",
+ "steps_count": len(execution_trace),
+ "duration_ms": total_ms,
+ "timestamp": now_str,
+ "trace": execution_trace
+ }
+ with AUTOMATIONS_CANVAS_LOCK:
+  hist = list(AUTOMATIONS_CANVAS_STATE.get("execution_history") or [])
+  hist.insert(0, summary_record)
+  AUTOMATIONS_CANVAS_STATE["execution_history"] = hist[:50]
+ _schedule_debounced_automations_canvas_save(delay_seconds=0.6)
+ with INTERNAL_API_LOCK:
+  logs = list(INTERNAL_API_STATE.get("recent_logs") or [])
+  logs.insert(0, {
+  "timestamp": now_str,
+  "method": "AUTOMATIONS CANVAS",
+  "endpoint": f"{event_type} -> {summary_record['workflow_name']}",
+  "key_name": f"{len(execution_trace)} nodes ({total_ms}ms)",
+  "status": "ERR" if any_err else "200 OK"
+  })
+  INTERNAL_API_STATE["recent_logs"] = logs[:40]
+ return summary_record
 def _execute_active_dashboard_automations_for_event(
-    event_type: str,
-    data: Dict[str, Any],
-    wait_for_completion: bool = False
+event_type: str,
+data: Dict[str, Any],
+wait_for_completion: bool = False
 ) -> List[Dict[str, Any]]:
-    """
+ """
     Concurrently runs all Active workflows inside the In-Dashboard 'Automations' Modal
     when a matching dashboard event (`comment.received`, `message.received`, `email.received`, etc.) occurs.
     Each workflow execution runs in its own isolated snapshot inside `AUTOMATIONS_WORKFLOW_EXECUTOR`
     so 4+ simultaneous webhooks execute concurrently in parallel like n8n!
     """
-    futures = []
-    try:
-        state = _load_automations_canvas_state(force_cloud=False)
-        api_state = _load_internal_api_state(force_cloud=False)
-        workflows: List[Dict[str, Any]] = list(state.get("workflows") or [])
-        seen_wf_names = {str(w.get("name") or "").strip().lower() for w in workflows if isinstance(w, dict)}
-        seen_wf_slots = {_canonical_automation_slot(w) for w in workflows if isinstance(w, dict) and _canonical_automation_slot(w)}
-
-        # Also include any active n8n workflows that have a full workflow_json graph so they work natively in-dashboard too
-        for nw in (api_state.get("n8n_workflows") or []):
-            if not isinstance(nw, dict) or not (nw.get("active", False) or nw.get("enabled", False)):
-                continue
-            nw_json = nw.get("workflow_json")
-            if isinstance(nw_json, dict) and isinstance(nw_json.get("nodes"), list):
-                nw_name = str(nw.get("name") or nw_json.get("name") or "").strip().lower()
-                nw_slot = _canonical_automation_slot(nw)
-                if nw_slot and nw_slot in seen_wf_slots:
-                    continue
-                if nw_name and nw_name not in seen_wf_names:
-                    workflows.append(nw)
-                    seen_wf_names.add(nw_name)
-                    if nw_slot:
-                        seen_wf_slots.add(nw_slot)
-
-        for wf in workflows:
-            if not isinstance(wf, dict) or not (wf.get("active", False) or wf.get("enabled", False)):
-                continue
-            wf_json = wf.get("workflow_json")
-            if not isinstance(wf_json, dict) or not isinstance(wf_json.get("nodes"), list):
-                continue
-            evts = wf.get("events") if isinstance(wf.get("events"), dict) else {}
-            has_explicit_evts = any(bool(v) for v in evts.values())
-            is_sms_evt = event_type in ("sms.sent", "sms.received")
-            raw_wf_low = json.dumps(wf_json, ensure_ascii=False).lower()
-            is_comment_wf = (
-                not has_explicit_evts
-                and event_type == "comment.received"
-                and any(k in raw_wf_low for k in ("comment", "author_name", "author_id", "savvy finds"))
-            )
-            if (
-                event_type == "n8n.test"
-                or evts.get(event_type, False)
-                or (is_sms_evt and evts.get("message.received", False))
-                or is_comment_wf
-                or not has_explicit_evts
-            ):
-                event_data_snapshot = copy.deepcopy(data) if isinstance(data, dict) else {}
-                fut = AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
-                    _execute_n8n_workflow_json_natively,
-                    wf_json,
-                    event_type,
-                    event_data_snapshot,
-                    False
-                )
-                futures.append(fut)
-    except Exception as e:
-        print(f"[AutomationsCanvas] Event execution warning: {e}")
-
-    if wait_for_completion and futures:
-        results = []
-        for f in futures:
-            try:
-                results.append(f.result(timeout=90))
-            except Exception as exc:
-                results.append({"status": "error", "error": str(exc)})
-        return results
-    return []
-
-
+ futures = []
+ try:
+  state = _load_automations_canvas_state(force_cloud=False)
+  api_state = _load_internal_api_state(force_cloud=False)
+  workflows: List[Dict[str, Any]] = list(state.get("workflows") or [])
+  seen_wf_names = {str(w.get("name") or "").strip().lower() for w in workflows if isinstance(w, dict)}
+  seen_wf_slots = {_canonical_automation_slot(w) for w in workflows if isinstance(w, dict) and _canonical_automation_slot(w)}
+  # Also include any active n8n workflows that have a full workflow_json graph so they work natively in-dashboard too
+  for nw in (api_state.get("n8n_workflows") or []):
+   if not isinstance(nw, dict) or not (nw.get("active", False) or nw.get("enabled", False)):
+    continue
+   nw_json = nw.get("workflow_json")
+   if isinstance(nw_json, dict) and isinstance(nw_json.get("nodes"), list):
+    nw_name = str(nw.get("name") or nw_json.get("name") or "").strip().lower()
+    nw_slot = _canonical_automation_slot(nw)
+    if nw_slot and nw_slot in seen_wf_slots:
+     continue
+    if nw_name and nw_name not in seen_wf_names:
+     workflows.append(nw)
+     seen_wf_names.add(nw_name)
+     if nw_slot:
+      seen_wf_slots.add(nw_slot)
+  for wf in workflows:
+   if not isinstance(wf, dict) or not (wf.get("active", False) or wf.get("enabled", False)):
+    continue
+   wf_json = wf.get("workflow_json")
+   if not isinstance(wf_json, dict) or not isinstance(wf_json.get("nodes"), list):
+    continue
+   evts = wf.get("events") if isinstance(wf.get("events"), dict) else {}
+   has_explicit_evts = any(bool(v) for v in evts.values())
+   is_sms_evt = event_type in ("sms.sent", "sms.received")
+   raw_wf_low = json.dumps(wf_json, ensure_ascii=False).lower()
+   is_comment_wf = (
+   not has_explicit_evts
+   and event_type == "comment.received"
+   and any(k in raw_wf_low for k in ("comment", "author_name", "author_id", "savvy finds"))
+   )
+   if (
+   event_type == "n8n.test"
+   or evts.get(event_type, False)
+   or (is_sms_evt and evts.get("message.received", False))
+   or is_comment_wf
+   or not has_explicit_evts
+   ):
+    event_data_snapshot = copy.deepcopy(data) if isinstance(data, dict) else {}
+    fut = AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
+    _execute_n8n_workflow_json_natively,
+    wf_json,
+    event_type,
+    event_data_snapshot,
+    False
+    )
+    futures.append(fut)
+ except Exception as e:
+  print(f"[AutomationsCanvas] Event execution warning: {e}")
+ if wait_for_completion and futures:
+  results = []
+  for f in futures:
+   try:
+    results.append(f.result(timeout=90))
+   except Exception as exc:
+    results.append({"status": "error", "error": str(exc)})
+  return results
+ return []
 @router.get("/api/automations/workflows")
 async def api_get_automations_canvas_workflows(request: Request):
-    """Returns all workflows saved in the In-Dashboard 'Automations' Canvas plus any imported n8n workflows."""
-    canvas_state = await run_in_threadpool(lambda: _load_automations_canvas_state(force_cloud=False))
-    api_state = await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
-    base_url = get_dynamic_base_url(request=request, prefer_public=True)
-    live_base_api = f"{base_url}/api/v1"
-
-    canvas_wfs = list(canvas_state.get("workflows") or [])
-    existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
-    existing_slots = {_canonical_automation_slot(w) for w in canvas_wfs if isinstance(w, dict) and _canonical_automation_slot(w)}
-
-    # Also surface workflows from Internal API n8n list so user can load them into the Automations Canvas if desired
-    for n8n_w in (api_state.get("n8n_workflows") or []):
-        if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
-            wid = str(n8n_w.get("id") or "")
-            wslot = _canonical_automation_slot(n8n_w)
-            if wslot and wslot in existing_slots:
-                continue
-            if wid and wid not in existing_ids:
-                patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
-                canvas_wfs.append({
-                    "id": wid,
-                    "name": str(n8n_w.get("name") or patched.get("name") or "n8n Workflow"),
-                    "active": bool(n8n_w.get("canvas_active", False)),
-                    "events": n8n_w.get("events") or _analyze_n8n_workflow_json(patched).get("events") or {},
-                    "detected_conditions": n8n_w.get("detected_conditions") or [],
-                    "workflow_json": patched,
-                    "updated_at": str(n8n_w.get("updated_at") or "")
-                })
-                if wslot:
-                    existing_slots.add(wslot)
-
-    return {
-        "status": "success",
-        "base_api_url": live_base_api,
-        "active_api_key": _get_active_internal_api_key_token(),
-        "workflows": canvas_wfs,
-        "execution_history": canvas_state.get("execution_history") or []
-    }
-
-
+ """Returns all workflows saved in the In-Dashboard 'Automations' Canvas plus any imported n8n workflows."""
+ canvas_state = await run_in_threadpool(lambda: _load_automations_canvas_state(force_cloud=False))
+ api_state = await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
+ base_url = get_dynamic_base_url(request=request, prefer_public=True)
+ live_base_api = f"{base_url}/api/v1"
+ canvas_wfs = list(canvas_state.get("workflows") or [])
+ existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
+ existing_slots = {_canonical_automation_slot(w) for w in canvas_wfs if isinstance(w, dict) and _canonical_automation_slot(w)}
+ # Also surface workflows from Internal API n8n list so user can load them into the Automations Canvas if desired
+ for n8n_w in (api_state.get("n8n_workflows") or []):
+  if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
+   wid = str(n8n_w.get("id") or "")
+   wslot = _canonical_automation_slot(n8n_w)
+   if wslot and wslot in existing_slots:
+    continue
+   if wid and wid not in existing_ids:
+    patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
+    canvas_wfs.append({
+    "id": wid,
+    "name": str(n8n_w.get("name") or patched.get("name") or "n8n Workflow"),
+    "active": bool(n8n_w.get("canvas_active", False)),
+    "events": n8n_w.get("events") or _analyze_n8n_workflow_json(patched).get("events") or {},
+    "detected_conditions": n8n_w.get("detected_conditions") or [],
+    "workflow_json": patched,
+    "updated_at": str(n8n_w.get("updated_at") or "")
+    })
+    if wslot:
+     existing_slots.add(wslot)
+ return {
+ "status": "success",
+ "base_api_url": live_base_api,
+ "active_api_key": _get_active_internal_api_key_token(),
+ "workflows": canvas_wfs,
+ "execution_history": canvas_state.get("execution_history") or []
+ }
 @router.post("/api/automations/workflows/save")
 async def api_save_automations_canvas_workflow(request: Request):
-    """Saves an uploaded or Ask-AI-generated `.json` workflow into the In-Dashboard 'Automations' Canvas."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    def _do_save():
-        _load_automations_canvas_state(force_cloud=False)
-        _load_internal_api_state(force_cloud=False)
-        live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
-
-        raw_wf_json = body.get("workflow_json") if isinstance(body.get("workflow_json"), dict) else body
-        if not isinstance(raw_wf_json, dict) or not isinstance(raw_wf_json.get("nodes"), list):
-            return None, "Uploaded JSON must be a valid n8n workflow containing a 'nodes' array."
-
-        patched_json = _auto_inject_credentials_into_workflow_json(raw_wf_json, live_base_api)
-        analysis = _analyze_n8n_workflow_json(patched_json)
-
-        wf_id = str(body.get("id") or "").strip() or f"auto_wf_{int(time.time() * 1000)}_{uuid.uuid4().hex[:5]}"
-        wf_name = str(body.get("name") or patched_json.get("name") or analysis.get("workflow_name") or "Automation Workflow").strip()
-        patched_json["name"] = wf_name
-        is_active = bool(body.get("active", patched_json.get("active", True)))
-        patched_json["active"] = is_active
-
-        evts = body.get("events") if isinstance(body.get("events"), dict) else (analysis.get("events") or _default_n8n_events_dict(False))
-        now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
-
-        record = {
-            "id": wf_id,
-            "name": wf_name,
-            "active": is_active,
-            "events": evts,
-            "detected_conditions": analysis.get("detected_conditions") or [],
-            "webhook_path": analysis.get("webhook_path") or "",
-            "workflow_json": patched_json,
-            "updated_at": now_str
-        }
-        incoming_slot = _canonical_automation_slot(record)
-
-        with AUTOMATIONS_CANVAS_LOCK:
-            wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
-            replaced = False
-            for idx, existing in enumerate(wfs):
-                if not isinstance(existing, dict):
-                    continue
-                existing_slot = _canonical_automation_slot(existing)
-                if (
-                    str(existing.get("id")) == wf_id
-                    or str(existing.get("name") or "").strip().lower() == wf_name.lower()
-                    or (incoming_slot and existing_slot == incoming_slot)
-                ):
-                    record["id"] = str(existing.get("id") or wf_id)
-                    wfs[idx] = record
-                    replaced = True
-                    break
-            if not replaced:
-                wfs.insert(0, record)
-            AUTOMATIONS_CANVAS_STATE["workflows"] = wfs
-
-        _save_automations_canvas_state()
-        return record, None
-
-    saved_rec, err_msg = await run_in_threadpool(_do_save)
-    if err_msg:
-        return JSONResponse({"status": "error", "message": err_msg}, status_code=400)
-
-    return {
-        "status": "success",
-        "message": f"Workflow '{saved_rec['name']}' saved to Automations Canvas!",
-        "workflow": saved_rec,
-        "workflows": AUTOMATIONS_CANVAS_STATE.get("workflows") or []
-    }
-
-
+ """Saves an uploaded or Ask-AI-generated `.json` workflow into the In-Dashboard 'Automations' Canvas."""
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ def _do_save():
+  _load_automations_canvas_state(force_cloud=False)
+  _load_internal_api_state(force_cloud=False)
+  live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
+  raw_wf_json = body.get("workflow_json") if isinstance(body.get("workflow_json"), dict) else body
+  if not isinstance(raw_wf_json, dict) or not isinstance(raw_wf_json.get("nodes"), list):
+   return None, "Uploaded JSON must be a valid n8n workflow containing a 'nodes' array."
+  patched_json = _auto_inject_credentials_into_workflow_json(raw_wf_json, live_base_api)
+  analysis = _analyze_n8n_workflow_json(patched_json)
+  wf_id = str(body.get("id") or "").strip() or f"auto_wf_{int(time.time() * 1000)}_{uuid.uuid4().hex[:5]}"
+  wf_name = str(body.get("name") or patched_json.get("name") or analysis.get("workflow_name") or "Automation Workflow").strip()
+  patched_json["name"] = wf_name
+  is_active = bool(body.get("active", patched_json.get("active", True)))
+  patched_json["active"] = is_active
+  evts = body.get("events") if isinstance(body.get("events"), dict) else (analysis.get("events") or _default_n8n_events_dict(False))
+  now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+  record = {
+  "id": wf_id,
+  "name": wf_name,
+  "active": is_active,
+  "events": evts,
+  "detected_conditions": analysis.get("detected_conditions") or [],
+  "webhook_path": analysis.get("webhook_path") or "",
+  "workflow_json": patched_json,
+  "updated_at": now_str
+  }
+  incoming_slot = _canonical_automation_slot(record)
+  with AUTOMATIONS_CANVAS_LOCK:
+   wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
+   replaced = False
+   for idx, existing in enumerate(wfs):
+    if not isinstance(existing, dict):
+     continue
+    existing_slot = _canonical_automation_slot(existing)
+    if (
+    str(existing.get("id")) == wf_id
+    or str(existing.get("name") or "").strip().lower() == wf_name.lower()
+    or (incoming_slot and existing_slot == incoming_slot)
+    ):
+     record["id"] = str(existing.get("id") or wf_id)
+     wfs[idx] = record
+     replaced = True
+     break
+   if not replaced:
+    wfs.insert(0, record)
+   AUTOMATIONS_CANVAS_STATE["workflows"] = wfs
+  _save_automations_canvas_state()
+  return record, None
+ saved_rec, err_msg = await run_in_threadpool(_do_save)
+ if err_msg:
+  return JSONResponse({"status": "error", "message": err_msg}, status_code=400)
+ return {
+ "status": "success",
+ "message": f"Workflow '{saved_rec['name']}' saved to Automations Canvas!",
+ "workflow": saved_rec,
+ "workflows": AUTOMATIONS_CANVAS_STATE.get("workflows") or []
+ }
 @router.post("/api/automations/workflows/execute")
 async def api_execute_automations_canvas_workflow(request: Request):
-    """
+ """
     Runs a workflow JSON directly inside the GlennBot Automations Canvas engine (Test Run or Manual Trigger)
     and returns the node-by-node execution trace so the visual canvas can highlight every executed node!
     """
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ def _do_exec():
+  _load_automations_canvas_state(force_cloud=False)
+  _load_internal_api_state(force_cloud=False)
+  live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
+  wf_id = str(body.get("workflow_id") or body.get("id") or "").strip()
+  wf_json = body.get("workflow_json") if isinstance(body.get("workflow_json"), dict) else None
+  matched_wf = None
+  if wf_id:
+   matched_wf = next((w for w in (AUTOMATIONS_CANVAS_STATE.get("workflows") or []) if str(w.get("id")) == wf_id), None)
+   if not wf_json and matched_wf:
+    wf_json = matched_wf.get("workflow_json")
+  if not isinstance(wf_json, dict) or not isinstance(wf_json.get("nodes"), list):
+   return None, "Please load or upload a valid .JSON workflow on the Automations Canvas first."
+  patched_json = _auto_inject_credentials_into_workflow_json(wf_json, live_base_api)
+  analysis = _analyze_n8n_workflow_json(patched_json)
+  evts = (matched_wf or {}).get("events") or analysis.get("events") or {}
+  sim_event = str(body.get("event_type") or "").strip()
+  if not sim_event:
+   sim_event = next((k for k, v in evts.items() if v), "comment.received")
+  batch_payloads = body.get("batch_payloads") if isinstance(body.get("batch_payloads"), list) else None
+  if batch_payloads:
+   clean_batch = [copy.deepcopy(p) for p in batch_payloads if isinstance(p, dict)]
+   futures = [
+   AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
+   _execute_n8n_workflow_json_natively,
+   patched_json,
+   sim_event,
+   p_item,
+   True
+   )
+   for p_item in clean_batch
+   ]
+   batch_results = []
+   for fut in futures:
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    def _do_exec():
-        _load_automations_canvas_state(force_cloud=False)
-        _load_internal_api_state(force_cloud=False)
-        live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
-
-        wf_id = str(body.get("workflow_id") or body.get("id") or "").strip()
-        wf_json = body.get("workflow_json") if isinstance(body.get("workflow_json"), dict) else None
-        matched_wf = None
-
-        if wf_id:
-            matched_wf = next((w for w in (AUTOMATIONS_CANVAS_STATE.get("workflows") or []) if str(w.get("id")) == wf_id), None)
-            if not wf_json and matched_wf:
-                wf_json = matched_wf.get("workflow_json")
-
-        if not isinstance(wf_json, dict) or not isinstance(wf_json.get("nodes"), list):
-            return None, "Please load or upload a valid .JSON workflow on the Automations Canvas first."
-
-        patched_json = _auto_inject_credentials_into_workflow_json(wf_json, live_base_api)
-        analysis = _analyze_n8n_workflow_json(patched_json)
-        evts = (matched_wf or {}).get("events") or analysis.get("events") or {}
-        sim_event = str(body.get("event_type") or "").strip()
-        if not sim_event:
-            sim_event = next((k for k, v in evts.items() if v), "comment.received")
-
-        batch_payloads = body.get("batch_payloads") if isinstance(body.get("batch_payloads"), list) else None
-        if batch_payloads:
-            clean_batch = [copy.deepcopy(p) for p in batch_payloads if isinstance(p, dict)]
-            futures = [
-                AUTOMATIONS_WORKFLOW_EXECUTOR.submit(
-                    _execute_n8n_workflow_json_natively,
-                    patched_json,
-                    sim_event,
-                    p_item,
-                    True
-                )
-                for p_item in clean_batch
-            ]
-            batch_results = []
-            for fut in futures:
-                try:
-                    batch_results.append(fut.result(timeout=90))
-                except Exception as exc:
-                    batch_results.append({"status": "error", "error": str(exc)})
-            _schedule_debounced_automations_canvas_save()
-            primary_res = batch_results[0] if batch_results else {}
-            primary_res["batch_count"] = len(batch_results)
-            primary_res["batch_results"] = batch_results
-            return primary_res, None
-
-        custom_payload = body.get("test_payload") if isinstance(body.get("test_payload"), dict) else None
-        if not custom_payload:
-            custom_payload = _build_dynamic_test_payload_for_workflow(sim_event, {
-                "name": patched_json.get("name"),
-                "workflow_json": patched_json,
-                "detected_conditions": analysis.get("detected_conditions") or []
-            })
-            # Ensure thread_id and thread_transcript are populated for comment.received tests
-            if sim_event == "comment.received":
-                c_id = str(custom_payload.get("comment_id") or "12209988776655").strip()
-                norm_tid = _normalize_comment_key(c_id) or c_id
-                custom_payload.setdefault("thread_id", norm_tid)
-                custom_payload.setdefault("root_comment_id", c_id)
-                acc_n = str(custom_payload.get("account_name") or "Savvy Finds").strip()
-                auth_n = str(custom_payload.get("author_name") or "Maria Santos").strip()
-                msg_t = str(custom_payload.get("message") or "Hm po ito? Available pa ba?").strip()
-                custom_payload.setdefault("thread_transcript", f"{auth_n}: {msg_t}")
-
-        exec_result = _execute_n8n_workflow_json_natively(
-            patched_json,
-            sim_event,
-            custom_payload,
-            is_test_run=True
-        )
-        _schedule_debounced_automations_canvas_save()
-        return exec_result, None
-
-    res_obj, err_str = await run_in_threadpool(_do_exec)
-    if err_str:
-        return JSONResponse({"status": "error", "message": err_str}, status_code=400)
-
-    return {
-        "status": "success",
-        "message": f"Executed '{res_obj.get('workflow_name')}' ({res_obj.get('steps_count')} nodes in {res_obj.get('duration_ms')}ms)!",
-        "execution": res_obj,
-        "batch_results": res_obj.get("batch_results"),
-        "execution_history": AUTOMATIONS_CANVAS_STATE.get("execution_history") or []
-    }
-
-
+     batch_results.append(fut.result(timeout=90))
+    except Exception as exc:
+     batch_results.append({"status": "error", "error": str(exc)})
+   _schedule_debounced_automations_canvas_save()
+   primary_res = batch_results[0] if batch_results else {}
+   primary_res["batch_count"] = len(batch_results)
+   primary_res["batch_results"] = batch_results
+   return primary_res, None
+  custom_payload = body.get("test_payload") if isinstance(body.get("test_payload"), dict) else None
+  if not custom_payload:
+   custom_payload = _build_dynamic_test_payload_for_workflow(sim_event, {
+   "name": patched_json.get("name"),
+   "workflow_json": patched_json,
+   "detected_conditions": analysis.get("detected_conditions") or []
+   })
+   # Ensure thread_id and thread_transcript are populated for comment.received tests
+   if sim_event == "comment.received":
+    c_id = str(custom_payload.get("comment_id") or "12209988776655").strip()
+    norm_tid = _normalize_comment_key(c_id) or c_id
+    custom_payload.setdefault("thread_id", norm_tid)
+    custom_payload.setdefault("root_comment_id", c_id)
+    acc_n = str(custom_payload.get("account_name") or "Savvy Finds").strip()
+    auth_n = str(custom_payload.get("author_name") or "Maria Santos").strip()
+    msg_t = str(custom_payload.get("message") or "Hm po ito? Available pa ba?").strip()
+    custom_payload.setdefault("thread_transcript", f"{auth_n}: {msg_t}")
+  exec_result = _execute_n8n_workflow_json_natively(
+  patched_json,
+  sim_event,
+  custom_payload,
+  is_test_run=True
+  )
+  _schedule_debounced_automations_canvas_save()
+  return exec_result, None
+ res_obj, err_str = await run_in_threadpool(_do_exec)
+ if err_str:
+  return JSONResponse({"status": "error", "message": err_str}, status_code=400)
+ return {
+ "status": "success",
+ "message": f"Executed '{res_obj.get('workflow_name')}' ({res_obj.get('steps_count')} nodes in {res_obj.get('duration_ms')}ms)!",
+ "execution": res_obj,
+ "batch_results": res_obj.get("batch_results"),
+ "execution_history": AUTOMATIONS_CANVAS_STATE.get("execution_history") or []
+ }
 @router.delete("/api/automations/workflows/{workflow_id}")
 async def api_delete_automations_canvas_workflow(workflow_id: str, request: Request):
-    def _do_del():
-        _load_automations_canvas_state(force_cloud=False)
-        _load_internal_api_state(force_cloud=False)
-        clean_id = str(workflow_id or "").strip()
-        base_url = get_dynamic_base_url(request=request, prefer_public=True)
-        live_base_api = f"{base_url}/api/v1"
-
-        with AUTOMATIONS_CANVAS_LOCK:
-            AUTOMATIONS_CANVAS_STATE["workflows"] = [
-                w for w in (AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
-                if isinstance(w, dict) and str(w.get("id")) != clean_id
-            ]
-        _save_automations_canvas_state()
-
-        # Also remove from INTERNAL_API_STATE["n8n_workflows"] if present so it doesn't resurface in the dropdown
-        removed_from_internal = False
-        with INTERNAL_API_LOCK:
-            old_n8n = list(INTERNAL_API_STATE.get("n8n_workflows") or [])
-            new_n8n = [
-                w for w in old_n8n
-                if isinstance(w, dict) and str(w.get("id")) != clean_id
-            ]
-            if len(new_n8n) != len(old_n8n):
-                INTERNAL_API_STATE["n8n_workflows"] = new_n8n
-                removed_from_internal = True
-        if removed_from_internal:
-            _save_internal_api_state()
-
-        canvas_wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
-        existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
-        for n8n_w in (INTERNAL_API_STATE.get("n8n_workflows") or []):
-            if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
-                wid = str(n8n_w.get("id") or "")
-                if wid and wid not in existing_ids:
-                    patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
-                    canvas_wfs.append({
-                        "id": wid,
-                        "name": str(n8n_w.get("name") or patched.get("name") or "n8n Workflow"),
-                        "active": bool(n8n_w.get("canvas_active", False)),
-                        "events": n8n_w.get("events") or _analyze_n8n_workflow_json(patched).get("events") or {},
-                        "detected_conditions": n8n_w.get("detected_conditions") or [],
-                        "workflow_json": patched,
-                        "updated_at": str(n8n_w.get("updated_at") or "")
-                    })
-        return canvas_wfs
-
-    remaining = await run_in_threadpool(_do_del)
-    return {
-        "status": "success",
-        "message": "Workflow removed from Automations Canvas.",
-        "workflows": remaining
-    }
-
-
-
+ def _do_del():
+  _load_automations_canvas_state(force_cloud=False)
+  _load_internal_api_state(force_cloud=False)
+  clean_id = str(workflow_id or "").strip()
+  base_url = get_dynamic_base_url(request=request, prefer_public=True)
+  live_base_api = f"{base_url}/api/v1"
+  with AUTOMATIONS_CANVAS_LOCK:
+   AUTOMATIONS_CANVAS_STATE["workflows"] = [
+   w for w in (AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
+   if isinstance(w, dict) and str(w.get("id")) != clean_id
+   ]
+  _save_automations_canvas_state()
+  # Also remove from INTERNAL_API_STATE["n8n_workflows"] if present so it doesn't resurface in the dropdown
+  removed_from_internal = False
+  with INTERNAL_API_LOCK:
+   old_n8n = list(INTERNAL_API_STATE.get("n8n_workflows") or [])
+   new_n8n = [
+   w for w in old_n8n
+   if isinstance(w, dict) and str(w.get("id")) != clean_id
+   ]
+   if len(new_n8n) != len(old_n8n):
+    INTERNAL_API_STATE["n8n_workflows"] = new_n8n
+    removed_from_internal = True
+  if removed_from_internal:
+   _save_internal_api_state()
+  canvas_wfs = list(AUTOMATIONS_CANVAS_STATE.get("workflows") or [])
+  existing_ids = {str(w.get("id")) for w in canvas_wfs if isinstance(w, dict)}
+  for n8n_w in (INTERNAL_API_STATE.get("n8n_workflows") or []):
+   if isinstance(n8n_w, dict) and isinstance(n8n_w.get("workflow_json"), dict) and n8n_w["workflow_json"].get("nodes"):
+    wid = str(n8n_w.get("id") or "")
+    if wid and wid not in existing_ids:
+     patched = _auto_inject_credentials_into_workflow_json(n8n_w["workflow_json"], live_base_api)
+     canvas_wfs.append({
+     "id": wid,
+     "name": str(n8n_w.get("name") or patched.get("name") or "n8n Workflow"),
+     "active": bool(n8n_w.get("canvas_active", False)),
+     "events": n8n_w.get("events") or _analyze_n8n_workflow_json(patched).get("events") or {},
+     "detected_conditions": n8n_w.get("detected_conditions") or [],
+     "workflow_json": patched,
+     "updated_at": str(n8n_w.get("updated_at") or "")
+     })
+  return canvas_wfs
+ remaining = await run_in_threadpool(_do_del)
+ return {
+ "status": "success",
+ "message": "Workflow removed from Automations Canvas.",
+ "workflows": remaining
+ }
 # =========================================================================
 # --- AUTHENTICATED EXTERNAL / N8N AUTOMATION ENDPOINTS (/api/v1/*) ---
 # =========================================================================
-
 def _unauthorized_v1_response():
-    return JSONResponse({
-        "status": "error",
-        "code": "UNAUTHORIZED_API_KEY",
-        "message": "Invalid or missing GlennBot Internal API Key. Pass 'X-API-Key: gb_live_...' or 'Authorization: Bearer gb_live_...' in your n8n HTTP Request node."
-    }, status_code=401)
-
-
+ return JSONResponse({
+ "status": "error",
+ "code": "UNAUTHORIZED_API_KEY",
+ "message": "Invalid or missing GlennBot Internal API Key. Pass 'X-API-Key: gb_live_...' or 'Authorization: Bearer gb_live_...' in your n8n HTTP Request node."
+ }, status_code=401)
 @router.get("/api/v1/status")
 async def api_v1_status(request: Request):
-    key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    def _gather_v1_status():
-        s_accs = refresh_connected_accounts_cache(force=False)
-        _load_email_hub_state(force_cloud=False)
-        e_accs = EMAIL_HUB_STATE.get("accounts") or []
-        c_list = _load_crm_contacts_state(force_cloud=False)
-        vs = _load_files_vault_store(force_cloud=False)
-        ss = _load_spreadsheets_store(force_cloud=False)
-        return s_accs, e_accs, c_list, vs, ss
-
-    social_accs, email_accs, contacts, v_store, sp_store = await run_in_threadpool(_gather_v1_status)
-
-    return {
-        "status": "success",
-        "service": "GlennBot Internal Automation API v1",
-        "authenticated_key": key_obj.get("name"),
-        "server_time_manila": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
-        "counts": {
-            "connected_social_accounts": len(social_accs),
-            "connected_email_accounts": len(email_accs),
-            "crm_contacts": len(contacts),
-            "vault_files": len(v_store.get("files") or []),
-            "spreadsheets": len(sp_store.get("workbooks") or [])
-        },
-        "available_endpoints": [
-            "GET /api/v1/status",
-            "GET /api/v1/accounts",
-            "POST /api/v1/ai/ask",
-            "GET /api/v1/posts",
-            "POST /api/v1/posts/publish",
-            "POST /api/v1/posts/schedule",
-            "POST /api/v1/posts/delete",
-            "DELETE /api/v1/posts/{record_id}",
-            "GET /api/v1/messages",
-            "POST /api/v1/messages/send",
-            "POST /api/v1/messages/mark-read",
-            "POST /api/v1/sms/send",
-            "GET /api/v1/sms/thread-status",
-            "GET /api/v1/comments",
-            "GET /api/v1/comments/thread-status",
-            "POST /api/v1/comments/reply",
-            "POST /api/v1/comments/send-dm",
-            "POST /api/v1/comments/like",
-            "POST /api/v1/comments/hide",
-            "POST /api/v1/comments/mark-read",
-            "POST /api/v1/comments/dismiss",
-            "GET /api/v1/emails",
-            "POST /api/v1/emails/send",
-            "POST /api/v1/emails/trash",
-            "GET /api/v1/contacts",
-            "POST /api/v1/contacts",
-            "POST /api/v1/contacts/sync",
-            "DELETE /api/v1/contacts/{contact_id}",
-            "GET /api/v1/files",
-            "GET /api/v1/files/{file_id}",
-            "GET /api/v1/spreadsheets",
-            "GET /api/v1/spreadsheets/read",
-            "POST /api/v1/spreadsheets/read",
-            "POST /api/v1/spreadsheets/append-row",
-            "POST /api/v1/spreadsheets/update-cells",
-            "GET /api/v1/calendar/events",
-            "POST /api/v1/calendar/schedule",
-            "POST /api/v1/calendar/reschedule",
-            "POST /api/v1/calendar/cancel",
-            "DELETE /api/v1/calendar/events/{event_id}",
-            "GET /api/v1/analytics",
-            "GET /api/v1/presets"
-        ]
-    }
-
-
+ key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
+ if not key_obj:
+  return _unauthorized_v1_response()
+ def _gather_v1_status():
+  s_accs = refresh_connected_accounts_cache(force=False)
+  _load_email_hub_state(force_cloud=False)
+  e_accs = EMAIL_HUB_STATE.get("accounts") or []
+  c_list = _load_crm_contacts_state(force_cloud=False)
+  vs = _load_files_vault_store(force_cloud=False)
+  ss = _load_spreadsheets_store(force_cloud=False)
+  return s_accs, e_accs, c_list, vs, ss
+ social_accs, email_accs, contacts, v_store, sp_store = await run_in_threadpool(_gather_v1_status)
+ return {
+ "status": "success",
+ "service": "GlennBot Internal Automation API v1",
+ "authenticated_key": key_obj.get("name"),
+ "server_time_manila": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+ "counts": {
+ "connected_social_accounts": len(social_accs),
+ "connected_email_accounts": len(email_accs),
+ "crm_contacts": len(contacts),
+ "vault_files": len(v_store.get("files") or []),
+ "spreadsheets": len(sp_store.get("workbooks") or [])
+ },
+ "available_endpoints": [
+ "GET /api/v1/status",
+ "GET /api/v1/accounts",
+ "POST /api/v1/ai/ask",
+ "GET /api/v1/posts",
+ "POST /api/v1/posts/publish",
+ "POST /api/v1/posts/schedule",
+ "POST /api/v1/posts/delete",
+ "DELETE /api/v1/posts/{record_id}",
+ "GET /api/v1/messages",
+ "POST /api/v1/messages/send",
+ "POST /api/v1/messages/mark-read",
+ "POST /api/v1/sms/send",
+ "GET /api/v1/sms/thread-status",
+ "GET /api/v1/comments",
+ "GET /api/v1/comments/thread-status",
+ "POST /api/v1/comments/reply",
+ "POST /api/v1/comments/send-dm",
+ "POST /api/v1/comments/like",
+ "POST /api/v1/comments/hide",
+ "POST /api/v1/comments/mark-read",
+ "POST /api/v1/comments/dismiss",
+ "GET /api/v1/emails",
+ "POST /api/v1/emails/send",
+ "POST /api/v1/emails/trash",
+ "GET /api/v1/contacts",
+ "POST /api/v1/contacts",
+ "POST /api/v1/contacts/sync",
+ "DELETE /api/v1/contacts/{contact_id}",
+ "GET /api/v1/files",
+ "GET /api/v1/files/{file_id}",
+ "GET /api/v1/spreadsheets",
+ "GET /api/v1/spreadsheets/read",
+ "POST /api/v1/spreadsheets/read",
+ "POST /api/v1/spreadsheets/append-row",
+ "POST /api/v1/spreadsheets/update-cells",
+ "GET /api/v1/calendar/events",
+ "POST /api/v1/calendar/schedule",
+ "POST /api/v1/calendar/reschedule",
+ "POST /api/v1/calendar/cancel",
+ "DELETE /api/v1/calendar/events/{event_id}",
+ "GET /api/v1/analytics",
+ "GET /api/v1/presets"
+ ]
+ }
 @router.get("/api/v1/accounts")
 async def api_v1_list_accounts(request: Request, platform: str = ""):
-    key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    clean_plat = (platform or "").strip().lower()
-    def _gather_v1_accs():
-        s_accs = refresh_connected_accounts_cache(force=False)
-        _load_email_hub_state(force_cloud=False)
-        return s_accs, (EMAIL_HUB_STATE.get("accounts") or [])
-    social_accs, email_accs = await run_in_threadpool(_gather_v1_accs)
-
-    clean_social = []
-    for s in social_accs:
-        p = str(s.get("platform") or "").lower()
-        if clean_plat and p != clean_plat:
-            continue
-        clean_social.append({
-            "account_id": s.get("account_id"),
-            "platform": p,
-            "account_name": s.get("account_name"),
-            "username": s.get("username"),
-            "avatar_url": s.get("avatar_url")
-        })
-
-    clean_emails = []
-    for e in email_accs:
-        p = str(e.get("provider") or "gmail").lower()
-        if clean_plat and p != clean_plat and clean_plat != "email":
-            continue
-        clean_emails.append({
-            "account_id": e.get("id"),
-            "provider": p,
-            "email_address": e.get("email_address"),
-            "display_name": e.get("display_name"),
-            "status": e.get("status", "ACTIVE")
-        })
-
-    return {
-        "status": "success",
-        "social_accounts": clean_social,
-        "email_accounts": clean_emails,
-        "total_social": len(clean_social),
-        "total_email": len(clean_emails)
-    }
-
-
+ key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
+ if not key_obj:
+  return _unauthorized_v1_response()
+ clean_plat = (platform or "").strip().lower()
+ def _gather_v1_accs():
+  s_accs = refresh_connected_accounts_cache(force=False)
+  _load_email_hub_state(force_cloud=False)
+  return s_accs, (EMAIL_HUB_STATE.get("accounts") or [])
+ social_accs, email_accs = await run_in_threadpool(_gather_v1_accs)
+ clean_social = []
+ for s in social_accs:
+  p = str(s.get("platform") or "").lower()
+  if clean_plat and p != clean_plat:
+   continue
+  clean_social.append({
+  "account_id": s.get("account_id"),
+  "platform": p,
+  "account_name": s.get("account_name"),
+  "username": s.get("username"),
+  "avatar_url": s.get("avatar_url")
+  })
+ clean_emails = []
+ for e in email_accs:
+  p = str(e.get("provider") or "gmail").lower()
+  if clean_plat and p != clean_plat and clean_plat != "email":
+   continue
+  clean_emails.append({
+  "account_id": e.get("id"),
+  "provider": p,
+  "email_address": e.get("email_address"),
+  "display_name": e.get("display_name"),
+  "status": e.get("status", "ACTIVE")
+  })
+ return {
+ "status": "success",
+ "social_accounts": clean_social,
+ "email_accounts": clean_emails,
+ "total_social": len(clean_social),
+ "total_email": len(clean_emails)
+ }
 @router.get("/api/v1/posts")
 async def api_v1_list_posts(request: Request, status: str = "", platform: str = "", limit: int = 50):
-    key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    sched_res = await run_in_threadpool(get_scheduled_posts)
-    items = list(sched_res.get("items") or [])
-    if status:
-        s_low = status.strip().lower()
-        items = [x for x in items if str(x.get("status") or "").lower() == s_low]
-    if platform:
-        p_low = platform.strip().lower()
-        items = [x for x in items if str(x.get("platform") or "").lower() == p_low]
-    items.sort(key=lambda x: str(x.get("scheduled_iso") or ""), reverse=True)
-    return {
-        "status": "success",
-        "count": len(items[:limit]),
-        "posts": items[:max(1, min(limit, 200))]
-    }
-
-
+ key_obj = await run_in_threadpool(lambda: _verify_internal_api_key(request))
+ if not key_obj:
+  return _unauthorized_v1_response()
+ sched_res = await run_in_threadpool(get_scheduled_posts)
+ items = list(sched_res.get("items") or [])
+ if status:
+  s_low = status.strip().lower()
+  items = [x for x in items if str(x.get("status") or "").lower() == s_low]
+ if platform:
+  p_low = platform.strip().lower()
+  items = [x for x in items if str(x.get("platform") or "").lower() == p_low]
+ items.sort(key=lambda x: str(x.get("scheduled_iso") or ""), reverse=True)
+ return {
+ "status": "success",
+ "count": len(items[:limit]),
+ "posts": items[:max(1, min(limit, 200))]
+ }
 @router.post("/api/v1/posts/publish")
 @router.post("/api/v1/posts/schedule")
 async def api_v1_publish_or_schedule_post(request: Request):
-    """
+ """
     Allows n8n to schedule or immediately publish social media posts via pure JSON payload!
     Body fields:
       - platform (str) or platforms (list of str): e.g. "facebook", ["facebook", "instagram"]
@@ -3024,280 +2776,251 @@ async def api_v1_publish_or_schedule_post(request: Request):
       - time (str, optional): "HH:MM" (24h) in Asia/Manila
       - publish_now (bool, optional): True to publish immediately
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    return await run_in_threadpool(lambda: _v1_publish_or_schedule_post_sync(body))
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ return await run_in_threadpool(lambda: _v1_publish_or_schedule_post_sync(body))
 def _v1_publish_or_schedule_post_sync(body: Dict[str, Any]):
-    raw_platforms = body.get("platforms") or body.get("platform") or []
-    if isinstance(raw_platforms, str):
-        platforms_list = [p.strip().lower() for p in raw_platforms.split(",") if p.strip()]
-    elif isinstance(raw_platforms, list):
-        platforms_list = [str(p).strip().lower() for p in raw_platforms if str(p).strip()]
+ raw_platforms = body.get("platforms") or body.get("platform") or []
+ if isinstance(raw_platforms, str):
+  platforms_list = [p.strip().lower() for p in raw_platforms.split(",") if p.strip()]
+ elif isinstance(raw_platforms, list):
+  platforms_list = [str(p).strip().lower() for p in raw_platforms if str(p).strip()]
+ else:
+  platforms_list = []
+ if not platforms_list:
+  return JSONResponse({"status": "error", "message": "Please provide 'platform' (e.g. 'facebook') or 'platforms' (['facebook', 'instagram'])."}, status_code=400)
+ caption = str(body.get("caption") or body.get("message") or body.get("content") or "").strip()
+ title = str(body.get("title") or "").strip()
+ media_url = str(body.get("media_url") or body.get("video_url") or "").strip()
+ thumb_url = str(body.get("thumbnail_url") or "").strip()
+ image_urls = body.get("image_urls") or ([] if not body.get("image_url") else [body.get("image_url")])
+ if isinstance(image_urls, str):
+  image_urls = [u.strip() for u in image_urls.split(",") if u.strip()]
+ # Support Google Drive Files Vault file_id / file_ids directly from n8n
+ vault_media_file_id = str(body.get("file_id") or body.get("vault_file_id") or body.get("media_file_id") or "").strip()
+ vault_thumb_file_id = str(body.get("thumb_file_id") or body.get("vault_thumb_file_id") or "").strip()
+ raw_vault_ids = body.get("file_ids") or body.get("vault_file_ids") or body.get("image_file_ids") or []
+ if isinstance(raw_vault_ids, str):
+  vault_media_file_ids = [x.strip() for x in raw_vault_ids.split(",") if x.strip()]
+ elif isinstance(raw_vault_ids, list):
+  vault_media_file_ids = [str(x).strip() for x in raw_vault_ids if str(x).strip()]
+ else:
+  vault_media_file_ids = []
+ post_type = str(body.get("post_type") or "").strip().lower()
+ if not post_type:
+  if vault_media_file_id:
+   try:
+    v_store = _load_files_vault_store(force_cloud=False)
+    v_match = next((f for f in (v_store.get("files") or []) if str(f.get("file_id")) == vault_media_file_id), None)
+    v_ctype = str((v_match or {}).get("content_type") or "").lower()
+    if v_ctype.startswith("image/"):
+     post_type = "image"
+     if not vault_media_file_ids:
+      vault_media_file_ids = [vault_media_file_id]
     else:
-        platforms_list = []
-
-    if not platforms_list:
-        return JSONResponse({"status": "error", "message": "Please provide 'platform' (e.g. 'facebook') or 'platforms' (['facebook', 'instagram'])."}, status_code=400)
-
-    caption = str(body.get("caption") or body.get("message") or body.get("content") or "").strip()
-    title = str(body.get("title") or "").strip()
-    media_url = str(body.get("media_url") or body.get("video_url") or "").strip()
-    thumb_url = str(body.get("thumbnail_url") or "").strip()
-    image_urls = body.get("image_urls") or ([] if not body.get("image_url") else [body.get("image_url")])
-    if isinstance(image_urls, str):
-        image_urls = [u.strip() for u in image_urls.split(",") if u.strip()]
-
-    # Support Google Drive Files Vault file_id / file_ids directly from n8n
-    vault_media_file_id = str(body.get("file_id") or body.get("vault_file_id") or body.get("media_file_id") or "").strip()
-    vault_thumb_file_id = str(body.get("thumb_file_id") or body.get("vault_thumb_file_id") or "").strip()
-    raw_vault_ids = body.get("file_ids") or body.get("vault_file_ids") or body.get("image_file_ids") or []
-    if isinstance(raw_vault_ids, str):
-        vault_media_file_ids = [x.strip() for x in raw_vault_ids.split(",") if x.strip()]
-    elif isinstance(raw_vault_ids, list):
-        vault_media_file_ids = [str(x).strip() for x in raw_vault_ids if str(x).strip()]
-    else:
-        vault_media_file_ids = []
-
-    post_type = str(body.get("post_type") or "").strip().lower()
-    if not post_type:
-        if vault_media_file_id:
-            try:
-                v_store = _load_files_vault_store(force_cloud=False)
-                v_match = next((f for f in (v_store.get("files") or []) if str(f.get("file_id")) == vault_media_file_id), None)
-                v_ctype = str((v_match or {}).get("content_type") or "").lower()
-                if v_ctype.startswith("image/"):
-                    post_type = "image"
-                    if not vault_media_file_ids:
-                        vault_media_file_ids = [vault_media_file_id]
-                else:
-                    post_type = "reels"
-            except Exception:
-                post_type = "reels"
-        elif vault_media_file_ids:
-            post_type = "image"
-        elif media_url and any(ext in media_url.lower() for ext in (".mp4", ".mov", ".webm", "video")):
-            post_type = "reels"
-        elif image_urls or (media_url and any(ext in media_url.lower() for ext in (".jpg", ".jpeg", ".png", ".webp"))):
-            post_type = "image"
-            if media_url and not image_urls:
-                image_urls = [media_url]
-        else:
-            post_type = "text"
-
-    date_val = str(body.get("date") or "").strip()
-    time_val = str(body.get("time") or "").strip()
-    publish_now = bool(body.get("publish_now", not (date_val and time_val)))
-
-    manila_tz = pytz.timezone("Asia/Manila")
-    now_manila = datetime.now(manila_tz)
-    if not publish_now and date_val and time_val:
-        try:
-            scheduled_time = manila_tz.localize(datetime.strptime(f"{date_val} {time_val}", "%Y-%m-%d %H:%M"))
-        except Exception as e:
-            return JSONResponse({"status": "error", "message": f"Invalid date/time format (expected YYYY-MM-DD and HH:MM): {e}"}, status_code=400)
-    else:
-        scheduled_time = now_manila + timedelta(seconds=6)
-
-    # Download remote media if URLs are provided
-    media_bytes = None
-    media_filename = ""
-    thumb_bytes = None
-    thumb_filename = ""
-    image_buffers: List[Dict[str, Any]] = []
-
-    try:
-        if post_type in ("reels", "video169") and media_url:
-            r_vid = HTTP_SESSION.get(media_url, timeout=45)
-            if r_vid.status_code == 200:
-                media_bytes = r_vid.content
-                media_filename = "n8n_video.mp4"
-            if thumb_url:
-                r_th = HTTP_SESSION.get(thumb_url, timeout=25)
-                if r_th.status_code == 200:
-                    thumb_bytes = r_th.content
-                    thumb_filename = "n8n_thumb.jpg"
-        elif post_type == "image" and image_urls:
-            for idx, img_u in enumerate(image_urls):
-                r_img = HTTP_SESSION.get(str(img_u).strip(), timeout=30)
-                if r_img.status_code == 200:
-                    image_buffers.append({"filename": f"n8n_image_{idx+1}.jpg", "bytes": r_img.content})
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": f"Failed to download media URL provided by n8n: {e}"}, status_code=400)
-
-    connected_items = refresh_connected_accounts_cache(force=False)
-    explicit_acc_id = str(body.get("account_id") or body.get("page_id") or "").strip()
-
-    queued_records = []
-    for plat in platforms_list:
-        matching_accs = [
-            a for a in connected_items
-            if str(a.get("platform") or "").lower() == plat
-            and (not explicit_acc_id or str(a.get("account_id")) == explicit_acc_id)
-        ]
-        if not matching_accs:
-            matching_accs = [{
-                "platform": plat,
-                "account_id": explicit_acc_id or "",
-                "account_name": str(body.get("account_name") or plat.capitalize())
-            }]
-
-        for acc in matching_accs:
-            record_id = f"post_{uuid.uuid4().hex[:12]}"
-            page_id_val = str(acc.get("account_id") or "")
-            acc_name_val = str(acc.get("account_name") or plat.capitalize())
-            display_caption = (
-                f"{title}\n{caption}".strip()
-                if (plat == "youtube" and title and caption and title != caption)
-                else (title or caption)
-            )
-            try:
-                with db_engine.begin() as conn:
-                    conn.execute(
-                        text("""
+     post_type = "reels"
+   except Exception:
+    post_type = "reels"
+  elif vault_media_file_ids:
+   post_type = "image"
+  elif media_url and any(ext in media_url.lower() for ext in (".mp4", ".mov", ".webm", "video")):
+   post_type = "reels"
+  elif image_urls or (media_url and any(ext in media_url.lower() for ext in (".jpg", ".jpeg", ".png", ".webp"))):
+   post_type = "image"
+   if media_url and not image_urls:
+    image_urls = [media_url]
+  else:
+   post_type = "text"
+ date_val = str(body.get("date") or "").strip()
+ time_val = str(body.get("time") or "").strip()
+ publish_now = bool(body.get("publish_now", not (date_val and time_val)))
+ manila_tz = pytz.timezone("Asia/Manila")
+ now_manila = datetime.now(manila_tz)
+ if not publish_now and date_val and time_val:
+  try:
+   scheduled_time = manila_tz.localize(datetime.strptime(f"{date_val} {time_val}", "%Y-%m-%d %H:%M"))
+  except Exception as e:
+   return JSONResponse({"status": "error", "message": f"Invalid date/time format (expected YYYY-MM-DD and HH:MM): {e}"}, status_code=400)
+ else:
+  scheduled_time = now_manila + timedelta(seconds=6)
+ # Download remote media if URLs are provided
+ media_bytes = None
+ media_filename = ""
+ thumb_bytes = None
+ thumb_filename = ""
+ image_buffers: List[Dict[str, Any]] = []
+ try:
+  if post_type in ("reels", "video169") and media_url:
+   r_vid = HTTP_SESSION.get(media_url, timeout=45)
+   if r_vid.status_code == 200:
+    media_bytes = r_vid.content
+    media_filename = "n8n_video.mp4"
+   if thumb_url:
+    r_th = HTTP_SESSION.get(thumb_url, timeout=25)
+    if r_th.status_code == 200:
+     thumb_bytes = r_th.content
+     thumb_filename = "n8n_thumb.jpg"
+  elif post_type == "image" and image_urls:
+   for idx, img_u in enumerate(image_urls):
+    r_img = HTTP_SESSION.get(str(img_u).strip(), timeout=30)
+    if r_img.status_code == 200:
+     image_buffers.append({"filename": f"n8n_image_{idx+1}.jpg", "bytes": r_img.content})
+ except Exception as e:
+  return JSONResponse({"status": "error", "message": f"Failed to download media URL provided by n8n: {e}"}, status_code=400)
+ connected_items = refresh_connected_accounts_cache(force=False)
+ explicit_acc_id = str(body.get("account_id") or body.get("page_id") or "").strip()
+ queued_records = []
+ for plat in platforms_list:
+  matching_accs = [
+  a for a in connected_items
+  if str(a.get("platform") or "").lower() == plat
+  and (not explicit_acc_id or str(a.get("account_id")) == explicit_acc_id)
+  ]
+  if not matching_accs:
+   matching_accs = [{
+   "platform": plat,
+   "account_id": explicit_acc_id or "",
+   "account_name": str(body.get("account_name") or plat.capitalize())
+   }]
+  for acc in matching_accs:
+   record_id = f"post_{uuid.uuid4().hex[:12]}"
+   page_id_val = str(acc.get("account_id") or "")
+   acc_name_val = str(acc.get("account_name") or plat.capitalize())
+   display_caption = (
+   f"{title}\n{caption}".strip()
+   if (plat == "youtube" and title and caption and title != caption)
+   else (title or caption)
+   )
+   try:
+    with db_engine.begin() as conn:
+     conn.execute(
+     text("""
                             INSERT INTO glennbot_scheduled_posts
                             (id, platform, page_id, account_name, post_type, caption, media_preview_url, scheduled_time, status, status_message)
                             VALUES (:id, :platform, :page_id, :account_name, :post_type, :caption, :preview, :sched_time, 'processing_payload', 'Queued via Internal API (n8n)')
                         """),
-                        {
-                            "id": record_id,
-                            "platform": plat,
-                            "page_id": page_id_val,
-                            "account_name": acc_name_val,
-                            "post_type": post_type,
-                            "caption": display_caption,
-                            "preview": "",
-                            "sched_time": scheduled_time
-                        }
-                    )
-            except Exception as db_e:
-                print(f"[InternalAPI] Post insert warning: {db_e}")
-
-            threading.Thread(
-                target=_process_schedule_payload_background,
-                args=(
-                    record_id,
-                    plat,
-                    post_type,
-                    page_id_val,
-                    acc_name_val,
-                    title,
-                    caption,
-                    scheduled_time,
-                    media_bytes,
-                    media_filename,
-                    thumb_bytes,
-                    thumb_filename,
-                    image_buffers,
-                    vault_media_file_id,
-                    vault_thumb_file_id,
-                    vault_media_file_ids
-                ),
-                daemon=True
-            ).start()
-
-            queued_records.append({
-                "record_id": record_id,
-                "platform": plat,
-                "account_id": page_id_val,
-                "account_name": acc_name_val,
-                "post_type": post_type,
-                "scheduled_for_manila": scheduled_time.strftime("%Y-%m-%d %I:%M:%S %p"),
-                "publish_now": publish_now
-            })
-
-    _dispatch_outbound_n8n_webhook_async("post.scheduled", {"queued_posts": queued_records})
-    return {
-        "status": "success",
-        "message": f"Queued {len(queued_records)} post(s) via GlennBot Internal API!",
-        "queued_posts": queued_records
-    }
-
-
+     {
+     "id": record_id,
+     "platform": plat,
+     "page_id": page_id_val,
+     "account_name": acc_name_val,
+     "post_type": post_type,
+     "caption": display_caption,
+     "preview": "",
+     "sched_time": scheduled_time
+     }
+     )
+   except Exception as db_e:
+    print(f"[InternalAPI] Post insert warning: {db_e}")
+   threading.Thread(
+   target=_process_schedule_payload_background,
+   args=(
+   record_id,
+   plat,
+   post_type,
+   page_id_val,
+   acc_name_val,
+   title,
+   caption,
+   scheduled_time,
+   media_bytes,
+   media_filename,
+   thumb_bytes,
+   thumb_filename,
+   image_buffers,
+   vault_media_file_id,
+   vault_thumb_file_id,
+   vault_media_file_ids
+   ),
+   daemon=True
+   ).start()
+   queued_records.append({
+   "record_id": record_id,
+   "platform": plat,
+   "account_id": page_id_val,
+   "account_name": acc_name_val,
+   "post_type": post_type,
+   "scheduled_for_manila": scheduled_time.strftime("%Y-%m-%d %I:%M:%S %p"),
+   "publish_now": publish_now
+   })
+ _dispatch_outbound_n8n_webhook_async("post.scheduled", {"queued_posts": queued_records})
+ return {
+ "status": "success",
+ "message": f"Queued {len(queued_records)} post(s) via GlennBot Internal API!",
+ "queued_posts": queued_records
+ }
 @router.get("/api/v1/messages")
 async def api_v1_get_messages(
-    request: Request,
-    platform: str = "all",
-    account_id: str = "all",
-    unread_only: bool = False,
-    limit: int = 25,
-    force: bool = False
+request: Request,
+platform: str = "all",
+account_id: str = "all",
+unread_only: bool = False,
+limit: int = 25,
+force: bool = False
 ):
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    res = await run_in_threadpool(
-        lambda: get_inbox_conversations(
-            force=force,
-            account_id=account_id or "all",
-            platform=platform or "all",
-            limit_per_page=max(5, min(limit, 100))
-        )
-    )
-    convs = list(res.get("conversations") or [])
-    if unread_only:
-        convs = [c for c in convs if not c.get("is_read") or int(c.get("unread_count") or 0) > 0]
-    return {
-        "status": "success",
-        "count": len(convs[:limit]),
-        "total_unread": res.get("total_unread", 0),
-        "conversations": convs[:limit]
-    }
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ res = await run_in_threadpool(
+ lambda: get_inbox_conversations(
+ force=force,
+ account_id=account_id or "all",
+ platform=platform or "all",
+ limit_per_page=max(5, min(limit, 100))
+ )
+ )
+ convs = list(res.get("conversations") or [])
+ if unread_only:
+  convs = [c for c in convs if not c.get("is_read") or int(c.get("unread_count") or 0) > 0]
+ return {
+ "status": "success",
+ "count": len(convs[:limit]),
+ "total_unread": res.get("total_unread", 0),
+ "conversations": convs[:limit]
+ }
 def _execute_v1_send_message_inprocess(body: Dict[str, Any], is_test_run: bool = False) -> Dict[str, Any]:
-    conv_id = str(body.get("conversation_id") or "").strip()
-    acc_id = str(body.get("account_id") or "").strip()
-    msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or "")
-    rcpt_id = str(body.get("recipient_id") or "").strip()
-    file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
-    media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
-
-    if not msg_text and (file_id_in or media_url_in):
-        msg_text = "Here is the file you requested:"
-
-    if not conv_id or not acc_id or not msg_text:
-        return {
-            "status": "error",
-            "message": "'conversation_id', 'account_id', and 'message' (or 'file_id') are required."
-        }
-
-    if is_test_run or conv_id.startswith("test_") or acc_id.startswith("test_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "conversation_id": conv_id,
-            "account_id": acc_id,
-            "recipient_id": rcpt_id or "test_user_01",
-            "sent_message": msg_text,
-            "file_id": file_id_in,
-            "message": f"Test Verified! In live production, GlennBot will send DM '{msg_text}' to conversation '{conv_id}'."
-        }
-
-    payload = SendMessagePayload(
-        conversation_id=conv_id,
-        account_id=acc_id,
-        recipient_id=rcpt_id,
-        message=msg_text,
-        file_id=file_id_in,
-        media_url=media_url_in
-    )
-    trigger_wh = bool(body.get("trigger_webhook", False))
-    return send_direct_message_reply(payload, trigger_n8n_webhook=trigger_wh)
-
-
+ conv_id = str(body.get("conversation_id") or "").strip()
+ acc_id = str(body.get("account_id") or "").strip()
+ msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or "")
+ rcpt_id = str(body.get("recipient_id") or "").strip()
+ file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
+ media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
+ if not msg_text and (file_id_in or media_url_in):
+  msg_text = "Here is the file you requested:"
+ if not conv_id or not acc_id or not msg_text:
+  return {
+  "status": "error",
+  "message": "'conversation_id', 'account_id', and 'message' (or 'file_id') are required."
+  }
+ if is_test_run or conv_id.startswith("test_") or acc_id.startswith("test_"):
+  return {
+  "status": "success",
+  "simulated": True,
+  "conversation_id": conv_id,
+  "account_id": acc_id,
+  "recipient_id": rcpt_id or "test_user_01",
+  "sent_message": msg_text,
+  "file_id": file_id_in,
+  "message": f"Test Verified! In live production, GlennBot will send DM '{msg_text}' to conversation '{conv_id}'."
+  }
+ payload = SendMessagePayload(
+ conversation_id=conv_id,
+ account_id=acc_id,
+ recipient_id=rcpt_id,
+ message=msg_text,
+ file_id=file_id_in,
+ media_url=media_url_in
+ )
+ trigger_wh = bool(body.get("trigger_webhook", False))
+ return send_direct_message_reply(payload, trigger_n8n_webhook=trigger_wh)
 @router.post("/api/v1/messages/send")
 async def api_v1_send_message(request: Request):
-    """
+ """
     Sends a Direct Message reply on Facebook, Instagram, WhatsApp, or Telegram from n8n.
     JSON Body:
       - conversation_id (str, required): Conversation ID or thread ID
@@ -3305,457 +3028,410 @@ async def api_v1_send_message(request: Request):
       - message (str, required): Message text to send
       - recipient_id (str, optional): Participant / recipient ID
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    res = await run_in_threadpool(lambda: _execute_v1_send_message_inprocess(body, is_test_run=False))
-    if res.get("status") == "success":
-        return res
-    return JSONResponse(res, status_code=400)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ res = await run_in_threadpool(lambda: _execute_v1_send_message_inprocess(body, is_test_run=False))
+ if res.get("status") == "success":
+  return res
+ return JSONResponse(res, status_code=400)
 @router.get("/api/v1/comments")
 async def api_v1_get_comments(
-    request: Request,
-    platform: str = "",
-    record_id: str = "",
-    comment_id: str = "",
-    unread_only: bool = False,
-    limit: int = 50,
-    force: bool = False
+request: Request,
+platform: str = "",
+record_id: str = "",
+comment_id: str = "",
+unread_only: bool = False,
+limit: int = 50,
+force: bool = False
 ):
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    res = await run_in_threadpool(lambda: get_all_comments(force=force))
-    comments = list(res.get("comments") or [])
-    if platform:
-        p_low = platform.strip().lower()
-        comments = [c for c in comments if str(c.get("platform") or "").lower() == p_low]
-    if record_id:
-        r_clean = record_id.strip()
-        comments = [c for c in comments if str(c.get("record_id") or "") == r_clean]
-    if comment_id:
-        c_clean = comment_id.strip()
-        comments = [
-            c for c in comments
-            if str(c.get("comment_id") or "") == c_clean
-            or any(str(r.get("id") or "") == c_clean for r in (c.get("replies") or []))
-        ]
-    if unread_only:
-        comments = [c for c in comments if not c.get("is_read")]
-    return {
-        "status": "success",
-        "count": len(comments[:limit]),
-        "unread_count": res.get("unread_count", 0),
-        "comments": comments[:limit]
-    }
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ res = await run_in_threadpool(lambda: get_all_comments(force=force))
+ comments = list(res.get("comments") or [])
+ if platform:
+  p_low = platform.strip().lower()
+  comments = [c for c in comments if str(c.get("platform") or "").lower() == p_low]
+ if record_id:
+  r_clean = record_id.strip()
+  comments = [c for c in comments if str(c.get("record_id") or "") == r_clean]
+ if comment_id:
+  c_clean = comment_id.strip()
+  comments = [
+  c for c in comments
+  if str(c.get("comment_id") or "") == c_clean
+  or any(str(r.get("id") or "") == c_clean for r in (c.get("replies") or []))
+  ]
+ if unread_only:
+  comments = [c for c in comments if not c.get("is_read")]
+ return {
+ "status": "success",
+ "count": len(comments[:limit]),
+ "unread_count": res.get("unread_count", 0),
+ "comments": comments[:limit]
+ }
 def _resolve_record_id_for_comment_v1(rec_id: str, comm_id: str, post_id_in: str = "") -> str:
-    resolved = str(rec_id or "").strip()
-    c_clean = str(comm_id or "").strip()
-    norm_c = _normalize_comment_key(c_clean) if c_clean else ""
-    p_clean = str(post_id_in or "").strip()
-    p_suffix = p_clean.split("_")[-1].strip() if "_" in p_clean else p_clean
-    try:
-        if not CLOUDINARY_COMMENTS_STORE.get("loaded"):
-            load_comments_store_from_cloudinary()
-        posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
-
-        # 1. If a record_id was provided AND it actually contains comm_id right now, use it immediately
-        if resolved and resolved in posts_store and c_clean:
-            c_map_res = (posts_store[resolved] or {}).get("comments") or {}
-            if c_clean in c_map_res or any(_normalize_comment_key(str(k)) == norm_c for k in c_map_res.keys()):
-                return resolved
-            for c_val in c_map_res.values():
-                if isinstance(c_val, dict) and any(
-                    str(r.get("id") or "") == c_clean or _normalize_comment_key(str(r.get("id") or "")) == norm_c
-                    for r in (c_val.get("replies") or [])
-                ):
-                    return resolved
-
-        # 2. Otherwise search all post entries for the exact comment_id (handles post_acc... <-> post_ext... migrations)
-        if c_clean:
-            for cand_rid, p_entry in posts_store.items():
-                c_map = (p_entry or {}).get("comments") or {}
-                if c_clean in c_map:
-                    return str(cand_rid)
-                for k_cid, c_val in c_map.items():
-                    if str(k_cid) == c_clean or (norm_c and _normalize_comment_key(str(k_cid)) == norm_c):
-                        return str(cand_rid)
-                    if isinstance(c_val, dict) and any(
-                        str(r.get("id") or "") == c_clean or (norm_c and _normalize_comment_key(str(r.get("id") or "")) == norm_c)
-                        for r in (c_val.get("replies") or [])
-                    ):
-                        return str(cand_rid)
-
-        # 3. Fallback: match by post_id_in across CLOUDINARY_COMMENTS_STORE
-        if p_clean:
-            for cand_rid, p_entry in posts_store.items():
-                c_map = (p_entry or {}).get("comments") or {}
-                for c_val in c_map.values():
-                    if not isinstance(c_val, dict):
-                        continue
-                    z_pid = str(c_val.get("zernio_post_id") or "").strip()
-                    e_pid = str(c_val.get("external_post_id") or "").strip()
-                    if p_clean in (z_pid, e_pid) or (p_suffix and p_suffix in (z_pid.split("_")[-1], e_pid.split("_")[-1])):
-                        return str(cand_rid)
-    except Exception:
-        pass
+ resolved = str(rec_id or "").strip()
+ c_clean = str(comm_id or "").strip()
+ norm_c = _normalize_comment_key(c_clean) if c_clean else ""
+ p_clean = str(post_id_in or "").strip()
+ p_suffix = p_clean.split("_")[-1].strip() if "_" in p_clean else p_clean
+ try:
+  if not CLOUDINARY_COMMENTS_STORE.get("loaded"):
+   load_comments_store_from_cloudinary()
+  posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+  # 1. If a record_id was provided AND it actually contains comm_id right now, use it immediately
+  if resolved and resolved in posts_store and c_clean:
+   c_map_res = (posts_store[resolved] or {}).get("comments") or {}
+   if c_clean in c_map_res or any(_normalize_comment_key(str(k)) == norm_c for k in c_map_res.keys()):
     return resolved
-
-
+   for c_val in c_map_res.values():
+    if isinstance(c_val, dict) and any(
+    str(r.get("id") or "") == c_clean or _normalize_comment_key(str(r.get("id") or "")) == norm_c
+    for r in (c_val.get("replies") or [])
+    ):
+     return resolved
+  # 2. Otherwise search all post entries for the exact comment_id (handles post_acc... <-> post_ext... migrations)
+  if c_clean:
+   for cand_rid, p_entry in posts_store.items():
+    c_map = (p_entry or {}).get("comments") or {}
+    if c_clean in c_map:
+     return str(cand_rid)
+    for k_cid, c_val in c_map.items():
+     if str(k_cid) == c_clean or (norm_c and _normalize_comment_key(str(k_cid)) == norm_c):
+      return str(cand_rid)
+     if isinstance(c_val, dict) and any(
+     str(r.get("id") or "") == c_clean or (norm_c and _normalize_comment_key(str(r.get("id") or "")) == norm_c)
+     for r in (c_val.get("replies") or [])
+     ):
+      return str(cand_rid)
+  # 3. Fallback: match by post_id_in across CLOUDINARY_COMMENTS_STORE
+  if p_clean:
+   for cand_rid, p_entry in posts_store.items():
+    c_map = (p_entry or {}).get("comments") or {}
+    for c_val in c_map.values():
+     if not isinstance(c_val, dict):
+      continue
+     z_pid = str(c_val.get("zernio_post_id") or "").strip()
+     e_pid = str(c_val.get("external_post_id") or "").strip()
+     if p_clean in (z_pid, e_pid) or (p_suffix and p_suffix in (z_pid.split("_")[-1], e_pid.split("_")[-1])):
+      return str(cand_rid)
+ except Exception:
+  pass
+ return resolved
 @router.get("/api/v1/comments/thread-status")
 async def api_v1_get_comment_thread_status(
-    request: Request,
-    record_id: str = "",
-    comment_id: str = "",
-    post_id: str = "",
-    author_id: str = "",
-    force: bool = True
+request: Request,
+record_id: str = "",
+comment_id: str = "",
+post_id: str = "",
+author_id: str = "",
+force: bool = True
 ):
-    """
+ """
     Checks if a commenter has replied specifically inside a comment thread (`comment_id`)
     as opposed to merely posting a separate top-level comment on the post.
     Designed to be called after an `n8n-nodes-base.wait` node (e.g., "Wait 2 minutes till he replies to your comment").
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    comm_id = str(comment_id or "").strip()
-    rec_id = str(record_id or "").strip()
-
-    if not comm_id:
-        return JSONResponse({
-            "status": "error",
-            "message": "'comment_id' query parameter is required (e.g. ?record_id=...&comment_id=...)."
-        }, status_code=400)
-
-    # Simulated test support so "Test step" in n8n returns a realistic response
-    if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "record_id": rec_id or "test_record_fb_01",
-            "comment_id": comm_id,
-            "has_reply_to_comment": True,
-            "replied_on_comment_thread": True,
-            "replied_on_post_only": False,
-            "latest_reply_id": f"{comm_id}_reply_1",
-            "reply_target_comment_id": f"{comm_id}_reply_1",
-            "subthread_comment_id": f"{comm_id}_own_reply_1",
-            "latest_reply_message": "Your Welcome!",
-            "latest_reply_author": "Juan Dela Cruz",
-            "user_replies_in_thread": [
-                {
-                    "id": f"{comm_id}_reply_1",
-                    "parent_comment_id": comm_id,
-                    "replied_to_id": f"{comm_id}_own_reply_1",
-                    "author_name": "Juan Dela Cruz",
-                    "message": "Your Welcome!",
-                    "is_own": False
-                }
-            ],
-            "replies_count": 1
-        }
-
-    rec_id = await run_in_threadpool(lambda: _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id))
-    if not rec_id:
-        return JSONResponse({
-            "status": "error",
-            "message": f"Could not resolve post record_id for comment_id '{comm_id}'."
-        }, status_code=404)
-
-    # Perform a live sync on the post if force=True inside threadpool so event loop never blocks
-    if force:
-        def _sync_post_for_thread_status():
-            try:
-                with db_engine.connect() as conn:
-                    row = conn.execute(
-                        text("""
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ comm_id = str(comment_id or "").strip()
+ rec_id = str(record_id or "").strip()
+ if not comm_id:
+  return JSONResponse({
+  "status": "error",
+  "message": "'comment_id' query parameter is required (e.g. ?record_id=...&comment_id=...)."
+  }, status_code=400)
+ # Simulated test support so "Test step" in n8n returns a realistic response
+ if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
+  return {
+  "status": "success",
+  "simulated": True,
+  "record_id": rec_id or "test_record_fb_01",
+  "comment_id": comm_id,
+  "has_reply_to_comment": True,
+  "replied_on_comment_thread": True,
+  "replied_on_post_only": False,
+  "latest_reply_id": f"{comm_id}_reply_1",
+  "reply_target_comment_id": f"{comm_id}_reply_1",
+  "subthread_comment_id": f"{comm_id}_own_reply_1",
+  "latest_reply_message": "Your Welcome!",
+  "latest_reply_author": "Juan Dela Cruz",
+  "user_replies_in_thread": [
+  {
+  "id": f"{comm_id}_reply_1",
+  "parent_comment_id": comm_id,
+  "replied_to_id": f"{comm_id}_own_reply_1",
+  "author_name": "Juan Dela Cruz",
+  "message": "Your Welcome!",
+  "is_own": False
+  }
+  ],
+  "replies_count": 1
+  }
+ rec_id = await run_in_threadpool(lambda: _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id))
+ if not rec_id:
+  return JSONResponse({
+  "status": "error",
+  "message": f"Could not resolve post record_id for comment_id '{comm_id}'."
+  }, status_code=404)
+ # Perform a live sync on the post if force=True inside threadpool so event loop never blocks
+ if force:
+  def _sync_post_for_thread_status():
+   try:
+    with db_engine.connect() as conn:
+     row = conn.execute(
+     text("""
                             SELECT id, platform, page_id, account_name, caption, scheduled_time,
                                    external_post_id, permalink_url, status_message
                             FROM glennbot_scheduled_posts
                             WHERE id = :id
                         """),
-                        {"id": rec_id}
-                    ).mappings().first()
-                if row:
-                    sync_single_post_to_cloudinary(dict(row), force_unhide=False)
-            except Exception as e:
-                print(f"[InternalAPI] thread-status live sync warning: {e}")
-        await run_in_threadpool(_sync_post_for_thread_status)
-
-    posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
-    post_entry = posts_store.get(rec_id) or {}
-    parent_comm, _ = find_parent_and_target_comment(post_entry, comm_id)
-    target_comm = parent_comm or (post_entry.get("comments") or {}).get(comm_id) or {}
-    root_cid = str(target_comm.get("comment_id") or comm_id).strip()
-
-    orig_author_id = str(author_id or target_comm.get("author_id") or "").strip()
-    orig_author_name = str(target_comm.get("author_name") or "").strip().lower()
-    orig_created_iso = str(target_comm.get("created_iso") or "").strip()
-
-    all_replies = merge_buffered_own_replies(root_cid, list(target_comm.get("replies") or []))
-    # Find if our page/bot has replied in this comment thread, and check for user replies inside this thread
-    own_reply_indices = [idx for idx, r in enumerate(all_replies) if isinstance(r, dict) and bool(r.get("is_own") or r.get("is_own_comment"))]
-    first_own_idx = own_reply_indices[0] if own_reply_indices else -1
-    latest_own_rep = next(
-        (
-            r for r in reversed(all_replies)
-            if isinstance(r, dict)
-            and bool(r.get("is_own") or r.get("is_own_comment"))
-            and str(r.get("id") or "").strip()
-            and not str(r.get("id") or "").strip().startswith(("local_", "z_rep_"))
-        ),
-        {}
-    )
-
-    user_replies_in_thread: List[Dict[str, Any]] = []
-    for idx, r in enumerate(all_replies):
-        if not isinstance(r, dict):
-            continue
-        if bool(r.get("is_own") or r.get("is_own_comment")):
-            continue
-        # If our page already replied in this thread, only count user replies that came AFTER our page's first reply (or if timestamps/order show it's a response in the thread)
-        if first_own_idx >= 0 and idx < first_own_idx:
-            continue
-        r_aid = str(r.get("author_id") or "").strip()
-        r_aname = str(r.get("author_name") or "").strip().lower()
-        if orig_author_id and r_aid and r_aid != orig_author_id:
-            if orig_author_name and r_aname and r_aname != orig_author_name:
-                continue
-        user_replies_in_thread.append(r)
-
-    # Check if the same commenter mistakenly posted a NEW top-level comment on the post instead of replying to the comment thread
-    top_level_other_comments_by_author: List[Dict[str, Any]] = []
-    for k_cid, c_val in (post_entry.get("comments") or {}).items():
-        if not isinstance(c_val, dict) or str(k_cid) == root_cid:
-            continue
-        if bool(c_val.get("is_own_comment") or c_val.get("is_own")):
-            continue
-        c_aid = str(c_val.get("author_id") or "").strip()
-        c_aname = str(c_val.get("author_name") or "").strip().lower()
-        same_author = False
-        if orig_author_id and c_aid and c_aid == orig_author_id:
-            same_author = True
-        elif orig_author_name and c_aname and c_aname == orig_author_name and orig_author_name not in ("user", "facebook user", "instagram user"):
-            same_author = True
-        if same_author:
-            c_iso = str(c_val.get("created_iso") or "").strip()
-            if not orig_created_iso or not c_iso or c_iso >= orig_created_iso:
-                top_level_other_comments_by_author.append(c_val)
-
-    has_thread_reply = len(user_replies_in_thread) > 0
-    latest_rep = user_replies_in_thread[-1] if has_thread_reply else {}
-    latest_rep_id_str = str(latest_rep.get("id") or "").strip()
-    latest_own_id_str = str(latest_own_rep.get("id") or "").strip()
-    subthread_cid_str = str(latest_rep.get("replied_to_id") or latest_own_id_str or "").strip()
-    reply_target_cid_str = latest_rep_id_str or latest_own_id_str or root_cid
-
-    return {
-        "status": "success",
-        "record_id": rec_id,
-        "comment_id": root_cid,
-        "has_reply_to_comment": has_thread_reply,
-        "replied_on_comment_thread": has_thread_reply,
-        "replied_on_post_only": (not has_thread_reply) and (len(top_level_other_comments_by_author) > 0),
-        "latest_reply_id": latest_rep_id_str,
-        "reply_target_comment_id": reply_target_cid_str,
-        "subthread_comment_id": subthread_cid_str,
-        "latest_reply_message": str(latest_rep.get("message") or ""),
-        "latest_reply_author": str(latest_rep.get("author_name") or ""),
-        "user_replies_in_thread": user_replies_in_thread,
-        "replies_count": len(user_replies_in_thread)
-    }
-
-
+     {"id": rec_id}
+     ).mappings().first()
+    if row:
+     sync_single_post_to_cloudinary(dict(row), force_unhide=False)
+   except Exception as e:
+    print(f"[InternalAPI] thread-status live sync warning: {e}")
+  await run_in_threadpool(_sync_post_for_thread_status)
+ posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+ post_entry = posts_store.get(rec_id) or {}
+ parent_comm, _ = find_parent_and_target_comment(post_entry, comm_id)
+ target_comm = parent_comm or (post_entry.get("comments") or {}).get(comm_id) or {}
+ root_cid = str(target_comm.get("comment_id") or comm_id).strip()
+ orig_author_id = str(author_id or target_comm.get("author_id") or "").strip()
+ orig_author_name = str(target_comm.get("author_name") or "").strip().lower()
+ orig_created_iso = str(target_comm.get("created_iso") or "").strip()
+ all_replies = merge_buffered_own_replies(root_cid, list(target_comm.get("replies") or []))
+ # Find if our page/bot has replied in this comment thread, and check for user replies inside this thread
+ own_reply_indices = [idx for idx, r in enumerate(all_replies) if isinstance(r, dict) and bool(r.get("is_own") or r.get("is_own_comment"))]
+ first_own_idx = own_reply_indices[0] if own_reply_indices else -1
+ latest_own_rep = next(
+ (
+ r for r in reversed(all_replies)
+ if isinstance(r, dict)
+ and bool(r.get("is_own") or r.get("is_own_comment"))
+ and str(r.get("id") or "").strip()
+ and not str(r.get("id") or "").strip().startswith(("local_", "z_rep_"))
+ ),
+ {}
+ )
+ user_replies_in_thread: List[Dict[str, Any]] = []
+ for idx, r in enumerate(all_replies):
+  if not isinstance(r, dict):
+   continue
+  if bool(r.get("is_own") or r.get("is_own_comment")):
+   continue
+  # If our page already replied in this thread, only count user replies that came AFTER our page's first reply (or if timestamps/order show it's a response in the thread)
+  if first_own_idx >= 0 and idx < first_own_idx:
+   continue
+  r_aid = str(r.get("author_id") or "").strip()
+  r_aname = str(r.get("author_name") or "").strip().lower()
+  if orig_author_id and r_aid and r_aid != orig_author_id:
+   if orig_author_name and r_aname and r_aname != orig_author_name:
+    continue
+  user_replies_in_thread.append(r)
+ # Check if the same commenter mistakenly posted a NEW top-level comment on the post instead of replying to the comment thread
+ top_level_other_comments_by_author: List[Dict[str, Any]] = []
+ for k_cid, c_val in (post_entry.get("comments") or {}).items():
+  if not isinstance(c_val, dict) or str(k_cid) == root_cid:
+   continue
+  if bool(c_val.get("is_own_comment") or c_val.get("is_own")):
+   continue
+  c_aid = str(c_val.get("author_id") or "").strip()
+  c_aname = str(c_val.get("author_name") or "").strip().lower()
+  same_author = False
+  if orig_author_id and c_aid and c_aid == orig_author_id:
+   same_author = True
+  elif orig_author_name and c_aname and c_aname == orig_author_name and orig_author_name not in ("user", "facebook user", "instagram user"):
+   same_author = True
+  if same_author:
+   c_iso = str(c_val.get("created_iso") or "").strip()
+   if not orig_created_iso or not c_iso or c_iso >= orig_created_iso:
+    top_level_other_comments_by_author.append(c_val)
+ has_thread_reply = len(user_replies_in_thread) > 0
+ latest_rep = user_replies_in_thread[-1] if has_thread_reply else {}
+ latest_rep_id_str = str(latest_rep.get("id") or "").strip()
+ latest_own_id_str = str(latest_own_rep.get("id") or "").strip()
+ subthread_cid_str = str(latest_rep.get("replied_to_id") or latest_own_id_str or "").strip()
+ reply_target_cid_str = latest_rep_id_str or latest_own_id_str or root_cid
+ return {
+ "status": "success",
+ "record_id": rec_id,
+ "comment_id": root_cid,
+ "has_reply_to_comment": has_thread_reply,
+ "replied_on_comment_thread": has_thread_reply,
+ "replied_on_post_only": (not has_thread_reply) and (len(top_level_other_comments_by_author) > 0),
+ "latest_reply_id": latest_rep_id_str,
+ "reply_target_comment_id": reply_target_cid_str,
+ "subthread_comment_id": subthread_cid_str,
+ "latest_reply_message": str(latest_rep.get("message") or ""),
+ "latest_reply_author": str(latest_rep.get("author_name") or ""),
+ "user_replies_in_thread": user_replies_in_thread,
+ "replies_count": len(user_replies_in_thread)
+ }
 @router.post("/api/v1/comments/like")
 async def api_v1_like_comment(request: Request):
-    """
+ """
     Likes or unlikes a specific social media comment (`comment_id`) via n8n.
     JSON Body:
       - record_id (str, optional if comment_id is in store): GlennBot post record_id
       - comment_id (str, required): Comment ID to like
       - liked (bool, optional): True to like (default), False to unlike
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    rec_id = str(body.get("record_id") or "").strip()
-    post_id_in = str(body.get("post_id") or "").strip()
-    comm_id = str(body.get("comment_id") or "").strip()
-    liked_flag = bool(body.get("liked", True) if body.get("liked") is not None else True)
-
-    if not comm_id:
-        return JSONResponse({
-            "status": "error",
-            "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
-        }, status_code=400)
-
-    if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "action": "like_comment" if liked_flag else "unlike_comment",
-            "comment_id": comm_id,
-            "record_id": rec_id or "test_record_fb_01",
-            "liked": liked_flag,
-            "message": f"Test Verified! In live production, GlennBot will automatically {'like' if liked_flag else 'unlike'} comment ({comm_id})."
-        }
-
-    rec_id = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
-    if not rec_id:
-        return JSONResponse({
-            "status": "error",
-            "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
-        }, status_code=400)
-
-    res = await run_in_threadpool(
-        lambda: like_or_unlike_comment(CommentLikePayload(record_id=rec_id, comment_id=comm_id, liked=liked_flag))
-    )
-    if res.get("status") == "success":
-        return res
-    return JSONResponse(res, status_code=400)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ rec_id = str(body.get("record_id") or "").strip()
+ post_id_in = str(body.get("post_id") or "").strip()
+ comm_id = str(body.get("comment_id") or "").strip()
+ liked_flag = bool(body.get("liked", True) if body.get("liked") is not None else True)
+ if not comm_id:
+  return JSONResponse({
+  "status": "error",
+  "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
+  }, status_code=400)
+ if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
+  return {
+  "status": "success",
+  "simulated": True,
+  "action": "like_comment" if liked_flag else "unlike_comment",
+  "comment_id": comm_id,
+  "record_id": rec_id or "test_record_fb_01",
+  "liked": liked_flag,
+  "message": f"Test Verified! In live production, GlennBot will automatically {'like' if liked_flag else 'unlike'} comment ({comm_id})."
+  }
+ rec_id = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
+ if not rec_id:
+  return JSONResponse({
+  "status": "error",
+  "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
+  }, status_code=400)
+ res = await run_in_threadpool(
+ lambda: like_or_unlike_comment(CommentLikePayload(record_id=rec_id, comment_id=comm_id, liked=liked_flag))
+ )
+ if res.get("status") == "success":
+  return res
+ return JSONResponse(res, status_code=400)
 @router.post("/api/v1/comments/hide")
 async def api_v1_hide_comment(request: Request):
-    """
+ """
     Hides or unhides a specific social media comment (`comment_id`) via n8n.
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    rec_id = str(body.get("record_id") or "").strip()
-    post_id_in = str(body.get("post_id") or "").strip()
-    comm_id = str(body.get("comment_id") or "").strip()
-    hidden_flag = bool(body.get("hidden", True) if body.get("hidden") is not None else True)
-
-    if not comm_id:
-        return JSONResponse({
-            "status": "error",
-            "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
-        }, status_code=400)
-
-    if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "action": "hide_comment" if hidden_flag else "unhide_comment",
-            "comment_id": comm_id,
-            "record_id": rec_id or "test_record_fb_01",
-            "hidden": hidden_flag,
-            "message": f"Test Verified! In live production, GlennBot will automatically {'hide' if hidden_flag else 'unhide'} comment ({comm_id})."
-        }
-
-    rec_id = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
-    if not rec_id:
-        return JSONResponse({
-            "status": "error",
-            "message": f"Could not resolve post record_id for comment_id '{comm_id}'."
-        }, status_code=400)
-
-    res = await run_in_threadpool(
-        lambda: hide_or_unhide_comment(CommentHidePayload(record_id=rec_id, comment_id=comm_id, hidden=hidden_flag))
-    )
-    if res.get("status") == "success":
-        return res
-    return JSONResponse(res, status_code=400)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ rec_id = str(body.get("record_id") or "").strip()
+ post_id_in = str(body.get("post_id") or "").strip()
+ comm_id = str(body.get("comment_id") or "").strip()
+ hidden_flag = bool(body.get("hidden", True) if body.get("hidden") is not None else True)
+ if not comm_id:
+  return JSONResponse({
+  "status": "error",
+  "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
+  }, status_code=400)
+ if comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
+  return {
+  "status": "success",
+  "simulated": True,
+  "action": "hide_comment" if hidden_flag else "unhide_comment",
+  "comment_id": comm_id,
+  "record_id": rec_id or "test_record_fb_01",
+  "hidden": hidden_flag,
+  "message": f"Test Verified! In live production, GlennBot will automatically {'hide' if hidden_flag else 'unhide'} comment ({comm_id})."
+  }
+ rec_id = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
+ if not rec_id:
+  return JSONResponse({
+  "status": "error",
+  "message": f"Could not resolve post record_id for comment_id '{comm_id}'."
+  }, status_code=400)
+ res = await run_in_threadpool(
+ lambda: hide_or_unhide_comment(CommentHidePayload(record_id=rec_id, comment_id=comm_id, hidden=hidden_flag))
+ )
+ if res.get("status") == "success":
+  return res
+ return JSONResponse(res, status_code=400)
 def _execute_v1_comment_reply_or_dm_inprocess(
-    body: Dict[str, Any],
-    is_send_dm_route: bool = False,
-    is_test_run: bool = False
+body: Dict[str, Any],
+is_send_dm_route: bool = False,
+is_test_run: bool = False
 ) -> Dict[str, Any]:
-    rec_id = str(body.get("record_id") or "").strip()
-    post_id_in = str(body.get("post_id") or "").strip()
-    comm_id = str(body.get("comment_id") or "").strip()
-    file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
-    media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
-    author_name_in = str(body.get("author_name") or body.get("commenter_name") or "").strip()
-    mention_author_in = bool(body.get("mention_author", True))
-    default_msg = "Here is the file you requested:" if (file_id_in or media_url_in) else "Thank you for your comment here is our offers"
-    msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or default_msg) or default_msg
-    send_dm = True if is_send_dm_route else bool(body.get("send_dm", False))
-
-    if not comm_id:
-        ai_topic = str(body.get("topic") or body.get("prompt") or body.get("question") or body.get("query") or "").strip()
-        if ai_topic:
-            return _execute_glennbot_ask_ai_core(
-                user_topic=ai_topic,
-                tone_str=str(body.get("tone") or "Polite, friendly and professional").strip(),
-                lang_str=str(body.get("language") or "Taglish").strip(),
-                post_type_str="comment_reply",
-                platforms_list=body.get("platforms") if isinstance(body.get("platforms"), list) else ["facebook", "instagram"],
-                force_reply_mode=True,
-                use_search=bool(body.get("use_search", True))
-            )
-        return {
-            "status": "error",
-            "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
-        }
-
-    if is_test_run or comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
-        return {
-            "status": "success",
-            "simulated": True,
-            "action": "private_dm_to_commenter" if send_dm else "public_comment_reply",
-            "comment_id": comm_id,
-            "record_id": rec_id or "test_record_fb_01",
-            "file_id": file_id_in,
-            "media_url": media_url_in,
-            "sent_message": msg_text,
-            "message": f"Test Verified! In live production, GlennBot will automatically send {'Private DM' if send_dm else 'Public Reply'}: '{msg_text}'{' with Vault File (' + file_id_in + ')' if file_id_in else ''} to commenter ({comm_id})."
-        }
-
-    resolved_rid = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
-    if not resolved_rid:
-        return {
-            "status": "error",
-            "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
-        }
-    if send_dm:
-        return send_dm_to_commenter(CommentSendDmPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
-    return reply_to_comment(
-        CommentReplyPayload(
-            record_id=resolved_rid,
-            comment_id=comm_id,
-            message=msg_text,
-            file_id=file_id_in,
-            media_url=media_url_in,
-            author_name=author_name_in,
-            mention_author=mention_author_in
-        )
-    )
-
-
+ rec_id = str(body.get("record_id") or "").strip()
+ post_id_in = str(body.get("post_id") or "").strip()
+ comm_id = str(body.get("comment_id") or "").strip()
+ file_id_in = str(body.get("file_id") or body.get("vault_file_id") or "").strip()
+ media_url_in = str(body.get("media_url") or body.get("attachment_url") or "").strip()
+ author_name_in = str(body.get("author_name") or body.get("commenter_name") or "").strip()
+ mention_author_in = bool(body.get("mention_author", True))
+ default_msg = "Here is the file you requested:" if (file_id_in or media_url_in) else "Thank you for your comment here is our offers"
+ msg_text = _sanitize_outbound_social_or_email_text(body.get("message") or body.get("text") or default_msg) or default_msg
+ send_dm = True if is_send_dm_route else bool(body.get("send_dm", False))
+ if not comm_id:
+  ai_topic = str(body.get("topic") or body.get("prompt") or body.get("question") or body.get("query") or "").strip()
+  if ai_topic:
+   return _execute_glennbot_ask_ai_core(
+   user_topic=ai_topic,
+   tone_str=str(body.get("tone") or "Polite, friendly and professional").strip(),
+   lang_str=str(body.get("language") or "Taglish").strip(),
+   post_type_str="comment_reply",
+   platforms_list=body.get("platforms") if isinstance(body.get("platforms"), list) else ["facebook", "instagram"],
+   force_reply_mode=True,
+   use_search=bool(body.get("use_search", True))
+   )
+  return {
+  "status": "error",
+  "message": "'comment_id' is required (e.g. {{ $json.body.comment_id }})."
+  }
+ if is_test_run or comm_id.startswith("test_comment_") or rec_id.startswith("test_record_"):
+  return {
+  "status": "success",
+  "simulated": True,
+  "action": "private_dm_to_commenter" if send_dm else "public_comment_reply",
+  "comment_id": comm_id,
+  "record_id": rec_id or "test_record_fb_01",
+  "file_id": file_id_in,
+  "media_url": media_url_in,
+  "sent_message": msg_text,
+  "message": f"Test Verified! In live production, GlennBot will automatically send {'Private DM' if send_dm else 'Public Reply'}: '{msg_text}'{' with Vault File (' + file_id_in + ')' if file_id_in else ''} to commenter ({comm_id})."
+  }
+ resolved_rid = _resolve_record_id_for_comment_v1(rec_id, comm_id, post_id_in)
+ if not resolved_rid:
+  return {
+  "status": "error",
+  "message": f"Could not resolve post record_id for comment_id '{comm_id}'. Pass 'record_id' from the comment.received webhook payload."
+  }
+ if send_dm:
+  return send_dm_to_commenter(CommentSendDmPayload(record_id=resolved_rid, comment_id=comm_id, message=msg_text, file_id=file_id_in, media_url=media_url_in))
+ return reply_to_comment(
+ CommentReplyPayload(
+ record_id=resolved_rid,
+ comment_id=comm_id,
+ message=msg_text,
+ file_id=file_id_in,
+ media_url=media_url_in,
+ author_name=author_name_in,
+ mention_author=mention_author_in
+ )
+ )
 @router.post("/api/v1/comments/reply")
 @router.post("/api/v1/comments/send-dm")
 async def api_v1_reply_to_comment(request: Request):
-    """
+ """
     Replies to a social media post comment or sends a Private DM to a commenter from n8n.
     JSON Body:
       - record_id (str, optional if comment_id or post_id is provided): GlennBot post record_id
@@ -3764,325 +3440,285 @@ async def api_v1_reply_to_comment(request: Request):
       - message (str, optional): Reply / DM text (defaults to "Thank you for your comment here is our offers")
       - send_dm (bool, optional): If True (or if called via /api/v1/comments/send-dm), sends a Private Reply DM to the commenter
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    is_send_dm_route = str(request.url.path or "").endswith("/send-dm")
-    res = await run_in_threadpool(
-        lambda: _execute_v1_comment_reply_or_dm_inprocess(body, is_send_dm_route=is_send_dm_route, is_test_run=False)
-    )
-    if res.get("status") == "success":
-        return res
-    return JSONResponse(res, status_code=400)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ is_send_dm_route = str(request.url.path or "").endswith("/send-dm")
+ res = await run_in_threadpool(
+ lambda: _execute_v1_comment_reply_or_dm_inprocess(body, is_send_dm_route=is_send_dm_route, is_test_run=False)
+ )
+ if res.get("status") == "success":
+  return res
+ return JSONResponse(res, status_code=400)
 @router.get("/api/v1/emails")
 async def api_v1_get_emails(
-    request: Request,
-    account_id: str = "",
-    email_address: str = "",
-    folder: str = "inbox",
-    search: str = "",
-    limit: int = 25,
-    force: bool = False
+request: Request,
+account_id: str = "",
+email_address: str = "",
+folder: str = "inbox",
+search: str = "",
+limit: int = 25,
+force: bool = False
 ):
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    def _fetch_v1_emails_sync():
-        _load_email_hub_state(force_cloud=False)
-        accounts = EMAIL_HUB_STATE.get("accounts") or []
-        if not accounts:
-            accounts = _discover_composio_email_accounts()
-
-        target_acc_id = str(account_id or "").strip()
-        if not target_acc_id and email_address:
-            em_low = email_address.strip().lower()
-            matched = next((a for a in accounts if str(a.get("email_address") or "").lower() == em_low), None)
-            if matched:
-                target_acc_id = str(matched.get("id") or "")
-        if not target_acc_id and accounts:
-            target_acc_id = str(accounts[0].get("id") or "")
-
-        if not target_acc_id:
-            return JSONResponse({"status": "error", "message": "No connected email accounts found."}, status_code=404)
-
-        return api_get_single_account_emails(
-            account_id=target_acc_id,
-            folder=folder,
-            q=search,
-            page_token="",
-            max_results=limit,
-            force=force
-        )
-
-    return await run_in_threadpool(_fetch_v1_emails_sync)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ def _fetch_v1_emails_sync():
+  _load_email_hub_state(force_cloud=False)
+  accounts = EMAIL_HUB_STATE.get("accounts") or []
+  if not accounts:
+   accounts = _discover_composio_email_accounts()
+  target_acc_id = str(account_id or "").strip()
+  if not target_acc_id and email_address:
+   em_low = email_address.strip().lower()
+   matched = next((a for a in accounts if str(a.get("email_address") or "").lower() == em_low), None)
+   if matched:
+    target_acc_id = str(matched.get("id") or "")
+  if not target_acc_id and accounts:
+   target_acc_id = str(accounts[0].get("id") or "")
+  if not target_acc_id:
+   return JSONResponse({"status": "error", "message": "No connected email accounts found."}, status_code=404)
+  return api_get_single_account_emails(
+  account_id=target_acc_id,
+  folder=folder,
+  q=search,
+  page_token="",
+  max_results=limit,
+  force=force
+  )
+ return await run_in_threadpool(_fetch_v1_emails_sync)
 def _execute_v1_send_email_inprocess(body: Dict[str, Any], is_test_run: bool = False) -> Dict[str, Any]:
-    _load_email_hub_state(force_cloud=False)
-    accounts = EMAIL_HUB_STATE.get("accounts") or []
-    if not accounts:
-        accounts = _discover_composio_email_accounts()
-
-    body = dict(body or {})
-    acc_id = str(body.get("account_id") or "").strip()
-    from_em = str(
-        body.get("from_email")
-        or body.get("sender_email")
-        or body.get("organizer_email")
-        or body.get("account_email")
-        or body.get("receiving_email")
-        or ""
-    ).strip().lower()
-    raw_to_in = (
-        body.get("to")
-        or body.get("to_email")
-        or body.get("recipient_email")
-        or body.get("primary_guest_email")
-        or body.get("attendee_email")
-        or body.get("guest_email")
-        or ""
-    )
-    if isinstance(raw_to_in, list):
-        raw_to = ", ".join(str(x).strip() for x in raw_to_in if str(x).strip())
-    else:
-        raw_to = str(raw_to_in or "").strip()
-    body["to"] = raw_to
-    msg_id_in = str(body.get("message_id") or body.get("reply_to_email_id") or body.get("in_reply_to") or "").strip()
-    thread_id_in = str(body.get("thread_id") or "").strip()
-    if msg_id_in and not body.get("message_id"):
-        body["message_id"] = msg_id_in
-    subj_in = str(body.get("subject") or "Re: INQUIRY").strip()
-    body_text = _sanitize_outbound_social_or_email_text(body.get("body") or body.get("body_text") or body.get("message") or body.get("text") or "Thank you for sending me a message") or "Thank you for sending me a message"
-    body["body"] = body_text
-    body["subject"] = subj_in
-
-    merged_attachments = _normalize_raw_attachments_with_file_ids(body)
-    if merged_attachments:
-        body["attachments"] = merged_attachments
-    attached_file_ids = [
-        str(att.get("file_id")).strip()
-        for att in merged_attachments
-        if isinstance(att, dict) and att.get("file_id")
-    ]
-
-    req_kw = str(body.get("only_if_subject_contains") or "").strip().lower()
-    orig_subj = str(body.get("original_subject") or subj_in).strip().lower()
-    if req_kw and req_kw not in orig_subj:
-        return {
-            "status": "skipped",
-            "reason": f"Email subject '{orig_subj}' does not contain '{req_kw}'.",
-            "action": "no_reply_sent"
-        }
-
-    req_body_kw = str(body.get("only_if_body_contains") or body.get("only_if_message_contains") or "").strip().lower()
-    orig_body_in = str(body.get("original_body") or body.get("original_message") or body.get("incoming_body") or "").strip().lower()
-    if req_body_kw and orig_body_in and req_body_kw not in orig_body_in:
-        return {
-            "status": "skipped",
-            "reason": f"Email message body does not contain '{req_body_kw}'.",
-            "action": "no_reply_sent"
-        }
-
-    matched_acc = None
-    if acc_id:
-        matched_acc = next(
-            (
-                a for a in accounts
-                if str(a.get("id") or "") == acc_id
-                or str(a.get("composio_connection_id") or "") == acc_id
-                or str(a.get("email_address") or "").lower() == acc_id.lower()
-            ),
-            None
-        )
-    if not matched_acc and from_em:
-        matched_acc = next(
-            (a for a in accounts if str(a.get("email_address") or "").lower() == from_em),
-            None
-        )
-    if not matched_acc and accounts:
-        matched_acc = next(
-            (a for a in accounts if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower()),
-            accounts[0]
-        )
-
-    if matched_acc:
-        acc_id = str(matched_acc.get("id") or "")
-        from_em = str(matched_acc.get("email_address") or from_em)
-
-    if (
-        is_test_run
-        or msg_id_in.startswith("test_msg_")
-        or msg_id_in.startswith("test_email_")
-        or thread_id_in.startswith("test_thread_")
-        or "@example.com" in raw_to.lower()
-        or bool(body.get("simulated_test"))
-    ):
-        att_info = f" with Google Drive Vault attachment {attached_file_ids}" if attached_file_ids else ""
-        return {
-            "status": "success",
-            "simulated": True,
-            "action": "email_auto_reply_with_vault_attachment" if attached_file_ids else "gmail_auto_reply",
-            "account_id": acc_id,
-            "from_email": from_em or "glennard.tasico.va@gmail.com",
-            "to": raw_to or "test.sender@example.com",
-            "subject": subj_in if subj_in.lower().startswith("re:") else f"Re: {subj_in}",
-            "sent_body": body_text,
-            "attached_file_ids": attached_file_ids,
-            "message": f"Test Verified! In live production, receiving account '{from_em or 'glennard.tasico.va@gmail.com'}' will automatically reply '{body_text}'{att_info} to '{raw_to}'."
-        }
-
-    if not acc_id:
-        return {"status": "error", "message": "No connected email account found to send from.", "status_code": 404}
-
-    body["account_id"] = acc_id
-    if body.get("thread_id") or body.get("message_id"):
-        res = _reply_single_account_email_sync(body)
-    else:
-        res = _send_single_account_email_sync(body)
-
-    if isinstance(res, JSONResponse):
-        try:
-            parsed_err = json.loads(res.body.decode("utf-8"))
-            parsed_err.setdefault("status_code", res.status_code)
-            return parsed_err
-        except Exception:
-            return {"status": "error", "message": "Email send failed.", "status_code": res.status_code}
-    return res if isinstance(res, dict) else {"status": "success", "data": res}
-
-
+ _load_email_hub_state(force_cloud=False)
+ accounts = EMAIL_HUB_STATE.get("accounts") or []
+ if not accounts:
+  accounts = _discover_composio_email_accounts()
+ body = dict(body or {})
+ acc_id = str(body.get("account_id") or "").strip()
+ from_em = str(
+ body.get("from_email")
+ or body.get("sender_email")
+ or body.get("organizer_email")
+ or body.get("account_email")
+ or body.get("receiving_email")
+ or ""
+ ).strip().lower()
+ raw_to_in = (
+ body.get("to")
+ or body.get("to_email")
+ or body.get("recipient_email")
+ or body.get("primary_guest_email")
+ or body.get("attendee_email")
+ or body.get("guest_email")
+ or ""
+ )
+ if isinstance(raw_to_in, list):
+  raw_to = ", ".join(str(x).strip() for x in raw_to_in if str(x).strip())
+ else:
+  raw_to = str(raw_to_in or "").strip()
+ body["to"] = raw_to
+ msg_id_in = str(body.get("message_id") or body.get("reply_to_email_id") or body.get("in_reply_to") or "").strip()
+ thread_id_in = str(body.get("thread_id") or "").strip()
+ if msg_id_in and not body.get("message_id"):
+  body["message_id"] = msg_id_in
+ subj_in = str(body.get("subject") or "Re: INQUIRY").strip()
+ body_text = _sanitize_outbound_social_or_email_text(body.get("body") or body.get("body_text") or body.get("message") or body.get("text") or "Thank you for sending me a message") or "Thank you for sending me a message"
+ body["body"] = body_text
+ body["subject"] = subj_in
+ merged_attachments = _normalize_raw_attachments_with_file_ids(body)
+ if merged_attachments:
+  body["attachments"] = merged_attachments
+ attached_file_ids = [
+ str(att.get("file_id")).strip()
+ for att in merged_attachments
+ if isinstance(att, dict) and att.get("file_id")
+ ]
+ req_kw = str(body.get("only_if_subject_contains") or "").strip().lower()
+ orig_subj = str(body.get("original_subject") or subj_in).strip().lower()
+ if req_kw and req_kw not in orig_subj:
+  return {
+  "status": "skipped",
+  "reason": f"Email subject '{orig_subj}' does not contain '{req_kw}'.",
+  "action": "no_reply_sent"
+  }
+ req_body_kw = str(body.get("only_if_body_contains") or body.get("only_if_message_contains") or "").strip().lower()
+ orig_body_in = str(body.get("original_body") or body.get("original_message") or body.get("incoming_body") or "").strip().lower()
+ if req_body_kw and orig_body_in and req_body_kw not in orig_body_in:
+  return {
+  "status": "skipped",
+  "reason": f"Email message body does not contain '{req_body_kw}'.",
+  "action": "no_reply_sent"
+  }
+ matched_acc = None
+ if acc_id:
+  matched_acc = next(
+  (
+  a for a in accounts
+  if str(a.get("id") or "") == acc_id
+  or str(a.get("composio_connection_id") or "") == acc_id
+  or str(a.get("email_address") or "").lower() == acc_id.lower()
+  ),
+  None
+  )
+ if not matched_acc and from_em:
+  matched_acc = next(
+  (a for a in accounts if str(a.get("email_address") or "").lower() == from_em),
+  None
+  )
+ if not matched_acc and accounts:
+  matched_acc = next(
+  (a for a in accounts if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower()),
+  accounts[0]
+  )
+ if matched_acc:
+  acc_id = str(matched_acc.get("id") or "")
+  from_em = str(matched_acc.get("email_address") or from_em)
+ if (
+ is_test_run
+ or msg_id_in.startswith("test_msg_")
+ or msg_id_in.startswith("test_email_")
+ or thread_id_in.startswith("test_thread_")
+ or "@example.com" in raw_to.lower()
+ or bool(body.get("simulated_test"))
+ ):
+  att_info = f" with Google Drive Vault attachment {attached_file_ids}" if attached_file_ids else ""
+  return {
+  "status": "success",
+  "simulated": True,
+  "action": "email_auto_reply_with_vault_attachment" if attached_file_ids else "gmail_auto_reply",
+  "account_id": acc_id,
+  "from_email": from_em or "glennard.tasico.va@gmail.com",
+  "to": raw_to or "test.sender@example.com",
+  "subject": subj_in if subj_in.lower().startswith("re:") else f"Re: {subj_in}",
+  "sent_body": body_text,
+  "attached_file_ids": attached_file_ids,
+  "message": f"Test Verified! In live production, receiving account '{from_em or 'glennard.tasico.va@gmail.com'}' will automatically reply '{body_text}'{att_info} to '{raw_to}'."
+  }
+ if not acc_id:
+  return {"status": "error", "message": "No connected email account found to send from.", "status_code": 404}
+ body["account_id"] = acc_id
+ if body.get("thread_id") or body.get("message_id"):
+  res = _reply_single_account_email_sync(body)
+ else:
+  res = _send_single_account_email_sync(body)
+ if isinstance(res, JSONResponse):
+  try:
+   parsed_err = json.loads(res.body.decode("utf-8"))
+   parsed_err.setdefault("status_code", res.status_code)
+   return parsed_err
+  except Exception:
+   return {"status": "error", "message": "Email send failed.", "status_code": res.status_code}
+ return res if isinstance(res, dict) else {"status": "success", "data": res}
 @router.post("/api/v1/emails/send")
 async def api_v1_send_email(request: Request):
-    """
+ """
     Sends a new email or replies to an existing email thread via n8n.
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
-
-    res = await run_in_threadpool(lambda: _execute_v1_send_email_inprocess(body, is_test_run=False))
-    if isinstance(res, dict) and res.get("status") == "error":
-        return JSONResponse(res, status_code=int(res.get("status_code") or 400))
-    return res
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ try:
+  body = await request.json()
+ except Exception:
+  return JSONResponse({"status": "error", "message": "Invalid JSON body."}, status_code=400)
+ res = await run_in_threadpool(lambda: _execute_v1_send_email_inprocess(body, is_test_run=False))
+ if isinstance(res, dict) and res.get("status") == "error":
+  return JSONResponse(res, status_code=int(res.get("status_code") or 400))
+ return res
 @router.get("/api/v1/contacts")
 async def api_v1_get_contacts(
-    request: Request,
-    search: str = "",
-    platform: str = "",
-    category: str = "",
-    limit: int = 100,
-    refresh: bool = False
+request: Request,
+search: str = "",
+platform: str = "",
+category: str = "",
+limit: int = 100,
+refresh: bool = False
 ):
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-
-    res = await run_in_threadpool(lambda: api_get_crm_contacts(refresh=refresh))
-    contacts = list(res.get("contacts") or [])
-    if platform:
-        p_low = platform.strip().lower()
-        contacts = [c for c in contacts if p_low in str(c.get("platform") or "").lower()]
-    if category:
-        cat_low = category.strip().lower()
-        contacts = [c for c in contacts if str(c.get("category") or "").lower() == cat_low]
-    if search:
-        q_low = search.strip().lower()
-        contacts = [
-            c for c in contacts
-            if q_low in f"{c.get('first_name','')} {c.get('last_name','')} {c.get('email_address','')} {c.get('contact_number','')} {c.get('social_username','')} {c.get('company','')}".lower()
-        ]
-    return {
-        "status": "success",
-        "count": len(contacts[:limit]),
-        "total_contacts": len(res.get("contacts") or []),
-        "contacts": contacts[:max(1, min(limit, 500))]
-    }
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ res = await run_in_threadpool(lambda: api_get_crm_contacts(refresh=refresh))
+ contacts = list(res.get("contacts") or [])
+ if platform:
+  p_low = platform.strip().lower()
+  contacts = [c for c in contacts if p_low in str(c.get("platform") or "").lower()]
+ if category:
+  cat_low = category.strip().lower()
+  contacts = [c for c in contacts if str(c.get("category") or "").lower() == cat_low]
+ if search:
+  q_low = search.strip().lower()
+  contacts = [
+  c for c in contacts
+  if q_low in f"{c.get('first_name','')} {c.get('last_name','')} {c.get('email_address','')} {c.get('contact_number','')} {c.get('social_username','')} {c.get('company','')}".lower()
+  ]
+ return {
+ "status": "success",
+ "count": len(contacts[:limit]),
+ "total_contacts": len(res.get("contacts") or []),
+ "contacts": contacts[:max(1, min(limit, 500))]
+ }
 @router.post("/api/v1/contacts")
 async def api_v1_upsert_contact(request: Request):
-    """
+ """
     Creates or updates/combines a CRM Contact from n8n (automatically deduplicating by phone/email).
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-    return await api_create_or_update_crm_contact(request)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ return await api_create_or_update_crm_contact(request)
 @router.post("/api/v1/contacts/sync")
 async def api_v1_sync_contacts(request: Request):
-    """
+ """
     Triggers full CRM Contact Sync & Deduplication across Cloudinary, WhatsApp, Telegram, and Social Inbox from n8n.
     """
-    key_obj = _verify_internal_api_key(request)
-    if not key_obj:
-        return _unauthorized_v1_response()
-    return await run_in_threadpool(api_sync_all_crm_contacts)
-
-
+ key_obj = _verify_internal_api_key(request)
+ if not key_obj:
+  return _unauthorized_v1_response()
+ return await run_in_threadpool(api_sync_all_crm_contacts)
 @router.get("/api/v1/automations/supabase-queue")
 async def api_v1_get_supabase_comment_queue(request: Request, limit: int = 50):
-    """
+ """
     Inspects the live Supabase FIFO comment automation queue (`glennbot_comment_automation_queue`).
     """
-    return await run_in_threadpool(lambda: get_supabase_comment_queue_status(limit=limit))
-
-
+ return await run_in_threadpool(lambda: get_supabase_comment_queue_status(limit=limit))
 @router.post("/api/v1/automations/supabase-queue/enqueue")
 async def api_v1_enqueue_supabase_comment_queue(request: Request):
-    """
+ """
     Enqueues an incoming comment/reply webhook into `glennbot_comment_automation_queue` in Supabase (`DATABASE_URL`)
     and waits in strict FIFO order until it is this comment's turn to be processed.
     """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    is_test = bool(body.get("is_test_run", False))
-    res = await run_in_threadpool(lambda: enqueue_and_acquire_supabase_comment_queue_turn(body, is_test_run=is_test))
-    return res
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ is_test = bool(body.get("is_test_run", False))
+ res = await run_in_threadpool(lambda: enqueue_and_acquire_supabase_comment_queue_turn(body, is_test_run=is_test))
+ return res
 @router.post("/api/v1/automations/supabase-queue/complete")
 async def api_v1_complete_supabase_comment_queue(request: Request):
-    """
+ """
     Marks a queued comment in `glennbot_comment_automation_queue` as completed and releases the FIFO lock
     for the next comment waiting in Supabase.
     """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    qid = str(body.get("queue_id") or body.get("queueId") or "").strip()
-    cid = str(body.get("comment_id") or body.get("commentId") or "").strip()
-    ai_rep = str(body.get("ai_reply") or body.get("aiReplyText") or body.get("reply") or "").strip()
-    st = str(body.get("status") or "completed").strip()
-    err_m = str(body.get("error_message") or "").strip()
-    res = await run_in_threadpool(
-        lambda: complete_supabase_comment_queue_turn(
-            queue_id=qid,
-            comment_id=cid,
-            ai_reply=ai_rep,
-            status=st,
-            error_message=err_m
-        )
-    )
-    return res
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ qid = str(body.get("queue_id") or body.get("queueId") or "").strip()
+ cid = str(body.get("comment_id") or body.get("commentId") or "").strip()
+ ai_rep = str(body.get("ai_reply") or body.get("aiReplyText") or body.get("reply") or "").strip()
+ st = str(body.get("status") or "completed").strip()
+ err_m = str(body.get("error_message") or "").strip()
+ res = await run_in_threadpool(
+ lambda: complete_supabase_comment_queue_turn(
+ queue_id=qid,
+ comment_id=cid,
+ ai_reply=ai_rep,
+ status=st,
+ error_message=err_m
+ )
+ )
+ return res

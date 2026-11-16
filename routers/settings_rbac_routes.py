@@ -35,7 +35,6 @@ from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import pytz
 import requests
 import cloudinary
@@ -46,73 +45,69 @@ from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse, JSO
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import text
-
 from core.config import *
 from core.config import (
-    _invalidate_fast_db_cache,
-    _normalize_origin_url,
-    _is_localhost_origin,
-    _detect_cloud_hosting_url_from_env,
-    _detect_local_ngrok_tunnel_url,
-    _extract_origin_from_request,
-    _RUNTIME_URL_STATE,
+_invalidate_fast_db_cache,
+_normalize_origin_url,
+_is_localhost_origin,
+_detect_cloud_hosting_url_from_env,
+_detect_local_ngrok_tunnel_url,
+_extract_origin_from_request,
+_RUNTIME_URL_STATE,
 )
 from core.database import *
 from core.database import (
-    _normalize_social_page_name,
-    _strip_social_page_punctuation,
-    _extract_social_page_segments,
-    _is_same_social_page_name,
-    _does_zernio_account_match_page,
-    _resolve_service_callable,
-    _get_cached_seen_comment_ids,
-    _get_cached_published_posts,
-    _get_cached_seen_messages_map,
+_normalize_social_page_name,
+_strip_social_page_punctuation,
+_extract_social_page_segments,
+_is_same_social_page_name,
+_does_zernio_account_match_page,
+_resolve_service_callable,
+_get_cached_seen_comment_ids,
+_get_cached_published_posts,
+_get_cached_seen_messages_map,
 )
 from services.gdrive_service import *
 from services.gdrive_service import (
-    _load_gdrive_auth_store,
-    _save_gdrive_auth_store,
+_load_gdrive_auth_store,
+_save_gdrive_auth_store,
 )
 from services.cloudinary_service import *
 from services.cloudinary_service import (
-    _make_key_id,
-    _mask_api_key,
-    _is_message_deleted_for_conversation,
-    _filter_out_deleted_messages,
-    _CLOUDINARY_COMMENTS_UPLOAD_LOCK,
-    _CLOUDINARY_MESSAGES_UPLOAD_LOCK,
+_make_key_id,
+_mask_api_key,
+_is_message_deleted_for_conversation,
+_filter_out_deleted_messages,
+_CLOUDINARY_COMMENTS_UPLOAD_LOCK,
+_CLOUDINARY_MESSAGES_UPLOAD_LOCK,
 )
 from services.zernio_service import *
 from services.zernio_service import (
-    _format_bytes_label,
-    _resolve_runtime_helper,
-    _collect_valid_account_ids_for_page,
-    _detect_attachment_media_category,
-    _normalize_zernio_content_type,
-    _is_valid_final_permalink,
-    _strip_internal_ids_from_status_message,
-    _format_zernio_error_text,
-    _differentiate_caption_for_zernio_24h_guard,
-    _should_proactively_differentiate_caption,
-    _handle_zernio_duplicate_content_response,
-    _recover_zernio_post_after_timeout,
-    _cancel_zernio_scheduled_post,
-    _ZERNIO_PUBLISH_LOCK,
-    _ZERNIO_ACTIVE_PUBLISH_RECORDS,
+_format_bytes_label,
+_resolve_runtime_helper,
+_collect_valid_account_ids_for_page,
+_detect_attachment_media_category,
+_normalize_zernio_content_type,
+_is_valid_final_permalink,
+_strip_internal_ids_from_status_message,
+_format_zernio_error_text,
+_differentiate_caption_for_zernio_24h_guard,
+_should_proactively_differentiate_caption,
+_handle_zernio_duplicate_content_response,
+_recover_zernio_post_after_timeout,
+_cancel_zernio_scheduled_post,
+_ZERNIO_PUBLISH_LOCK,
+_ZERNIO_ACTIVE_PUBLISH_RECORDS,
 )
 from services.ai_service import *
 from services.ai_service import (
-    _perform_free_web_search_for_ai,
-    _sanitize_outbound_social_or_email_text,
-    _execute_glennbot_ask_ai_core,
+_perform_free_web_search_for_ai,
+_sanitize_outbound_social_or_email_text,
+_execute_glennbot_ask_ai_core,
 )
 from routers.auth_and_keys import *
 from routers.ai_routes import api_ask_ai
-
 router = APIRouter()
-
-
 # ==============================================================================
 # --- DASHBOARD LOGIN GATE & ROLE-BASED ACCESS CONTROL (CLIENT vs. ADMIN) ---
 # ==============================================================================
@@ -121,12 +116,10 @@ router = APIRouter()
 # 2. Administrator Login: Uses Composio Google OAuth ("glennardtasico@gmail.com")
 #    -> Grants full Administrator access INCLUDING "Internal API (n8n)".
 # ==============================================================================
-
 AUTH_SESSION_COOKIE_NAME = "gb_auth_session"
 STRICT_ADMIN_GOOGLE_EMAIL = "glennardtasico@gmail.com"
 PENDING_ADMIN_OAUTH_LOCK = threading.Lock()
 PENDING_ADMIN_OAUTH_STATES: Dict[str, Dict[str, Any]] = {}
-
 # ==============================================================================
 # --- PER-ACCOUNT CLOUDINARY USER SETTINGS & THEME STORE (CLIENT vs. ADMIN) ---
 # Saves and loads user settings (including Theme: 'default' | 'light' | 'dark')
@@ -138,593 +131,533 @@ CLOUDINARY_USER_SETTINGS_PUBLIC_ID = "glennbot_config/user_settings_profiles_v1.
 LOCAL_USER_SETTINGS_CACHE_PATH = os.path.join(BASE_DIR, "user_settings_profiles_cache.json")
 USER_SETTINGS_LOCK = threading.Lock()
 DEFAULT_ACCOUNT_USER_SETTINGS: Dict[str, Any] = {
-    "theme": "default",  # "default" | "light" | "dark"
-    "bandwidthSaverMode": True,
-    "instantBackgroundQueue": True,
-    "autoClearAfterLaunch": True,
-    "fadeEffects": True,
-    "popupNotifications": True,
-    "soundEffects": True,
-    "soundVolume": 85
+"theme": "default",  # "default" | "light" | "dark"
+"bandwidthSaverMode": True,
+"instantBackgroundQueue": True,
+"autoClearAfterLaunch": True,
+"fadeEffects": True,
+"popupNotifications": True,
+"soundEffects": True,
+"soundVolume": 85
 }
 USER_SETTINGS_PROFILES_STORE: Dict[str, Any] = {
-    "loaded": False,
-    "profiles": {}
+"loaded": False,
+"profiles": {}
 }
-
-
 def _normalize_user_settings_dict(raw: Any) -> Dict[str, Any]:
-    src = raw if isinstance(raw, dict) else {}
-    theme_val = str(src.get("theme") or "default").strip().lower()
-    if theme_val not in ("default", "light", "dark"):
-        theme_val = "default"
-    try:
-        vol = max(10, min(100, int(src.get("soundVolume", 85))))
-    except Exception:
-        vol = 85
-    return {
-        "theme": theme_val,
-        "bandwidthSaverMode": bool(src.get("bandwidthSaverMode", True)),
-        "instantBackgroundQueue": bool(src.get("instantBackgroundQueue", True)),
-        "autoClearAfterLaunch": bool(src.get("autoClearAfterLaunch", True)),
-        "fadeEffects": bool(src.get("fadeEffects", True)),
-        "popupNotifications": bool(src.get("popupNotifications", True)),
-        "soundEffects": bool(src.get("soundEffects", True)),
-        "soundVolume": vol
-    }
-
-
+ src = raw if isinstance(raw, dict) else {}
+ theme_val = str(src.get("theme") or "default").strip().lower()
+ if theme_val not in ("default", "light", "dark"):
+  theme_val = "default"
+ try:
+  vol = max(10, min(100, int(src.get("soundVolume", 85))))
+ except Exception:
+  vol = 85
+ return {
+ "theme": theme_val,
+ "bandwidthSaverMode": bool(src.get("bandwidthSaverMode", True)),
+ "instantBackgroundQueue": bool(src.get("instantBackgroundQueue", True)),
+ "autoClearAfterLaunch": bool(src.get("autoClearAfterLaunch", True)),
+ "fadeEffects": bool(src.get("fadeEffects", True)),
+ "popupNotifications": bool(src.get("popupNotifications", True)),
+ "soundEffects": bool(src.get("soundEffects", True)),
+ "soundVolume": vol
+ }
 def _load_user_settings_profiles_store(force_cloud: bool = False) -> Dict[str, Any]:
-    with USER_SETTINGS_LOCK:
-        if USER_SETTINGS_PROFILES_STORE.get("loaded") and not force_cloud:
-            return USER_SETTINGS_PROFILES_STORE
-
-        profiles_map: Dict[str, Any] = {}
-        loaded_cloud = False
-
-        if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
-            try:
-                res = cloudinary.api.resource(
-                    CLOUDINARY_USER_SETTINGS_PUBLIC_ID,
-                    resource_type="raw"
-                )
-                sec_url = (res or {}).get("secure_url")
-                if sec_url:
-                    sep = "&" if "?" in sec_url else "?"
-                    r = HTTP_SESSION.get(f"{sec_url}{sep}_ts={int(time.time())}", timeout=12)
-                    if r.status_code == 200:
-                        data = r.json() or {}
-                        if isinstance(data.get("profiles"), dict):
-                            profiles_map = data["profiles"]
-                            loaded_cloud = True
-            except Exception:
-                pass
-
-        if not loaded_cloud and os.path.exists(LOCAL_USER_SETTINGS_CACHE_PATH):
-            try:
-                with open(LOCAL_USER_SETTINGS_CACHE_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
-                    if isinstance(data.get("profiles"), dict):
-                        profiles_map = data["profiles"]
-            except Exception:
-                pass
-
-        USER_SETTINGS_PROFILES_STORE["profiles"] = profiles_map
-        USER_SETTINGS_PROFILES_STORE["loaded"] = True
-        return USER_SETTINGS_PROFILES_STORE
-
-
+ with USER_SETTINGS_LOCK:
+  if USER_SETTINGS_PROFILES_STORE.get("loaded") and not force_cloud:
+   return USER_SETTINGS_PROFILES_STORE
+  profiles_map: Dict[str, Any] = {}
+  loaded_cloud = False
+  if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+   try:
+    res = cloudinary.api.resource(
+    CLOUDINARY_USER_SETTINGS_PUBLIC_ID,
+    resource_type="raw"
+    )
+    sec_url = (res or {}).get("secure_url")
+    if sec_url:
+     sep = "&" if "?" in sec_url else "?"
+     r = HTTP_SESSION.get(f"{sec_url}{sep}_ts={int(time.time())}", timeout=12)
+     if r.status_code == 200:
+      data = r.json() or {}
+      if isinstance(data.get("profiles"), dict):
+       profiles_map = data["profiles"]
+       loaded_cloud = True
+   except Exception:
+    pass
+  if not loaded_cloud and os.path.exists(LOCAL_USER_SETTINGS_CACHE_PATH):
+   try:
+    with open(LOCAL_USER_SETTINGS_CACHE_PATH, "r", encoding="utf-8") as f:
+     data = json.load(f) or {}
+     if isinstance(data.get("profiles"), dict):
+      profiles_map = data["profiles"]
+   except Exception:
+    pass
+  USER_SETTINGS_PROFILES_STORE["profiles"] = profiles_map
+  USER_SETTINGS_PROFILES_STORE["loaded"] = True
+  return USER_SETTINGS_PROFILES_STORE
 def _save_user_settings_profiles_store() -> bool:
-    with USER_SETTINGS_LOCK:
-        payload = {
-            "version": 1,
-            "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
-            "profiles": USER_SETTINGS_PROFILES_STORE.get("profiles") or {}
-        }
-        raw_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
-
-        try:
-            with open(LOCAL_USER_SETTINGS_CACHE_PATH, "w", encoding="utf-8") as f:
-                f.write(raw_bytes.decode("utf-8"))
-        except Exception:
-            pass
-
-    if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
-        try:
-            cloudinary.uploader.upload(
-                io.BytesIO(raw_bytes),
-                resource_type="raw",
-                public_id=CLOUDINARY_USER_SETTINGS_PUBLIC_ID,
-                overwrite=True,
-                invalidate=True
-            )
-            return True
-        except Exception as e:
-            print(f"[⚠️ USER SETTINGS CLOUDINARY SAVE WARNING]: {e}")
-    return False
-
-
+ with USER_SETTINGS_LOCK:
+  payload = {
+  "version": 1,
+  "updated_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p"),
+  "profiles": USER_SETTINGS_PROFILES_STORE.get("profiles") or {}
+  }
+  raw_bytes = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+  try:
+   with open(LOCAL_USER_SETTINGS_CACHE_PATH, "w", encoding="utf-8") as f:
+    f.write(raw_bytes.decode("utf-8"))
+  except Exception:
+   pass
+ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+  try:
+   cloudinary.uploader.upload(
+   io.BytesIO(raw_bytes),
+   resource_type="raw",
+   public_id=CLOUDINARY_USER_SETTINGS_PUBLIC_ID,
+   overwrite=True,
+   invalidate=True
+   )
+   return True
+  except Exception as e:
+   print(f"[⚠️ USER SETTINGS CLOUDINARY SAVE WARNING]: {e}")
+ return False
 def _resolve_settings_profile_identity(sess: Optional[Dict[str, Any]]) -> Tuple[str, str, str]:
-    """
+ """
     Resolves (profile_key, role_label, account_display) based on who is logged in:
       - Administrator ('glennardtasico@gmail.com') -> ('admin:glennardtasico@gmail.com', 'admin', 'Administrator (glennardtasico@gmail.com)')
       - Client (.env DASHBOARD_USER_ID) -> ('client:<user_id>', 'client', 'Client (<user_id>)')
     """
-    cfg = _get_live_env_auth_config()
-    if sess and isinstance(sess, dict):
-        is_admin = bool(sess.get("is_admin")) or (
-            str(sess.get("role") or "").lower() == "admin"
-            and str(sess.get("email") or "").lower().strip() == cfg["admin_email"].lower()
-        )
-        if is_admin:
-            admin_em = cfg["admin_email"].lower()
-            return (f"admin:{admin_em}", "admin", f"Administrator ({admin_em})")
-        uid = str(sess.get("user_id") or cfg["user_id"] or "glennbot_client").strip()
-        return (f"client:{uid.lower()}", "client", f"Client ({uid})")
-
-    default_uid = str(cfg.get("user_id") or "glennbot_client").strip()
-    return (f"client:{default_uid.lower()}", "client", f"Client ({default_uid})")
-
-
+ cfg = _get_live_env_auth_config()
+ if sess and isinstance(sess, dict):
+  is_admin = bool(sess.get("is_admin")) or (
+  str(sess.get("role") or "").lower() == "admin"
+  and str(sess.get("email") or "").lower().strip() == cfg["admin_email"].lower()
+  )
+  if is_admin:
+   admin_em = cfg["admin_email"].lower()
+   return (f"admin:{admin_em}", "admin", f"Administrator ({admin_em})")
+  uid = str(sess.get("user_id") or cfg["user_id"] or "glennbot_client").strip()
+  return (f"client:{uid.lower()}", "client", f"Client ({uid})")
+ default_uid = str(cfg.get("user_id") or "glennbot_client").strip()
+ return (f"client:{default_uid.lower()}", "client", f"Client ({default_uid})")
 def _get_user_settings_for_session(sess: Optional[Dict[str, Any]], force_cloud: bool = False) -> Dict[str, Any]:
-    store = _load_user_settings_profiles_store(force_cloud=force_cloud)
-    profile_key, role_str, account_label = _resolve_settings_profile_identity(sess)
-    profiles = store.get("profiles") or {}
-    saved_entry = profiles.get(profile_key) or {}
-    norm_settings = _normalize_user_settings_dict(saved_entry)
-    return {
-        "profile_key": profile_key,
-        "role": role_str,
-        "account_label": account_label,
-        "updated_at": str(saved_entry.get("updated_at") or ""),
-        "settings": norm_settings
-    }
-
-
+ store = _load_user_settings_profiles_store(force_cloud=force_cloud)
+ profile_key, role_str, account_label = _resolve_settings_profile_identity(sess)
+ profiles = store.get("profiles") or {}
+ saved_entry = profiles.get(profile_key) or {}
+ norm_settings = _normalize_user_settings_dict(saved_entry)
+ return {
+ "profile_key": profile_key,
+ "role": role_str,
+ "account_label": account_label,
+ "updated_at": str(saved_entry.get("updated_at") or ""),
+ "settings": norm_settings
+ }
 def _get_live_env_auth_config() -> Dict[str, str]:
-    """
+ """
     Reads DASHBOARD_USER_ID and DASHBOARD_PASSWORD dynamically from .env (for Client access),
     while strictly locking Administrator Google OAuth access to STRICT_ADMIN_GOOGLE_EMAIL
     ('glennardtasico@gmail.com') inside Python code so clients with .env access can never alter it.
     """
-    file_vals: Dict[str, str] = {}
-    try:
-        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
-                for raw_line in f:
-                    line = raw_line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    k = k.strip()
-                    v = v.strip().strip('"').strip("'")
-                    if k:
-                        file_vals[k] = v
-    except Exception:
-        pass
-
-    user_id = (
-        file_vals.get("DASHBOARD_USER_ID")
-        or os.getenv("DASHBOARD_USER_ID", "").strip()
-        or "glennbot_client"
-    )
-    password = (
-        file_vals.get("DASHBOARD_PASSWORD")
-        or os.getenv("DASHBOARD_PASSWORD", "").strip()
-        or "GlennBot2026!"
-    )
-    # Strictly hardcoded in Python code — never read from .env
-    admin_email = STRICT_ADMIN_GOOGLE_EMAIL.lower()
-    signing_key = (
-        file_vals.get("WEBHOOK_VERIFY_TOKEN")
-        or os.getenv("WEBHOOK_VERIFY_TOKEN", "").strip()
-        or "glennbot_webhook_secret"
-    ) + "_dashboard_auth_v1"
-    return {
-        "user_id": user_id,
-        "password": password,
-        "admin_email": admin_email,
-        "signing_key": signing_key
-    }
-
-
+ file_vals: Dict[str, str] = {}
+ try:
+  env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+  if os.path.exists(env_path):
+   with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
+    for raw_line in f:
+     line = raw_line.strip()
+     if not line or line.startswith("#") or "=" not in line:
+      continue
+     k, v = line.split("=", 1)
+     k = k.strip()
+     v = v.strip().strip('"').strip("'")
+     if k:
+      file_vals[k] = v
+ except Exception:
+  pass
+ user_id = (
+ file_vals.get("DASHBOARD_USER_ID")
+ or os.getenv("DASHBOARD_USER_ID", "").strip()
+ or "glennbot_client"
+ )
+ password = (
+ file_vals.get("DASHBOARD_PASSWORD")
+ or os.getenv("DASHBOARD_PASSWORD", "").strip()
+ or "GlennBot2026!"
+ )
+ # Strictly hardcoded in Python code — never read from .env
+ admin_email = STRICT_ADMIN_GOOGLE_EMAIL.lower()
+ signing_key = (
+ file_vals.get("WEBHOOK_VERIFY_TOKEN")
+ or os.getenv("WEBHOOK_VERIFY_TOKEN", "").strip()
+ or "glennbot_webhook_secret"
+ ) + "_dashboard_auth_v1"
+ return {
+ "user_id": user_id,
+ "password": password,
+ "admin_email": admin_email,
+ "signing_key": signing_key
+ }
 def _create_dashboard_session_token(role: str, user_id: str, email: str = "", display_name: str = "") -> str:
-    cfg = _get_live_env_auth_config()
-    clean_role = "admin" if str(role).lower() == "admin" else "client"
-    payload = {
-        "role": clean_role,
-        "is_admin": clean_role == "admin",
-        "can_access_internal_api": clean_role == "admin",
-        "user_id": str(user_id or ""),
-        "email": str(email or "").lower(),
-        "display_name": str(display_name or user_id or email or clean_role.capitalize()),
-        "iat": int(time.time()),
-        "exp": int(time.time()) + (30 * 86400)  # 30 days session validity
-    }
-    raw_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    b64_payload = base64.urlsafe_b64encode(raw_json).decode("ascii").rstrip("=")
-    sig = hmac.new(cfg["signing_key"].encode("utf-8"), b64_payload.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"{b64_payload}.{sig}"
-
-
+ cfg = _get_live_env_auth_config()
+ clean_role = "admin" if str(role).lower() == "admin" else "client"
+ payload = {
+ "role": clean_role,
+ "is_admin": clean_role == "admin",
+ "can_access_internal_api": clean_role == "admin",
+ "user_id": str(user_id or ""),
+ "email": str(email or "").lower(),
+ "display_name": str(display_name or user_id or email or clean_role.capitalize()),
+ "iat": int(time.time()),
+ "exp": int(time.time()) + (30 * 86400)  # 30 days session validity
+ }
+ raw_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+ b64_payload = base64.urlsafe_b64encode(raw_json).decode("ascii").rstrip("=")
+ sig = hmac.new(cfg["signing_key"].encode("utf-8"), b64_payload.encode("ascii"), hashlib.sha256).hexdigest()
+ return f"{b64_payload}.{sig}"
 def _verify_dashboard_session_token(token: str) -> Optional[Dict[str, Any]]:
-    raw = str(token or "").strip()
-    if not raw or "." not in raw:
-        return None
-    try:
-        cfg = _get_live_env_auth_config()
-        b64_payload, sig = raw.rsplit(".", 1)
-        expected_sig = hmac.new(cfg["signing_key"].encode("utf-8"), b64_payload.encode("ascii"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
-            return None
-        pad = "=" * ((4 - len(b64_payload) % 4) % 4)
-        data = json.loads(base64.urlsafe_b64decode((b64_payload + pad).encode("ascii")).decode("utf-8"))
-        if not isinstance(data, dict):
-            return None
-        if int(data.get("exp") or 0) < int(time.time()):
-            return None
-        role = str(data.get("role") or "client").lower()
-        email = str(data.get("email") or "").lower().strip()
-        is_admin = (role == "admin" and email == cfg["admin_email"].lower())
-        data["role"] = "admin" if is_admin else "client"
-        data["is_admin"] = bool(is_admin)
-        data["can_access_internal_api"] = bool(is_admin)
-        return data
-    except Exception:
-        return None
-
-
+ raw = str(token or "").strip()
+ if not raw or "." not in raw:
+  return None
+ try:
+  cfg = _get_live_env_auth_config()
+  b64_payload, sig = raw.rsplit(".", 1)
+  expected_sig = hmac.new(cfg["signing_key"].encode("utf-8"), b64_payload.encode("ascii"), hashlib.sha256).hexdigest()
+  if not hmac.compare_digest(sig, expected_sig):
+   return None
+  pad = "=" * ((4 - len(b64_payload) % 4) % 4)
+  data = json.loads(base64.urlsafe_b64decode((b64_payload + pad).encode("ascii")).decode("utf-8"))
+  if not isinstance(data, dict):
+   return None
+  if int(data.get("exp") or 0) < int(time.time()):
+   return None
+  role = str(data.get("role") or "client").lower()
+  email = str(data.get("email") or "").lower().strip()
+  is_admin = (role == "admin" and email == cfg["admin_email"].lower())
+  data["role"] = "admin" if is_admin else "client"
+  data["is_admin"] = bool(is_admin)
+  data["can_access_internal_api"] = bool(is_admin)
+  return data
+ except Exception:
+  return None
 def _get_authenticated_dashboard_session(request: Request) -> Optional[Dict[str, Any]]:
-    # 1. Check X-GlennBot-Session header
-    hdr_tok = str(request.headers.get("X-GlennBot-Session") or request.headers.get("x-glennbot-session") or "").strip()
-    if hdr_tok:
-        sess = _verify_dashboard_session_token(hdr_tok)
-        if sess:
-            return sess
-    # 2. Check Cookie
-    cookie_tok = str(request.cookies.get(AUTH_SESSION_COOKIE_NAME) or "").strip()
-    if cookie_tok:
-        sess = _verify_dashboard_session_token(cookie_tok)
-        if sess:
-            return sess
-    # 3. Check Query Param (for popups/downloads if needed)
-    qp_tok = str(request.query_params.get("gb_session") or "").strip()
-    if qp_tok:
-        sess = _verify_dashboard_session_token(qp_tok)
-        if sess:
-            return sess
-    return None
-
-
+ # 1. Check X-GlennBot-Session header
+ hdr_tok = str(request.headers.get("X-GlennBot-Session") or request.headers.get("x-glennbot-session") or "").strip()
+ if hdr_tok:
+  sess = _verify_dashboard_session_token(hdr_tok)
+  if sess:
+   return sess
+ # 2. Check Cookie
+ cookie_tok = str(request.cookies.get(AUTH_SESSION_COOKIE_NAME) or "").strip()
+ if cookie_tok:
+  sess = _verify_dashboard_session_token(cookie_tok)
+  if sess:
+   return sess
+ # 3. Check Query Param (for popups/downloads if needed)
+ qp_tok = str(request.query_params.get("gb_session") or "").strip()
+ if qp_tok:
+  sess = _verify_dashboard_session_token(qp_tok)
+  if sess:
+   return sess
+ return None
 async def _internal_api_admin_rbac_middleware(request: Request, call_next):
-    """
+ """
     Strictly restricts all '/api/internal-api/*' GUI & AI Workflow Architect routes
     to the Administrator account (glennardtasico@gmail.com).
     Client accounts logged in via UserID/Password cannot access Internal API (n8n).
     (Note: External '/api/v1/*' routes used by n8n HTTP Request nodes continue to authenticate via X-API-Key.)
     """
-    path = str(request.url.path or "")
-    if path.startswith("/api/internal-api"):
-        sess = _get_authenticated_dashboard_session(request)
-        if not sess:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "message": "Authentication required. Please sign in as Administrator (glennardtasico@gmail.com) to access Internal API (n8n)."
-                }
-            )
-        if not sess.get("is_admin"):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "status": "error",
-                    "message": "Restricted Access: Internal API (n8n) is strictly reserved for the Administrator (glennardtasico@gmail.com)."
-                }
-            )
-    return await call_next(request)
-
-
+ path = str(request.url.path or "")
+ if path.startswith("/api/internal-api"):
+  sess = _get_authenticated_dashboard_session(request)
+  if not sess:
+   return JSONResponse(
+   status_code=401,
+   content={
+   "status": "error",
+   "message": "Authentication required. Please sign in as Administrator (glennardtasico@gmail.com) to access Internal API (n8n)."
+   }
+   )
+  if not sess.get("is_admin"):
+   return JSONResponse(
+   status_code=403,
+   content={
+   "status": "error",
+   "message": "Restricted Access: Internal API (n8n) is strictly reserved for the Administrator (glennardtasico@gmail.com)."
+   }
+   )
+ return await call_next(request)
 @router.get("/api/auth/session")
 async def api_get_dashboard_auth_session(request: Request):
-    cfg = _get_live_env_auth_config()
-    sess = _get_authenticated_dashboard_session(request)
-    if not sess:
-        return {
-            "status": "unauthenticated",
-            "authenticated": False,
-            "admin_google_email_hint": cfg["admin_email"]
-        }
-    profile_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(sess, force_cloud=False))
-    return {
-        "status": "success",
-        "authenticated": True,
-        "user": sess,
-        "role": sess.get("role", "client"),
-        "is_admin": bool(sess.get("is_admin")),
-        "can_access_internal_api": bool(sess.get("can_access_internal_api")),
-        "user_settings": profile_settings_info.get("settings"),
-        "settings_profile": profile_settings_info
-    }
-
-
+ cfg = _get_live_env_auth_config()
+ sess = _get_authenticated_dashboard_session(request)
+ if not sess:
+  return {
+  "status": "unauthenticated",
+  "authenticated": False,
+  "admin_google_email_hint": cfg["admin_email"]
+  }
+ profile_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(sess, force_cloud=False))
+ return {
+ "status": "success",
+ "authenticated": True,
+ "user": sess,
+ "role": sess.get("role", "client"),
+ "is_admin": bool(sess.get("is_admin")),
+ "can_access_internal_api": bool(sess.get("can_access_internal_api")),
+ "user_settings": profile_settings_info.get("settings"),
+ "settings_profile": profile_settings_info
+ }
 @router.get("/api/user/settings")
 async def api_get_user_settings(request: Request, refresh: bool = False):
-    sess = _get_authenticated_dashboard_session(request)
-    info = await run_in_threadpool(lambda: _get_user_settings_for_session(sess, force_cloud=bool(refresh)))
-    return {
-        "status": "success",
-        "authenticated": bool(sess),
-        "profile_key": info["profile_key"],
-        "role": info["role"],
-        "account_label": info["account_label"],
-        "updated_at": info["updated_at"],
-        "settings": info["settings"]
-    }
-
-
+ sess = _get_authenticated_dashboard_session(request)
+ info = await run_in_threadpool(lambda: _get_user_settings_for_session(sess, force_cloud=bool(refresh)))
+ return {
+ "status": "success",
+ "authenticated": bool(sess),
+ "profile_key": info["profile_key"],
+ "role": info["role"],
+ "account_label": info["account_label"],
+ "updated_at": info["updated_at"],
+ "settings": info["settings"]
+ }
 @router.post("/api/user/settings")
 async def api_save_user_settings(request: Request):
-    """
+ """
     Saves user settings (including Theme: 'default', 'light', 'dark') to Cloudinary
     under the active account's profile ('client:<DASHBOARD_USER_ID>' vs 'admin:glennardtasico@gmail.com').
     """
-    sess = _get_authenticated_dashboard_session(request)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    raw_settings = body.get("settings") if isinstance(body.get("settings"), dict) else body
-    norm_settings = _normalize_user_settings_dict(raw_settings)
-    profile_key, role_str, account_label = _resolve_settings_profile_identity(sess)
-    now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p")
-
-    def _persist():
-        store = _load_user_settings_profiles_store(force_cloud=False)
-        with USER_SETTINGS_LOCK:
-            profiles = store.setdefault("profiles", {})
-            profiles[profile_key] = {
-                **norm_settings,
-                "profile_key": profile_key,
-                "role": role_str,
-                "saved_by": account_label,
-                "updated_at": now_str
-            }
-        cloud_ok = _save_user_settings_profiles_store()
-        return cloud_ok
-
-    saved_to_cloud = await run_in_threadpool(_persist)
-    return {
-        "status": "success",
-        "saved_to_cloudinary": saved_to_cloud,
-        "profile_key": profile_key,
-        "role": role_str,
-        "account_label": account_label,
-        "updated_at": now_str,
-        "settings": norm_settings,
-        "message": f"Settings & Theme ('{norm_settings['theme']}') saved to Cloudinary for {account_label}!"
-    }
-
-
+ sess = _get_authenticated_dashboard_session(request)
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ raw_settings = body.get("settings") if isinstance(body.get("settings"), dict) else body
+ norm_settings = _normalize_user_settings_dict(raw_settings)
+ profile_key, role_str, account_label = _resolve_settings_profile_identity(sess)
+ now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M:%S %p")
+ def _persist():
+  store = _load_user_settings_profiles_store(force_cloud=False)
+  with USER_SETTINGS_LOCK:
+   profiles = store.setdefault("profiles", {})
+   profiles[profile_key] = {
+   **norm_settings,
+   "profile_key": profile_key,
+   "role": role_str,
+   "saved_by": account_label,
+   "updated_at": now_str
+   }
+  cloud_ok = _save_user_settings_profiles_store()
+  return cloud_ok
+ saved_to_cloud = await run_in_threadpool(_persist)
+ return {
+ "status": "success",
+ "saved_to_cloudinary": saved_to_cloud,
+ "profile_key": profile_key,
+ "role": role_str,
+ "account_label": account_label,
+ "updated_at": now_str,
+ "settings": norm_settings,
+ "message": f"Settings & Theme ('{norm_settings['theme']}') saved to Cloudinary for {account_label}!"
+ }
 @router.post("/api/auth/login")
 async def api_dashboard_client_login(request: Request):
-    """
+ """
     Validates UserID and Password against DASHBOARD_USER_ID and DASHBOARD_PASSWORD in .env.
     Grants Client access (Internal API n8n is restricted).
     """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    input_uid = str(body.get("user_id") or body.get("username") or "").strip()
-    input_pwd = str(body.get("password") or "").strip()
-    cfg = _get_live_env_auth_config()
-
-    if not input_uid or not input_pwd:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "Please enter both User ID and Password."}
-        )
-
-    uid_ok = hmac.compare_digest(input_uid.encode("utf-8"), cfg["user_id"].encode("utf-8"))
-    pwd_ok = hmac.compare_digest(input_pwd.encode("utf-8"), cfg["password"].encode("utf-8"))
-
-    if not (uid_ok and pwd_ok):
-        return JSONResponse(
-            status_code=401,
-            content={"status": "error", "message": "Invalid User ID or Password. Access Denied."}
-        )
-
-    token = _create_dashboard_session_token(
-        role="client",
-        user_id=cfg["user_id"],
-        email="",
-        display_name=f"Client ({cfg['user_id']})"
-    )
-    user_obj = _verify_dashboard_session_token(token)
-    profile_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(user_obj, force_cloud=False))
-    resp = JSONResponse(content={
-        "status": "success",
-        "message": "Signed in successfully as Client!",
-        "session_token": token,
-        "user": user_obj,
-        "user_settings": profile_settings_info.get("settings"),
-        "settings_profile": profile_settings_info
-    })
-    resp.set_cookie(
-        key=AUTH_SESSION_COOKIE_NAME,
-        value=token,
-        max_age=30 * 86400,
-        httponly=False,
-        samesite="lax",
-        path="/"
-    )
-    return resp
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ input_uid = str(body.get("user_id") or body.get("username") or "").strip()
+ input_pwd = str(body.get("password") or "").strip()
+ cfg = _get_live_env_auth_config()
+ if not input_uid or not input_pwd:
+  return JSONResponse(
+  status_code=400,
+  content={"status": "error", "message": "Please enter both User ID and Password."}
+  )
+ uid_ok = hmac.compare_digest(input_uid.encode("utf-8"), cfg["user_id"].encode("utf-8"))
+ pwd_ok = hmac.compare_digest(input_pwd.encode("utf-8"), cfg["password"].encode("utf-8"))
+ if not (uid_ok and pwd_ok):
+  return JSONResponse(
+  status_code=401,
+  content={"status": "error", "message": "Invalid User ID or Password. Access Denied."}
+  )
+ token = _create_dashboard_session_token(
+ role="client",
+ user_id=cfg["user_id"],
+ email="",
+ display_name=f"Client ({cfg['user_id']})"
+ )
+ user_obj = _verify_dashboard_session_token(token)
+ profile_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(user_obj, force_cloud=False))
+ resp = JSONResponse(content={
+ "status": "success",
+ "message": "Signed in successfully as Client!",
+ "session_token": token,
+ "user": user_obj,
+ "user_settings": profile_settings_info.get("settings"),
+ "settings_profile": profile_settings_info
+ })
+ resp.set_cookie(
+ key=AUTH_SESSION_COOKIE_NAME,
+ value=token,
+ max_age=30 * 86400,
+ httponly=False,
+ samesite="lax",
+ path="/"
+ )
+ return resp
 def _disconnect_admin_email_from_email_hub(target_email: str = STRICT_ADMIN_GOOGLE_EMAIL) -> int:
-    """
+ """
     Automatically disconnects and removes `glennardtasico@gmail.com` (and any Composio
     admin OAuth connections) from the Email Modal (`EMAIL_HUB_STATE`, `glennbot_email_accounts` DB,
     Cloudinary store, and Composio `/connected_accounts`) upon Logout so the admin's Gmail
     never duplicates or remains exposed in the Email Modal after logging out.
     """
-    _load_email_hub_state()
-    clean_target = str(target_email or STRICT_ADMIN_GOOGLE_EMAIL).strip().lower()
-    conn_ids_to_delete: set = set()
-    removed_count = 0
-
-    with EMAIL_HUB_LOCK:
-        kept_accounts = []
-        for a in (EMAIL_HUB_STATE.get("accounts") or []):
-            em = str(a.get("email_address") or "").strip().lower()
-            ent = str(a.get("composio_entity_id") or "").strip().lower()
-            cid = str(a.get("composio_connection_id") or "").strip()
-            if em == clean_target or ent.startswith("glennbot_admin_oauth_"):
-                removed_count += 1
-                if cid:
-                    conn_ids_to_delete.add(cid)
-            else:
-                kept_accounts.append(a)
-        EMAIL_HUB_STATE["accounts"] = kept_accounts
-
-    try:
-        with db_engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM glennbot_email_accounts WHERE LOWER(email_address) = :em OR composio_entity_id LIKE 'glennbot_admin_oauth_%'"),
-                {"em": clean_target}
-            )
-    except Exception as e:
-        print(f"[AuthLogout] DB email cleanup warning: {e}")
-
-    # Also query Composio connected_accounts to remove any ACTIVE connections for glennardtasico@gmail.com or glennbot_admin_oauth_*
-    try:
-        headers = _get_composio_headers()
-        r = HTTP_SESSION.get(f"{COMPOSIO_BASE_URL}/connected_accounts", headers=headers, timeout=12)
-        if r.status_code == 200:
-            for item in (r.json().get("items") or []):
-                cid = str(item.get("id") or "").strip()
-                uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "").strip()
-                tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
-                if not cid or tk != "gmail":
-                    continue
-                if uid.startswith("glennbot_admin_oauth_"):
-                    conn_ids_to_delete.add(cid)
-                elif cid not in conn_ids_to_delete:
-                    meta_em, _ = _extract_email_from_composio_item(item)
-                    if meta_em == clean_target:
-                        conn_ids_to_delete.add(cid)
-                    elif not meta_em:
-                        try:
-                            prof = _composio_execute_tool("GMAIL_GET_PROFILE", cid, uid or "glennbot_email_user", {"user_id": "me"})
-                            resp_d = ((prof.get("data") or {}).get("response_data") or prof.get("data") or {})
-                            if isinstance(resp_d, dict):
-                                em_found = str(resp_d.get("emailAddress") or resp_d.get("email") or "").strip().lower()
-                                if em_found == clean_target:
-                                    conn_ids_to_delete.add(cid)
-                        except Exception:
-                            pass
-
-        for cid_del in conn_ids_to_delete:
-            try:
-                HTTP_SESSION.delete(f"{COMPOSIO_BASE_URL}/connected_accounts/{cid_del}", headers=headers, timeout=10)
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"[AuthLogout] Composio cleanup warning: {e}")
-
-    threading.Thread(target=_save_email_hub_to_cloudinary, daemon=True).start()
-    return removed_count
-
-
+ _load_email_hub_state()
+ clean_target = str(target_email or STRICT_ADMIN_GOOGLE_EMAIL).strip().lower()
+ conn_ids_to_delete: set = set()
+ removed_count = 0
+ with EMAIL_HUB_LOCK:
+  kept_accounts = []
+  for a in (EMAIL_HUB_STATE.get("accounts") or []):
+   em = str(a.get("email_address") or "").strip().lower()
+   ent = str(a.get("composio_entity_id") or "").strip().lower()
+   cid = str(a.get("composio_connection_id") or "").strip()
+   if em == clean_target or ent.startswith("glennbot_admin_oauth_"):
+    removed_count += 1
+    if cid:
+     conn_ids_to_delete.add(cid)
+   else:
+    kept_accounts.append(a)
+  EMAIL_HUB_STATE["accounts"] = kept_accounts
+ try:
+  with db_engine.begin() as conn:
+   conn.execute(
+   text("DELETE FROM glennbot_email_accounts WHERE LOWER(email_address) = :em OR composio_entity_id LIKE 'glennbot_admin_oauth_%'"),
+   {"em": clean_target}
+   )
+ except Exception as e:
+  print(f"[AuthLogout] DB email cleanup warning: {e}")
+ # Also query Composio connected_accounts to remove any ACTIVE connections for glennardtasico@gmail.com or glennbot_admin_oauth_*
+ try:
+  headers = _get_composio_headers()
+  r = HTTP_SESSION.get(f"{COMPOSIO_BASE_URL}/connected_accounts", headers=headers, timeout=12)
+  if r.status_code == 200:
+   for item in (r.json().get("items") or []):
+    cid = str(item.get("id") or "").strip()
+    uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "").strip()
+    tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
+    if not cid or tk != "gmail":
+     continue
+    if uid.startswith("glennbot_admin_oauth_"):
+     conn_ids_to_delete.add(cid)
+    elif cid not in conn_ids_to_delete:
+     meta_em, _ = _extract_email_from_composio_item(item)
+     if meta_em == clean_target:
+      conn_ids_to_delete.add(cid)
+     elif not meta_em:
+      try:
+       prof = _composio_execute_tool("GMAIL_GET_PROFILE", cid, uid or "glennbot_email_user", {"user_id": "me"})
+       resp_d = ((prof.get("data") or {}).get("response_data") or prof.get("data") or {})
+       if isinstance(resp_d, dict):
+        em_found = str(resp_d.get("emailAddress") or resp_d.get("email") or "").strip().lower()
+        if em_found == clean_target:
+         conn_ids_to_delete.add(cid)
+      except Exception:
+       pass
+  for cid_del in conn_ids_to_delete:
+   try:
+    HTTP_SESSION.delete(f"{COMPOSIO_BASE_URL}/connected_accounts/{cid_del}", headers=headers, timeout=10)
+   except Exception:
+    pass
+ except Exception as e:
+  print(f"[AuthLogout] Composio cleanup warning: {e}")
+ threading.Thread(target=_save_email_hub_to_cloudinary, daemon=True).start()
+ return removed_count
 @router.post("/api/auth/logout")
 async def api_dashboard_logout(request: Request):
-    sess = _get_authenticated_dashboard_session(request)
-    disconnected_admin_email = False
-    # If logged in as Admin (glennardtasico@gmail.com) or if glennardtasico@gmail.com is in Email Hub, auto-disconnect it!
-    if (sess and sess.get("is_admin")) or any(
-        str(a.get("email_address") or "").strip().lower() == STRICT_ADMIN_GOOGLE_EMAIL.lower()
-        for a in (EMAIL_HUB_STATE.get("accounts") or [])
-    ):
-        await run_in_threadpool(lambda: _disconnect_admin_email_from_email_hub(STRICT_ADMIN_GOOGLE_EMAIL))
-        disconnected_admin_email = True
-
-    resp = JSONResponse(content={
-        "status": "success",
-        "disconnected_admin_email": disconnected_admin_email,
-        "message": "Logged out successfully and disconnected Administrator Gmail from Email Hub."
-    })
-    resp.delete_cookie(key=AUTH_SESSION_COOKIE_NAME, path="/")
-    return resp
-
-
+ sess = _get_authenticated_dashboard_session(request)
+ disconnected_admin_email = False
+ # If logged in as Admin (glennardtasico@gmail.com) or if glennardtasico@gmail.com is in Email Hub, auto-disconnect it!
+ if (sess and sess.get("is_admin")) or any(
+ str(a.get("email_address") or "").strip().lower() == STRICT_ADMIN_GOOGLE_EMAIL.lower()
+ for a in (EMAIL_HUB_STATE.get("accounts") or [])
+ ):
+  await run_in_threadpool(lambda: _disconnect_admin_email_from_email_hub(STRICT_ADMIN_GOOGLE_EMAIL))
+  disconnected_admin_email = True
+ resp = JSONResponse(content={
+ "status": "success",
+ "disconnected_admin_email": disconnected_admin_email,
+ "message": "Logged out successfully and disconnected Administrator Gmail from Email Hub."
+ })
+ resp.delete_cookie(key=AUTH_SESSION_COOKIE_NAME, path="/")
+ return resp
 def _create_composio_admin_google_oauth_link(request: Request, state: str = "") -> Dict[str, Any]:
-    """
+ """
     Creates a Composio Managed Google OAuth2 authorization URL for Administrator sign-in.
     """
-    _load_email_hub_state()
-    clean_state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(state or f"admin_{int(time.time())}"))
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:5001"
-    proto = request.headers.get("x-forwarded-proto") or ("https" if ("ngrok" in host or "onrender" in host or "run.app" in host) else "http")
-    base_url = f"{proto}://{host}"
-    entity_id = f"glennbot_admin_oauth_{int(time.time())}"
-    callback_url = f"{base_url}/api/auth/google/callback?state={urllib.parse.quote(clean_state)}&entity_id={urllib.parse.quote(entity_id)}"
-    headers = _get_composio_headers()
-
-    for force_flag in (False, True):
-        auth_config_id = _get_or_create_composio_auth_config_id("gmail", force_lookup=force_flag)
-        if not auth_config_id:
-            continue
-        link_payload = {
-            "auth_config_id": auth_config_id,
-            "user_id": entity_id,
-            "callback_url": callback_url
-        }
-        try:
-            r = HTTP_SESSION.post(
-                f"{COMPOSIO_BASE_URL}/connected_accounts/link",
-                headers=headers,
-                json=link_payload,
-                timeout=20
-            )
-            data = r.json() if r.content else {}
-            redirect_url = str(data.get("redirect_url") or data.get("redirectUrl") or "").strip()
-            conn_id = str(data.get("connected_account_id") or data.get("id") or "").strip()
-            if r.status_code in (200, 201) and redirect_url:
-                with PENDING_ADMIN_OAUTH_LOCK:
-                    PENDING_ADMIN_OAUTH_STATES[clean_state] = {
-                        "status": "pending",
-                        "entity_id": entity_id,
-                        "connected_account_id": conn_id,
-                        "created_at": time.time()
-                    }
-                return {
-                    "status": "success",
-                    "auth_url": redirect_url,
-                    "state": clean_state,
-                    "entity_id": entity_id,
-                    "connected_account_id": conn_id
-                }
-        except Exception as e:
-            if force_flag:
-                return {"status": "error", "message": f"Failed to start Composio Google OAuth: {e}"}
-
-    return {"status": "error", "message": "Could not initialize Composio Google OAuth link."}
-
-
+ _load_email_hub_state()
+ clean_state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(state or f"admin_{int(time.time())}"))
+ host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:5001"
+ proto = request.headers.get("x-forwarded-proto") or ("https" if ("ngrok" in host or "onrender" in host or "run.app" in host) else "http")
+ base_url = f"{proto}://{host}"
+ entity_id = f"glennbot_admin_oauth_{int(time.time())}"
+ callback_url = f"{base_url}/api/auth/google/callback?state={urllib.parse.quote(clean_state)}&entity_id={urllib.parse.quote(entity_id)}"
+ headers = _get_composio_headers()
+ for force_flag in (False, True):
+  auth_config_id = _get_or_create_composio_auth_config_id("gmail", force_lookup=force_flag)
+  if not auth_config_id:
+   continue
+  link_payload = {
+  "auth_config_id": auth_config_id,
+  "user_id": entity_id,
+  "callback_url": callback_url
+  }
+  try:
+   r = HTTP_SESSION.post(
+   f"{COMPOSIO_BASE_URL}/connected_accounts/link",
+   headers=headers,
+   json=link_payload,
+   timeout=20
+   )
+   data = r.json() if r.content else {}
+   redirect_url = str(data.get("redirect_url") or data.get("redirectUrl") or "").strip()
+   conn_id = str(data.get("connected_account_id") or data.get("id") or "").strip()
+   if r.status_code in (200, 201) and redirect_url:
+    with PENDING_ADMIN_OAUTH_LOCK:
+     PENDING_ADMIN_OAUTH_STATES[clean_state] = {
+     "status": "pending",
+     "entity_id": entity_id,
+     "connected_account_id": conn_id,
+     "created_at": time.time()
+     }
+    return {
+    "status": "success",
+    "auth_url": redirect_url,
+    "state": clean_state,
+    "entity_id": entity_id,
+    "connected_account_id": conn_id
+    }
+  except Exception as e:
+   if force_flag:
+    return {"status": "error", "message": f"Failed to start Composio Google OAuth: {e}"}
+ return {"status": "error", "message": "Could not initialize Composio Google OAuth link."}
 @router.get("/api/auth/google/redirect", response_class=HTMLResponse)
 async def api_redirect_admin_google_oauth(request: Request, state: str = ""):
-    """
+ """
     Opens in a popup window when the user clicks 'Sign in with Google (Administrator via Composio)'.
     Immediately redirects to Composio's Google OAuth consent screen.
     """
-    res = _create_composio_admin_google_oauth_link(request, state=state)
-    if res.get("status") == "success" and res.get("auth_url"):
-        auth_url = res["auth_url"]
-        html = f"""<!DOCTYPE html>
+ res = _create_composio_admin_google_oauth_link(request, state=state)
+ if res.get("status") == "success" and res.get("auth_url"):
+  auth_url = res["auth_url"]
+  html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -776,123 +709,110 @@ async def api_redirect_admin_google_oauth(request: Request, state: str = ""):
     </script>
 </body>
 </html>"""
-        return HTMLResponse(content=html)
-
-    err_msg = res.get("message") or "Could not start Composio Google OAuth."
-    return HTMLResponse(
-        content=f"<html><body style='background:#050b14;color:#f43f5e;font-family:sans-serif;padding:40px;text-align:center;'><h3>Google OAuth Error</h3><p>{err_msg}</p></body></html>",
-        status_code=400
-    )
-
-
+  return HTMLResponse(content=html)
+ err_msg = res.get("message") or "Could not start Composio Google OAuth."
+ return HTMLResponse(
+ content=f"<html><body style='background:#050b14;color:#f43f5e;font-family:sans-serif;padding:40px;text-align:center;'><h3>Google OAuth Error</h3><p>{err_msg}</p></body></html>",
+ status_code=400
+ )
 def _resolve_composio_google_email_for_login(conn_id: str = "", entity_id: str = "") -> str:
-    """
+ """
     Resolves the exact Google email address from Composio after OAuth callback.
     Checks `item["data"]["displayName"]` metadata first before falling back to GMAIL_GET_PROFILE.
     """
-    headers = _get_composio_headers()
-    candidate_conns: List[Tuple[str, str]] = []
-    if conn_id:
-        candidate_conns.append((conn_id, entity_id or "glennbot_email_user"))
-
-    try:
-        r = HTTP_SESSION.get(f"{COMPOSIO_BASE_URL}/connected_accounts", headers=headers, timeout=15)
-        if r.status_code == 200:
-            items = r.json().get("items") or []
-            for item in items:
-                st = str(item.get("status") or "").upper()
-                tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
-                cid = str(item.get("id") or "").strip()
-                uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "").strip()
-                if st == "ACTIVE" and tk == "gmail" and cid:
-                    if (entity_id and uid == entity_id) or (conn_id and cid == conn_id):
-                        meta_em, _ = _extract_email_from_composio_item(item)
-                        if meta_em:
-                            return meta_em
-                        if (cid, uid) not in candidate_conns:
-                            candidate_conns.insert(0, (cid, uid or entity_id or "glennbot_email_user"))
-            if not candidate_conns:
-                for item in items:
-                    st = str(item.get("status") or "").upper()
-                    tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
-                    cid = str(item.get("id") or "").strip()
-                    uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "glennbot_email_user").strip()
-                    if st == "ACTIVE" and tk == "gmail" and cid:
-                        meta_em, _ = _extract_email_from_composio_item(item)
-                        if meta_em:
-                            return meta_em
-                        candidate_conns.append((cid, uid))
-                        break
-    except Exception as e:
-        print(f"[AuthGoogle] Composio connected_accounts lookup warning: {e}")
-
-    for cid, uid in candidate_conns[:3]:
-        try:
-            prof_res = _composio_execute_tool("GMAIL_GET_PROFILE", cid, uid, {"user_id": "me"})
-            data_obj = prof_res.get("data") or {}
-            if isinstance(data_obj, dict):
-                resp_data = data_obj.get("response_data") or data_obj
-                if isinstance(resp_data, dict):
-                    em = str(resp_data.get("emailAddress") or resp_data.get("email") or "").strip().lower()
-                    if em and "@" in em:
-                        return em
-        except Exception as e:
-            print(f"[AuthGoogle] GMAIL_GET_PROFILE warning ({cid}): {e}")
-
-    return ""
-
-
+ headers = _get_composio_headers()
+ candidate_conns: List[Tuple[str, str]] = []
+ if conn_id:
+  candidate_conns.append((conn_id, entity_id or "glennbot_email_user"))
+ try:
+  r = HTTP_SESSION.get(f"{COMPOSIO_BASE_URL}/connected_accounts", headers=headers, timeout=15)
+  if r.status_code == 200:
+   items = r.json().get("items") or []
+   for item in items:
+    st = str(item.get("status") or "").upper()
+    tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
+    cid = str(item.get("id") or "").strip()
+    uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "").strip()
+    if st == "ACTIVE" and tk == "gmail" and cid:
+     if (entity_id and uid == entity_id) or (conn_id and cid == conn_id):
+      meta_em, _ = _extract_email_from_composio_item(item)
+      if meta_em:
+       return meta_em
+      if (cid, uid) not in candidate_conns:
+       candidate_conns.insert(0, (cid, uid or entity_id or "glennbot_email_user"))
+   if not candidate_conns:
+    for item in items:
+     st = str(item.get("status") or "").upper()
+     tk = str((item.get("toolkit") or {}).get("slug") or "").lower()
+     cid = str(item.get("id") or "").strip()
+     uid = str(item.get("user_id") or item.get("entity_id") or item.get("clientUniqueUserId") or "glennbot_email_user").strip()
+     if st == "ACTIVE" and tk == "gmail" and cid:
+      meta_em, _ = _extract_email_from_composio_item(item)
+      if meta_em:
+       return meta_em
+      candidate_conns.append((cid, uid))
+      break
+ except Exception as e:
+  print(f"[AuthGoogle] Composio connected_accounts lookup warning: {e}")
+ for cid, uid in candidate_conns[:3]:
+  try:
+   prof_res = _composio_execute_tool("GMAIL_GET_PROFILE", cid, uid, {"user_id": "me"})
+   data_obj = prof_res.get("data") or {}
+   if isinstance(data_obj, dict):
+    resp_data = data_obj.get("response_data") or data_obj
+    if isinstance(resp_data, dict):
+     em = str(resp_data.get("emailAddress") or resp_data.get("email") or "").strip().lower()
+     if em and "@" in em:
+      return em
+  except Exception as e:
+   print(f"[AuthGoogle] GMAIL_GET_PROFILE warning ({cid}): {e}")
+ return ""
 @router.get("/api/auth/google/callback", response_class=HTMLResponse)
 async def api_admin_google_oauth_callback(request: Request):
-    """
+ """
     Callback endpoint after Composio Google OAuth completes.
     Verifies if the authenticated Google email is strictly ADMIN_GOOGLE_EMAIL ('glennardtasico@gmail.com').
     """
-    qp = request.query_params
-    state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(qp.get("state") or ""))
-    entity_id = str(qp.get("entity_id") or "").strip()
-    conn_id = str(qp.get("connectedAccountId") or qp.get("connected_account_id") or qp.get("connectionId") or "").strip()
-
-    with PENDING_ADMIN_OAUTH_LOCK:
-        st_info = PENDING_ADMIN_OAUTH_STATES.get(state) or {}
-        if not entity_id:
-            entity_id = str(st_info.get("entity_id") or "")
-        if not conn_id:
-            conn_id = str(st_info.get("connected_account_id") or "")
-
-    cfg = _get_live_env_auth_config()
-    admin_target_email = cfg["admin_email"].lower().strip()
-
-    resolved_email = await run_in_threadpool(lambda: _resolve_composio_google_email_for_login(conn_id=conn_id, entity_id=entity_id))
-    # Also sync Email Hub accounts in background so if glennardtasico@gmail.com logged in, it's kept in sync
-    try:
-        threading.Thread(target=_discover_composio_email_accounts, daemon=True).start()
-    except Exception:
-        pass
-
-    if resolved_email and resolved_email.lower() == admin_target_email:
-        token = _create_dashboard_session_token(
-            role="admin",
-            user_id="administrator",
-            email=resolved_email,
-            display_name=f"Administrator ({resolved_email})"
-        )
-        user_obj = _verify_dashboard_session_token(token)
-        admin_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(user_obj, force_cloud=False))
-        result_payload = {
-            "type": "GLENNBOT_ADMIN_GOOGLE_AUTH_RESULT",
-            "status": "success",
-            "session_token": token,
-            "user": user_obj,
-            "user_settings": admin_settings_info.get("settings"),
-            "settings_profile": admin_settings_info,
-            "message": f"Welcome Administrator ({resolved_email})! Full Internal API (n8n) access unlocked."
-        }
-        if state:
-            with PENDING_ADMIN_OAUTH_LOCK:
-                PENDING_ADMIN_OAUTH_STATES[state] = result_payload
-
-        html = f"""<!DOCTYPE html>
+ qp = request.query_params
+ state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(qp.get("state") or ""))
+ entity_id = str(qp.get("entity_id") or "").strip()
+ conn_id = str(qp.get("connectedAccountId") or qp.get("connected_account_id") or qp.get("connectionId") or "").strip()
+ with PENDING_ADMIN_OAUTH_LOCK:
+  st_info = PENDING_ADMIN_OAUTH_STATES.get(state) or {}
+  if not entity_id:
+   entity_id = str(st_info.get("entity_id") or "")
+  if not conn_id:
+   conn_id = str(st_info.get("connected_account_id") or "")
+ cfg = _get_live_env_auth_config()
+ admin_target_email = cfg["admin_email"].lower().strip()
+ resolved_email = await run_in_threadpool(lambda: _resolve_composio_google_email_for_login(conn_id=conn_id, entity_id=entity_id))
+ # Also sync Email Hub accounts in background so if glennardtasico@gmail.com logged in, it's kept in sync
+ try:
+  threading.Thread(target=_discover_composio_email_accounts, daemon=True).start()
+ except Exception:
+  pass
+ if resolved_email and resolved_email.lower() == admin_target_email:
+  token = _create_dashboard_session_token(
+  role="admin",
+  user_id="administrator",
+  email=resolved_email,
+  display_name=f"Administrator ({resolved_email})"
+  )
+  user_obj = _verify_dashboard_session_token(token)
+  admin_settings_info = await run_in_threadpool(lambda: _get_user_settings_for_session(user_obj, force_cloud=False))
+  result_payload = {
+  "type": "GLENNBOT_ADMIN_GOOGLE_AUTH_RESULT",
+  "status": "success",
+  "session_token": token,
+  "user": user_obj,
+  "user_settings": admin_settings_info.get("settings"),
+  "settings_profile": admin_settings_info,
+  "message": f"Welcome Administrator ({resolved_email})! Full Internal API (n8n) access unlocked."
+  }
+  if state:
+   with PENDING_ADMIN_OAUTH_LOCK:
+    PENDING_ADMIN_OAUTH_STATES[state] = result_payload
+  html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -939,33 +859,31 @@ async def api_admin_google_oauth_callback(request: Request):
     </script>
 </body>
 </html>"""
-        resp = HTMLResponse(content=html)
-        resp.set_cookie(
-            key=AUTH_SESSION_COOKIE_NAME,
-            value=token,
-            max_age=30 * 86400,
-            httponly=False,
-            samesite="lax",
-            path="/"
-        )
-        return resp
-
-    # Unauthorized Google Account
-    denied_reason = (
-        f"Access Denied: Google account '{resolved_email}' is not authorized for Administrator access. Only '{admin_target_email}' is permitted."
-        if resolved_email
-        else f"Access Denied: Could not verify Administrator Google account ('{admin_target_email}') via Composio OAuth."
-    )
-    err_payload = {
-        "type": "GLENNBOT_ADMIN_GOOGLE_AUTH_RESULT",
-        "status": "error",
-        "message": denied_reason
-    }
-    if state:
-        with PENDING_ADMIN_OAUTH_LOCK:
-            PENDING_ADMIN_OAUTH_STATES[state] = err_payload
-
-    html_err = f"""<!DOCTYPE html>
+  resp = HTMLResponse(content=html)
+  resp.set_cookie(
+  key=AUTH_SESSION_COOKIE_NAME,
+  value=token,
+  max_age=30 * 86400,
+  httponly=False,
+  samesite="lax",
+  path="/"
+  )
+  return resp
+ # Unauthorized Google Account
+ denied_reason = (
+ f"Access Denied: Google account '{resolved_email}' is not authorized for Administrator access. Only '{admin_target_email}' is permitted."
+ if resolved_email
+ else f"Access Denied: Could not verify Administrator Google account ('{admin_target_email}') via Composio OAuth."
+ )
+ err_payload = {
+ "type": "GLENNBOT_ADMIN_GOOGLE_AUTH_RESULT",
+ "status": "error",
+ "message": denied_reason
+ }
+ if state:
+  with PENDING_ADMIN_OAUTH_LOCK:
+   PENDING_ADMIN_OAUTH_STATES[state] = err_payload
+ html_err = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1009,154 +927,137 @@ async def api_admin_google_oauth_callback(request: Request):
     </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html_err, status_code=403)
-
-
+ return HTMLResponse(content=html_err, status_code=403)
 @router.get("/api/auth/google/poll")
 async def api_poll_admin_google_oauth_state(state: str = ""):
-    """
+ """
     Allows the Login screen to poll the completion status of the Composio Google OAuth popup
     even if browser Cross-Origin-Opener-Policy headers clear window.opener during Google redirect.
     """
-    clean_state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(state or ""))
-    if not clean_state:
-        return {"status": "pending"}
-    with PENDING_ADMIN_OAUTH_LOCK:
-        info = PENDING_ADMIN_OAUTH_STATES.get(clean_state)
-        if not info:
-            return {"status": "pending"}
-        st = str(info.get("status") or "pending")
-        if st in ("success", "error"):
-            # Return and pop after reading so token isn't left around
-            PENDING_ADMIN_OAUTH_STATES.pop(clean_state, None)
-            if st == "success" and info.get("session_token"):
-                resp = JSONResponse(content=info)
-                resp.set_cookie(
-                    key=AUTH_SESSION_COOKIE_NAME,
-                    value=str(info["session_token"]),
-                    max_age=30 * 86400,
-                    httponly=False,
-                    samesite="lax",
-                    path="/"
-                )
-                return resp
-            return info
-    return {"status": "pending"}
-
-
+ clean_state = re.sub(r"[^a-zA-Z0-9_.-]", "", str(state or ""))
+ if not clean_state:
+  return {"status": "pending"}
+ with PENDING_ADMIN_OAUTH_LOCK:
+  info = PENDING_ADMIN_OAUTH_STATES.get(clean_state)
+  if not info:
+   return {"status": "pending"}
+  st = str(info.get("status") or "pending")
+  if st in ("success", "error"):
+   # Return and pop after reading so token isn't left around
+   PENDING_ADMIN_OAUTH_STATES.pop(clean_state, None)
+   if st == "success" and info.get("session_token"):
+    resp = JSONResponse(content=info)
+    resp.set_cookie(
+    key=AUTH_SESSION_COOKIE_NAME,
+    value=str(info["session_token"]),
+    max_age=30 * 86400,
+    httponly=False,
+    samesite="lax",
+    path="/"
+    )
+    return resp
+   return info
+ return {"status": "pending"}
 # --- DASHBOARD GUI MANAGEMENT ROUTES FOR INTERNAL API & N8N ---
-
 @router.get("/api/internal-api/config")
 async def api_get_internal_api_config(request: Request):
-    state = await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
-    base_url = get_dynamic_base_url(request=request, prefer_public=True)
-    browser_url = get_dynamic_base_url(request=request, prefer_public=False)
-    live_base_api = f"{base_url}/api/v1"
-    wfs_out = []
-    for w in (state.get("n8n_workflows") or []):
-        if isinstance(w, dict):
-            w_copy = dict(w)
-            if isinstance(w_copy.get("workflow_json"), dict) and w_copy.get("workflow_json"):
-                w_copy["workflow_json"] = _auto_inject_credentials_into_workflow_json(w_copy["workflow_json"], live_base_api)
-            wfs_out.append(w_copy)
-    return {
-        "status": "success",
-        "base_api_url": live_base_api,
-        "browser_api_url": f"{browser_url}/api/v1",
-        "local_api_url": f"{LOCAL_DEVICE_URL}/api/v1",
-        "public_render_api_url": live_base_api,
-        "keys": state.get("keys") or [],
-        "n8n_webhook_url": state.get("n8n_webhook_url") or "",
-        "n8n_webhook_secret": state.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026",
-        "n8n_events": state.get("n8n_events") or {},
-        "n8n_workflows": wfs_out,
-        "recent_logs": state.get("recent_logs") or []
-    }
-
-
+ state = await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
+ base_url = get_dynamic_base_url(request=request, prefer_public=True)
+ browser_url = get_dynamic_base_url(request=request, prefer_public=False)
+ live_base_api = f"{base_url}/api/v1"
+ wfs_out = []
+ for w in (state.get("n8n_workflows") or []):
+  if isinstance(w, dict):
+   w_copy = dict(w)
+   if isinstance(w_copy.get("workflow_json"), dict) and w_copy.get("workflow_json"):
+    w_copy["workflow_json"] = _auto_inject_credentials_into_workflow_json(w_copy["workflow_json"], live_base_api)
+   wfs_out.append(w_copy)
+ return {
+ "status": "success",
+ "base_api_url": live_base_api,
+ "browser_api_url": f"{browser_url}/api/v1",
+ "local_api_url": f"{LOCAL_DEVICE_URL}/api/v1",
+ "public_render_api_url": live_base_api,
+ "keys": state.get("keys") or [],
+ "n8n_webhook_url": state.get("n8n_webhook_url") or "",
+ "n8n_webhook_secret": state.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026",
+ "n8n_events": state.get("n8n_events") or {},
+ "n8n_workflows": wfs_out,
+ "recent_logs": state.get("recent_logs") or []
+ }
 @router.post("/api/internal-api/keys/generate")
 async def api_generate_internal_api_key(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    def _gen_key_sync():
-        _load_internal_api_state(force_cloud=False)
-        key_name = str(body.get("name") or "n8n Automation Key").strip() or "n8n Automation Key"
-        random_token = f"gb_live_{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
-        new_key_obj = {
-            "id": f"ikey_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}",
-            "name": key_name,
-            "api_key": random_token,
-            "scopes": "all",
-            "status": "ACTIVE",
-            "requests_count": 0,
-            "last_used_at": "Never",
-            "created_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
-        }
-        return key_name, _upsert_internal_api_key_in_db(new_key_obj, sync_cloud=True)
-    key_name, saved = await run_in_threadpool(_gen_key_sync)
-    return {
-        "status": "success",
-        "message": f"Generated new Internal API Key '{key_name}'!",
-        "key": saved,
-        "keys": INTERNAL_API_STATE.get("keys") or []
-    }
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ def _gen_key_sync():
+  _load_internal_api_state(force_cloud=False)
+  key_name = str(body.get("name") or "n8n Automation Key").strip() or "n8n Automation Key"
+  random_token = f"gb_live_{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}"
+  new_key_obj = {
+  "id": f"ikey_{int(time.time() * 1000)}_{uuid.uuid4().hex[:4]}",
+  "name": key_name,
+  "api_key": random_token,
+  "scopes": "all",
+  "status": "ACTIVE",
+  "requests_count": 0,
+  "last_used_at": "Never",
+  "created_at": datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+  }
+  return key_name, _upsert_internal_api_key_in_db(new_key_obj, sync_cloud=True)
+ key_name, saved = await run_in_threadpool(_gen_key_sync)
+ return {
+ "status": "success",
+ "message": f"Generated new Internal API Key '{key_name}'!",
+ "key": saved,
+ "keys": INTERNAL_API_STATE.get("keys") or []
+ }
 @router.delete("/api/internal-api/keys/{key_id}")
 async def api_delete_internal_api_key(key_id: str):
-    return await run_in_threadpool(lambda: _delete_internal_api_key_sync(key_id))
-
-
+ return await run_in_threadpool(lambda: _delete_internal_api_key_sync(key_id))
 def _delete_internal_api_key_sync(key_id: str):
-    _load_internal_api_state(force_cloud=False)
-    clean_id = str(key_id or "").strip()
-    with INTERNAL_API_LOCK:
-        remaining = [k for k in INTERNAL_API_STATE["keys"] if str(k.get("id")) != clean_id]
-        if not remaining:
-            return JSONResponse({
-                "status": "error",
-                "message": "At least one active Internal API Key must remain available. Generate a new key first before deleting this one."
-            }, status_code=400)
-        INTERNAL_API_STATE["keys"] = remaining
-
-    try:
-        with db_engine.begin() as conn:
-            conn.execute(text("DELETE FROM glennbot_internal_api_keys WHERE id = :id"), {"id": clean_id})
-    except Exception as e:
-        print(f"[InternalAPI] Delete key warning: {e}")
-
-    threading.Thread(target=_save_internal_api_to_cloudinary, daemon=True).start()
-    return {
-        "status": "success",
-        "message": "Internal API Key revoked and removed.",
-        "keys": INTERNAL_API_STATE.get("keys") or []
-    }
-
-
+ _load_internal_api_state(force_cloud=False)
+ clean_id = str(key_id or "").strip()
+ with INTERNAL_API_LOCK:
+  remaining = [k for k in INTERNAL_API_STATE["keys"] if str(k.get("id")) != clean_id]
+  if not remaining:
+   return JSONResponse({
+   "status": "error",
+   "message": "At least one active Internal API Key must remain available. Generate a new key first before deleting this one."
+   }, status_code=400)
+  INTERNAL_API_STATE["keys"] = remaining
+ try:
+  with db_engine.begin() as conn:
+   conn.execute(text("DELETE FROM glennbot_internal_api_keys WHERE id = :id"), {"id": clean_id})
+ except Exception as e:
+  print(f"[InternalAPI] Delete key warning: {e}")
+ threading.Thread(target=_save_internal_api_to_cloudinary, daemon=True).start()
+ return {
+ "status": "success",
+ "message": "Internal API Key revoked and removed.",
+ "keys": INTERNAL_API_STATE.get("keys") or []
+ }
 @router.post("/api/internal-api/n8n-workflows/analyze")
 async def api_analyze_uploaded_n8n_workflow(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    def _do_analyze():
-        _load_internal_api_state(force_cloud=False)
-        live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
-        wf_json = body.get("workflow_json") or body
-        p_json = _auto_inject_credentials_into_workflow_json(wf_json, live_base_api)
-        return p_json, _analyze_n8n_workflow_json(p_json)
-    patched_json, analysis = await run_in_threadpool(_do_analyze)
-    return {
-        "status": "success",
-        "analysis": analysis,
-        "patched_workflow_json": patched_json
-    }
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ def _do_analyze():
+  _load_internal_api_state(force_cloud=False)
+  live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
+  wf_json = body.get("workflow_json") or body
+  p_json = _auto_inject_credentials_into_workflow_json(wf_json, live_base_api)
+  return p_json, _analyze_n8n_workflow_json(p_json)
+ patched_json, analysis = await run_in_threadpool(_do_analyze)
+ return {
+ "status": "success",
+ "analysis": analysis,
+ "patched_workflow_json": patched_json
+ }
 def _build_dynamic_glennbot_n8n_system_specification(live_base_api: str) -> str:
-    """
+ """
     Dynamically introspects the entire live GlennBot FastAPI application (`app.routes`), Pydantic schemas,
     all 10 UI Views/Tabs, all 14 Modals & their internal DOM IDs/controls, all 5 User Settings,
     connected social/email accounts, Google Drive Files Vault (`file_...`), Spreadsheets (`.xlsx` + column headers),
@@ -1164,193 +1065,179 @@ def _build_dynamic_glennbot_n8n_system_specification(live_base_api: str) -> str:
     Whenever `main.py` or `index.html` is revised, this function automatically feeds the complete live
     architecture to Gemini 3.5 Flash so it generates 100% accurate n8n Workflow `.json` files!
     """
-    import inspect
-
-    clean_base = str(live_base_api or f"{get_dynamic_base_url(prefer_public=True)}/api/v1").rstrip("/")
-    active_api_key = _get_active_internal_api_key_token()
-    global_wh_secret = str(INTERNAL_API_STATE.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026").strip()
-
-    # 1. Live FastAPI Routes Introspection (All /api/v1/* and /api/* routes with signatures & docstrings)
-    v1_routes_summary: List[str] = []
-    other_api_routes_summary: List[str] = []
+ import inspect
+ clean_base = str(live_base_api or f"{get_dynamic_base_url(prefer_public=True)}/api/v1").rstrip("/")
+ active_api_key = _get_active_internal_api_key_token()
+ global_wh_secret = str(INTERNAL_API_STATE.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026").strip()
+ # 1. Live FastAPI Routes Introspection (All /api/v1/* and /api/* routes with signatures & docstrings)
+ v1_routes_summary: List[str] = []
+ other_api_routes_summary: List[str] = []
+ try:
+  for route in getattr(getattr(sys.modules.get("main"), "app", router), "routes", router.routes):
+   path_val = str(getattr(route, "path", "") or "")
+   methods_val = sorted(list((getattr(route, "methods", set()) or set()) - {"HEAD", "OPTIONS"}))
+   if not path_val or not methods_val:
+    continue
+   endpoint_fn = getattr(route, "endpoint", None)
+   doc_str = ""
+   sig_str = ""
+   if endpoint_fn:
+    raw_doc = (getattr(endpoint_fn, "__doc__", "") or "").strip()
+    if raw_doc:
+     doc_str = " | ".join(line.strip() for line in raw_doc.splitlines() if line.strip())[:360]
     try:
-        for route in getattr(getattr(sys.modules.get("main"), "app", router), "routes", router.routes):
-            path_val = str(getattr(route, "path", "") or "")
-            methods_val = sorted(list((getattr(route, "methods", set()) or set()) - {"HEAD", "OPTIONS"}))
-            if not path_val or not methods_val:
-                continue
-            endpoint_fn = getattr(route, "endpoint", None)
-            doc_str = ""
-            sig_str = ""
-            if endpoint_fn:
-                raw_doc = (getattr(endpoint_fn, "__doc__", "") or "").strip()
-                if raw_doc:
-                    doc_str = " | ".join(line.strip() for line in raw_doc.splitlines() if line.strip())[:360]
-                try:
-                    sig_obj = inspect.signature(endpoint_fn)
-                    params = [
-                        p_name for p_name in sig_obj.parameters.keys()
-                        if p_name not in ("request", "self", "self_inner")
-                    ]
-                    if params:
-                        sig_str = f" [params: {', '.join(params)}]"
-                except Exception:
-                    pass
-            m_str = "/".join(methods_val)
-            line_desc = f"- {m_str} {path_val}{sig_str}" + (f" -> {doc_str}" if doc_str else "")
-            if path_val.startswith("/api/v1/"):
-                v1_routes_summary.append(line_desc)
-            elif path_val.startswith("/api/"):
-                other_api_routes_summary.append(line_desc)
+     sig_obj = inspect.signature(endpoint_fn)
+     params = [
+     p_name for p_name in sig_obj.parameters.keys()
+     if p_name not in ("request", "self", "self_inner")
+     ]
+     if params:
+      sig_str = f" [params: {', '.join(params)}]"
     except Exception:
-        pass
-
-    # 2. Live Pydantic Payload Models Introspection
-    pydantic_models_summary: List[str] = []
-    try:
-        for g_name, g_obj in list(globals().items()):
-            if isinstance(g_obj, type) and issubclass(g_obj, BaseModel) and g_obj is not BaseModel:
-                fields_map = getattr(g_obj, "model_fields", None) or getattr(g_obj, "__fields__", None) or {}
-                if fields_map:
-                    f_names = list(fields_map.keys())
-                    pydantic_models_summary.append(f"- {g_name}: {{{', '.join(f_names)}}}")
-    except Exception:
-        pass
-
-    # 3. Live Connected Social Accounts (All platforms: Facebook, Instagram, TikTok, YouTube, WhatsApp, Telegram)
-    social_summary: List[str] = []
-    try:
-        for s in (refresh_connected_accounts_cache(force=False) or [])[:30]:
-            social_summary.append(
-                f"- platform='{s.get('platform')}', account_id='{s.get('account_id')}', account_name='{s.get('account_name') or s.get('username')}', username='{s.get('username') or ''}'"
-            )
-    except Exception:
-        pass
-
-    # 4. Live Connected Email Accounts (Gmail, Microsoft/Outlook, IMAP/SMTP)
-    email_summary: List[str] = []
-    try:
-        _load_email_hub_state(force_cloud=False)
-        for e in (EMAIL_HUB_STATE.get("accounts") or [])[:20]:
-            email_summary.append(
-                f"- account_id='{e.get('id')}', email_address='{e.get('email_address')}', display_name='{e.get('display_name') or ''}', provider='{e.get('provider')}'"
-            )
-    except Exception:
-        pass
-
-    # 5. Live Uploaded Google Drive "Files" Vault Items (`file_...`)
-    vault_files_summary: List[str] = []
-    try:
-        v_store = _load_files_vault_store(force_cloud=False)
-        for vf in (v_store.get("files") or [])[:30]:
-            vault_files_summary.append(
-                f"- file_id='{vf.get('file_id')}', filename='{vf.get('filename')}', content_type='{vf.get('content_type')}', size='{vf.get('size_formatted') or ''}', notes='{vf.get('notes') or ''}'"
-            )
-    except Exception:
-        pass
-
-    # 6. Live Saved & Google Drive Synced Spreadsheets (`.xlsx` / `.xls`) with File ID, Sheet Names, Row 1 Headers & Actual Cell Values (`A1`, `B2`...)
-    spreadsheets_summary: List[str] = []
-    try:
-        _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=False)
-        sp_store = _load_spreadsheets_store(force_cloud=False)
-        for wb in (sp_store.get("workbooks") or [])[:15]:
-            sh_details = []
-            for sh in (wb.get("sheets") or []):
-                hdrs, next_r = _extract_sheet_headers_and_next_row(sh)
-                raw_cells = sh.get("cells") or {}
-                sample_cells = {k: raw_cells[k] for k in list(raw_cells.keys())[:60]}
-                sh_details.append(
-                    f"{sh.get('name', 'Sheet1')}(headers={hdrs}, next_row={next_r}, cells={sample_cells})"
-                )
-            spreadsheets_summary.append(
-                f"- workbook_id='{wb.get('workbook_id')}', file_id='{wb.get('file_id') or ''}', gdrive_file_id='{wb.get('gdrive_file_id') or ''}', title='{wb.get('title')}', sheets=[{', '.join(sh_details)}]"
-            )
-    except Exception:
-        pass
-
-    # 7. Live Presets, Recent Posts, Recent Comments, CRM Summary, and Saved n8n Workflows
-    presets_summary: List[str] = []
-    try:
-        p_res = get_presets()
-        for pr in (p_res.get("presets") or [])[:10]:
-            presets_summary.append(f"- preset_id='{pr.get('id')}', name='{pr.get('name')}', platforms={pr.get('platforms')}")
-    except Exception:
-        pass
-
-    recent_posts_summary: List[str] = []
-    try:
-        with db_engine.connect() as conn:
-            rows = conn.execute(text("""
+     pass
+   m_str = "/".join(methods_val)
+   line_desc = f"- {m_str} {path_val}{sig_str}" + (f" -> {doc_str}" if doc_str else "")
+   if path_val.startswith("/api/v1/"):
+    v1_routes_summary.append(line_desc)
+   elif path_val.startswith("/api/"):
+    other_api_routes_summary.append(line_desc)
+ except Exception:
+  pass
+ # 2. Live Pydantic Payload Models Introspection
+ pydantic_models_summary: List[str] = []
+ try:
+  for g_name, g_obj in list(globals().items()):
+   if isinstance(g_obj, type) and issubclass(g_obj, BaseModel) and g_obj is not BaseModel:
+    fields_map = getattr(g_obj, "model_fields", None) or getattr(g_obj, "__fields__", None) or {}
+    if fields_map:
+     f_names = list(fields_map.keys())
+     pydantic_models_summary.append(f"- {g_name}: {{{', '.join(f_names)}}}")
+ except Exception:
+  pass
+ # 3. Live Connected Social Accounts (All platforms: Facebook, Instagram, TikTok, YouTube, WhatsApp, Telegram)
+ social_summary: List[str] = []
+ try:
+  for s in (refresh_connected_accounts_cache(force=False) or [])[:30]:
+   social_summary.append(
+   f"- platform='{s.get('platform')}', account_id='{s.get('account_id')}', account_name='{s.get('account_name') or s.get('username')}', username='{s.get('username') or ''}'"
+   )
+ except Exception:
+  pass
+ # 4. Live Connected Email Accounts (Gmail, Microsoft/Outlook, IMAP/SMTP)
+ email_summary: List[str] = []
+ try:
+  _load_email_hub_state(force_cloud=False)
+  for e in (EMAIL_HUB_STATE.get("accounts") or [])[:20]:
+   email_summary.append(
+   f"- account_id='{e.get('id')}', email_address='{e.get('email_address')}', display_name='{e.get('display_name') or ''}', provider='{e.get('provider')}'"
+   )
+ except Exception:
+  pass
+ # 5. Live Uploaded Google Drive "Files" Vault Items (`file_...`)
+ vault_files_summary: List[str] = []
+ try:
+  v_store = _load_files_vault_store(force_cloud=False)
+  for vf in (v_store.get("files") or [])[:30]:
+   vault_files_summary.append(
+   f"- file_id='{vf.get('file_id')}', filename='{vf.get('filename')}', content_type='{vf.get('content_type')}', size='{vf.get('size_formatted') or ''}', notes='{vf.get('notes') or ''}'"
+   )
+ except Exception:
+  pass
+ # 6. Live Saved & Google Drive Synced Spreadsheets (`.xlsx` / `.xls`) with File ID, Sheet Names, Row 1 Headers & Actual Cell Values (`A1`, `B2`...)
+ spreadsheets_summary: List[str] = []
+ try:
+  _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=False)
+  sp_store = _load_spreadsheets_store(force_cloud=False)
+  for wb in (sp_store.get("workbooks") or [])[:15]:
+   sh_details = []
+   for sh in (wb.get("sheets") or []):
+    hdrs, next_r = _extract_sheet_headers_and_next_row(sh)
+    raw_cells = sh.get("cells") or {}
+    sample_cells = {k: raw_cells[k] for k in list(raw_cells.keys())[:60]}
+    sh_details.append(
+    f"{sh.get('name', 'Sheet1')}(headers={hdrs}, next_row={next_r}, cells={sample_cells})"
+    )
+   spreadsheets_summary.append(
+   f"- workbook_id='{wb.get('workbook_id')}', file_id='{wb.get('file_id') or ''}', gdrive_file_id='{wb.get('gdrive_file_id') or ''}', title='{wb.get('title')}', sheets=[{', '.join(sh_details)}]"
+   )
+ except Exception:
+  pass
+ # 7. Live Presets, Recent Posts, Recent Comments, CRM Summary, and Saved n8n Workflows
+ presets_summary: List[str] = []
+ try:
+  p_res = get_presets()
+  for pr in (p_res.get("presets") or [])[:10]:
+   presets_summary.append(f"- preset_id='{pr.get('id')}', name='{pr.get('name')}', platforms={pr.get('platforms')}")
+ except Exception:
+  pass
+ recent_posts_summary: List[str] = []
+ try:
+  with db_engine.connect() as conn:
+   rows = conn.execute(text("""
                 SELECT id, platform, page_id, account_name, post_type, caption, status
                 FROM glennbot_scheduled_posts
                 ORDER BY scheduled_time DESC
                 LIMIT 10
             """)).mappings().all()
-            for r in rows:
-                cap_short = str(r.get("caption") or "").replace("\n", " ")[:60]
-                recent_posts_summary.append(
-                    f"- record_id='{r.get('id')}', platform='{r.get('platform')}', account_name='{r.get('account_name')}', type='{r.get('post_type')}', status='{r.get('status')}', caption='{cap_short}'"
-                )
-    except Exception:
-        pass
-
-    recent_comments_summary: List[str] = []
-    try:
-        posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
-        for r_id, p_entry in list(posts_store.items())[:8]:
-            for c_id, c_obj in list((p_entry.get("comments") or {}).items())[:3]:
-                if isinstance(c_obj, dict):
-                    recent_comments_summary.append(
-                        f"- comment_id='{c_id}', record_id='{r_id}', platform='{c_obj.get('platform')}', account_name='{c_obj.get('account_name')}', author='{c_obj.get('author_name')}', message='{str(c_obj.get('message') or '')[:50]}', replies_count={len(c_obj.get('replies') or [])}"
-                    )
-                if len(recent_comments_summary) >= 10:
-                    break
-            if len(recent_comments_summary) >= 10:
-                break
-    except Exception:
-        pass
-
-    crm_summary_str = "0 contacts"
-    try:
-        crm_list = _load_crm_contacts_state(force_cloud=False) or []
-        crm_cats = sorted(list({str(c.get("category") or "General") for c in crm_list if isinstance(c, dict)}))
-        crm_summary_str = f"{len(crm_list)} contacts (active categories: {crm_cats or ['Hot Lead', 'Client / Customer', 'Inquiry', 'VIP', 'Partner', 'Follow-Up', 'General']})"
-    except Exception:
-        pass
-
-    saved_workflows_summary: List[str] = []
-    try:
-        for w in (INTERNAL_API_STATE.get("n8n_workflows") or [])[:10]:
-            if isinstance(w, dict):
-                saved_workflows_summary.append(
-                    f"- workflow_id='{w.get('id')}', name='{w.get('name')}', webhook_path='{w.get('webhook_path')}', enabled={w.get('enabled')}, events={w.get('events')}"
-                )
-    except Exception:
-        pass
-
-    calendar_accounts_summary: List[str] = []
-    calendar_events_summary: List[str] = []
-    try:
-        _load_calendar_hub_state()
-        for ca in (CALENDAR_HUB_STATE.get("accounts") or [])[:15]:
-            if isinstance(ca, dict):
-                calendar_accounts_summary.append(
-                    f"- account_id='{ca.get('id')}', provider='{ca.get('provider')}', email_address='{ca.get('email_address')}', display_name='{ca.get('display_name') or ''}'"
-                )
-        for cev in (CALENDAR_HUB_STATE.get("events") or [])[:15]:
-            if isinstance(cev, dict):
-                att_str = ", ".join(
-                    str(a.get("email") if isinstance(a, dict) else a or "")
-                    for a in (cev.get("attendees") or [])
-                )
-                calendar_events_summary.append(
-                    f"- event_id='{cev.get('id')}', external_event_id='{cev.get('external_event_id') or ''}', subject='{cev.get('subject')}', date='{cev.get('date_str') or cev.get('display_date')}', time='{cev.get('time_range_str') or cev.get('time_str')}', provider='{cev.get('provider')}', meeting_platform='{cev.get('meeting_platform')}', organizer='{cev.get('organizer_email')}', attendees=['{att_str}']"
-                )
-    except Exception:
-        pass
-
-    spec_text = f"""=== GLENNBOT AUTOMATIONS: COMPLETE SYSTEM, UI MODAL, ID & API SPECIFICATION ===
+   for r in rows:
+    cap_short = str(r.get("caption") or "").replace("\n", " ")[:60]
+    recent_posts_summary.append(
+    f"- record_id='{r.get('id')}', platform='{r.get('platform')}', account_name='{r.get('account_name')}', type='{r.get('post_type')}', status='{r.get('status')}', caption='{cap_short}'"
+    )
+ except Exception:
+  pass
+ recent_comments_summary: List[str] = []
+ try:
+  posts_store = CLOUDINARY_COMMENTS_STORE.get("posts") or {}
+  for r_id, p_entry in list(posts_store.items())[:8]:
+   for c_id, c_obj in list((p_entry.get("comments") or {}).items())[:3]:
+    if isinstance(c_obj, dict):
+     recent_comments_summary.append(
+     f"- comment_id='{c_id}', record_id='{r_id}', platform='{c_obj.get('platform')}', account_name='{c_obj.get('account_name')}', author='{c_obj.get('author_name')}', message='{str(c_obj.get('message') or '')[:50]}', replies_count={len(c_obj.get('replies') or [])}"
+     )
+    if len(recent_comments_summary) >= 10:
+     break
+   if len(recent_comments_summary) >= 10:
+    break
+ except Exception:
+  pass
+ crm_summary_str = "0 contacts"
+ try:
+  crm_list = _load_crm_contacts_state(force_cloud=False) or []
+  crm_cats = sorted(list({str(c.get("category") or "General") for c in crm_list if isinstance(c, dict)}))
+  crm_summary_str = f"{len(crm_list)} contacts (active categories: {crm_cats or ['Hot Lead', 'Client / Customer', 'Inquiry', 'VIP', 'Partner', 'Follow-Up', 'General']})"
+ except Exception:
+  pass
+ saved_workflows_summary: List[str] = []
+ try:
+  for w in (INTERNAL_API_STATE.get("n8n_workflows") or [])[:10]:
+   if isinstance(w, dict):
+    saved_workflows_summary.append(
+    f"- workflow_id='{w.get('id')}', name='{w.get('name')}', webhook_path='{w.get('webhook_path')}', enabled={w.get('enabled')}, events={w.get('events')}"
+    )
+ except Exception:
+  pass
+ calendar_accounts_summary: List[str] = []
+ calendar_events_summary: List[str] = []
+ try:
+  _load_calendar_hub_state()
+  for ca in (CALENDAR_HUB_STATE.get("accounts") or [])[:15]:
+   if isinstance(ca, dict):
+    calendar_accounts_summary.append(
+    f"- account_id='{ca.get('id')}', provider='{ca.get('provider')}', email_address='{ca.get('email_address')}', display_name='{ca.get('display_name') or ''}'"
+    )
+  for cev in (CALENDAR_HUB_STATE.get("events") or [])[:15]:
+   if isinstance(cev, dict):
+    att_str = ", ".join(
+    str(a.get("email") if isinstance(a, dict) else a or "")
+    for a in (cev.get("attendees") or [])
+    )
+    calendar_events_summary.append(
+    f"- event_id='{cev.get('id')}', external_event_id='{cev.get('external_event_id') or ''}', subject='{cev.get('subject')}', date='{cev.get('date_str') or cev.get('display_date')}', time='{cev.get('time_range_str') or cev.get('time_str')}', provider='{cev.get('provider')}', meeting_platform='{cev.get('meeting_platform')}', organizer='{cev.get('organizer_email')}', attendees=['{att_str}']"
+    )
+ except Exception:
+  pass
+ spec_text = f"""=== GLENNBOT AUTOMATIONS: COMPLETE SYSTEM, UI MODAL, ID & API SPECIFICATION ===
 
 1. LIVE GLENNBOT INTERNAL API v1 & SERVER CONFIGURATION:
    - Active Base API URL (Auto-detected Local / Ngrok / Render): {clean_base}
@@ -1812,237 +1699,210 @@ def _build_dynamic_glennbot_n8n_system_specification(live_base_api: str) -> str:
    - Currently Saved n8n Workflows in GlennBot:
 {chr(10).join(saved_workflows_summary) if saved_workflows_summary else '     (None saved yet)'}
 """
-    return spec_text
-
-
+ return spec_text
 def _prepare_ask_ai_n8n_attachment_parts(raw_attachments: list) -> tuple:
-    """
+ """
     Processes user-attached files from the Ask AI n8n Workflow modal into:
     1) Gemini multimodal `inlineData` parts (images, PDFs, audio, video)
     2) Extracted readable text sections (for .docx, .xlsx/.xls, .json, .csv, .txt, .md, code files, etc.)
     Returns (inline_parts, extracted_text_sections, attachment_names).
     """
-    import zipfile
-    import xml.etree.ElementTree as ET
-
-    inline_parts = []
-    extracted_text_sections = []
-    attachment_names = []
-
-    if not isinstance(raw_attachments, list):
-        return inline_parts, extracted_text_sections, attachment_names
-
-    supported_inline_prefixes = ("image/", "audio/", "video/")
-    supported_inline_exact = {
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "image/jpg",
-        "image/webp",
-        "image/heic",
-        "image/heif",
-        "image/gif",
-    }
-
-    for idx, item in enumerate(raw_attachments[:8], start=1):
-        if not isinstance(item, dict):
-            continue
-        fname = str(item.get("name") or f"attachment_{idx}").strip()
-        mime_type = str(item.get("mime_type") or "").strip().lower()
-        b64_str = str(item.get("data_base64") or "").strip()
-        text_content = str(item.get("text_content") or "").strip()
-
-        if "," in b64_str and b64_str.startswith("data:"):
-            b64_str = b64_str.split(",", 1)[1].strip()
-
-        if not mime_type or mime_type == "application/octet-stream":
-            guessed, _ = mimetypes.guess_type(fname)
-            if guessed:
-                mime_type = guessed.lower()
-
-        lower_name = fname.lower()
-        attachment_names.append(fname)
-
-        raw_bytes = b""
-        if b64_str:
-            try:
-                raw_bytes = base64.b64decode(b64_str)
-            except Exception:
-                raw_bytes = b""
-
-        # 1. Native multimodal inlineData for images, PDFs, audio, video
-        if b64_str and (
-            mime_type in supported_inline_exact
-            or any(mime_type.startswith(pref) for pref in supported_inline_prefixes)
-            or lower_name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".pdf"))
-        ):
-            effective_mime = mime_type
-            if lower_name.endswith(".pdf"):
-                effective_mime = "application/pdf"
-            elif lower_name.endswith((".jpg", ".jpeg")):
-                effective_mime = "image/jpeg"
-            elif lower_name.endswith(".png"):
-                effective_mime = "image/png"
-            elif lower_name.endswith(".webp"):
-                effective_mime = "image/webp"
-            elif lower_name.endswith(".gif"):
-                effective_mime = "image/gif"
-            inline_parts.append({
-                "inlineData": {
-                    "mimeType": effective_mime or "image/png",
-                    "data": b64_str
-                }
-            })
-            extracted_text_sections.append(
-                f"[Attached File #{idx}: '{fname}' ({effective_mime}) — Included as multimodal visual/document input for Gemini 3.5 Flash to inspect directly.]"
-            )
-            continue
-
-        # 2. Word (.docx) extraction in-memory
-        if raw_bytes and lower_name.endswith(".docx"):
-            try:
-                with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-                    if "word/document.xml" in zf.namelist():
-                        xml_bytes = zf.read("word/document.xml")
-                        root = ET.fromstring(xml_bytes)
-                        paragraphs = []
-                        for elem in root.iter():
-                            if elem.tag.endswith("}t") and elem.text:
-                                paragraphs.append(elem.text)
-                            elif elem.tag.endswith("}p"):
-                                paragraphs.append("\n")
-                        docx_text = "".join(paragraphs).strip()
-                        if docx_text:
-                            extracted_text_sections.append(
-                                f"--- ATTACHED WORD DOCUMENT #{idx}: {fname} ---\n{docx_text[:60000]}"
-                            )
-                            continue
-            except Exception:
-                pass
-
-        # 3. Excel (.xlsx / .xls) extraction in-memory
-        if raw_bytes and lower_name.endswith((".xlsx", ".xls")):
-            try:
-                wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), data_only=True)
-                sheet_dumps = []
-                for sheet_name in wb.sheetnames[:6]:
-                    ws = wb[sheet_name]
-                    rows_out = []
-                    for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
-                        if r_idx >= 150:
-                            break
-                        vals = [str(cell).strip() if cell is not None else "" for cell in row]
-                        if any(vals):
-                            rows_out.append(" | ".join(vals))
-                    if rows_out:
-                        sheet_dumps.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows_out))
-                if sheet_dumps:
-                    extracted_text_sections.append(
-                        f"--- ATTACHED EXCEL SPREADSHEET #{idx}: {fname} ---\n" + "\n\n".join(sheet_dumps)[:60000]
-                    )
-                    continue
-            except Exception:
-                pass
-
-        # 4. Text / JSON / CSV / Markdown / Code / XML / YAML
-        if not text_content and raw_bytes:
-            try:
-                text_content = raw_bytes.decode("utf-8", errors="replace").strip()
-            except Exception:
-                text_content = ""
-
-        if text_content:
-            extracted_text_sections.append(
-                f"--- ATTACHED FILE #{idx}: {fname} ({mime_type or 'text'}) ---\n{text_content[:60000]}"
-            )
-        elif b64_str:
-            # Fallback: pass as text/plain inline or note
-            extracted_text_sections.append(
-                f"[Attached File #{idx}: '{fname}' ({mime_type or 'binary'})]"
-            )
-
-    return inline_parts, extracted_text_sections, attachment_names
-
-
+ import zipfile
+ import xml.etree.ElementTree as ET
+ inline_parts = []
+ extracted_text_sections = []
+ attachment_names = []
+ if not isinstance(raw_attachments, list):
+  return inline_parts, extracted_text_sections, attachment_names
+ supported_inline_prefixes = ("image/", "audio/", "video/")
+ supported_inline_exact = {
+ "application/pdf",
+ "image/png",
+ "image/jpeg",
+ "image/jpg",
+ "image/webp",
+ "image/heic",
+ "image/heif",
+ "image/gif",
+ }
+ for idx, item in enumerate(raw_attachments[:8], start=1):
+  if not isinstance(item, dict):
+   continue
+  fname = str(item.get("name") or f"attachment_{idx}").strip()
+  mime_type = str(item.get("mime_type") or "").strip().lower()
+  b64_str = str(item.get("data_base64") or "").strip()
+  text_content = str(item.get("text_content") or "").strip()
+  if "," in b64_str and b64_str.startswith("data:"):
+   b64_str = b64_str.split(",", 1)[1].strip()
+  if not mime_type or mime_type == "application/octet-stream":
+   guessed, _ = mimetypes.guess_type(fname)
+   if guessed:
+    mime_type = guessed.lower()
+  lower_name = fname.lower()
+  attachment_names.append(fname)
+  raw_bytes = b""
+  if b64_str:
+   try:
+    raw_bytes = base64.b64decode(b64_str)
+   except Exception:
+    raw_bytes = b""
+  # 1. Native multimodal inlineData for images, PDFs, audio, video
+  if b64_str and (
+  mime_type in supported_inline_exact
+  or any(mime_type.startswith(pref) for pref in supported_inline_prefixes)
+  or lower_name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".pdf"))
+  ):
+   effective_mime = mime_type
+   if lower_name.endswith(".pdf"):
+    effective_mime = "application/pdf"
+   elif lower_name.endswith((".jpg", ".jpeg")):
+    effective_mime = "image/jpeg"
+   elif lower_name.endswith(".png"):
+    effective_mime = "image/png"
+   elif lower_name.endswith(".webp"):
+    effective_mime = "image/webp"
+   elif lower_name.endswith(".gif"):
+    effective_mime = "image/gif"
+   inline_parts.append({
+   "inlineData": {
+   "mimeType": effective_mime or "image/png",
+   "data": b64_str
+   }
+   })
+   extracted_text_sections.append(
+   f"[Attached File #{idx}: '{fname}' ({effective_mime}) — Included as multimodal visual/document input for Gemini 3.5 Flash to inspect directly.]"
+   )
+   continue
+  # 2. Word (.docx) extraction in-memory
+  if raw_bytes and lower_name.endswith(".docx"):
+   try:
+    with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+     if "word/document.xml" in zf.namelist():
+      xml_bytes = zf.read("word/document.xml")
+      root = ET.fromstring(xml_bytes)
+      paragraphs = []
+      for elem in root.iter():
+       if elem.tag.endswith("}t") and elem.text:
+        paragraphs.append(elem.text)
+       elif elem.tag.endswith("}p"):
+        paragraphs.append("\n")
+      docx_text = "".join(paragraphs).strip()
+      if docx_text:
+       extracted_text_sections.append(
+       f"--- ATTACHED WORD DOCUMENT #{idx}: {fname} ---\n{docx_text[:60000]}"
+       )
+       continue
+   except Exception:
+    pass
+  # 3. Excel (.xlsx / .xls) extraction in-memory
+  if raw_bytes and lower_name.endswith((".xlsx", ".xls")):
+   try:
+    wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), data_only=True)
+    sheet_dumps = []
+    for sheet_name in wb.sheetnames[:6]:
+     ws = wb[sheet_name]
+     rows_out = []
+     for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+      if r_idx >= 150:
+       break
+      vals = [str(cell).strip() if cell is not None else "" for cell in row]
+      if any(vals):
+       rows_out.append(" | ".join(vals))
+     if rows_out:
+      sheet_dumps.append(f"[Sheet: {sheet_name}]\n" + "\n".join(rows_out))
+    if sheet_dumps:
+     extracted_text_sections.append(
+     f"--- ATTACHED EXCEL SPREADSHEET #{idx}: {fname} ---\n" + "\n\n".join(sheet_dumps)[:60000]
+     )
+     continue
+   except Exception:
+    pass
+  # 4. Text / JSON / CSV / Markdown / Code / XML / YAML
+  if not text_content and raw_bytes:
+   try:
+    text_content = raw_bytes.decode("utf-8", errors="replace").strip()
+   except Exception:
+    text_content = ""
+  if text_content:
+   extracted_text_sections.append(
+   f"--- ATTACHED FILE #{idx}: {fname} ({mime_type or 'text'}) ---\n{text_content[:60000]}"
+   )
+  elif b64_str:
+   # Fallback: pass as text/plain inline or note
+   extracted_text_sections.append(
+   f"[Attached File #{idx}: '{fname}' ({mime_type or 'binary'})]"
+   )
+ return inline_parts, extracted_text_sections, attachment_names
 @router.post("/api/internal-api/n8n-workflows/ask-ai")
 async def api_ask_ai_generate_n8n_workflow(request: Request):
-    """
+ """
     Uses Gemini 3.5 Flash (`GEMINI_API_KEY` from `.env`, strictly never exposed to GUI) + live runtime
     introspection of `main.py` and `index.html` to generate a complete, importable n8n Workflow `.json` file
     from the user's prompt and/or any attached files (images, screenshots, flowcharts, PDFs, DOCX, XLSX, JSON, TXT, CSV, etc.).
     Automatically injects the user's active `X-API-Key` and live `/api/v1/*` URLs and analyzes triggers/conditions.
     """
-    _load_internal_api_state(force_cloud=False)
-    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if not api_key:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": "GEMINI_API_KEY is not configured in .env. Please check your .env file."
-            }
-        )
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    user_prompt = str(body.get("prompt") or body.get("topic") or "").strip()
-    raw_attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
-    inline_parts, extracted_text_sections, attachment_names = _prepare_ask_ai_n8n_attachment_parts(raw_attachments)
-
-    if not user_prompt and not inline_parts and not extracted_text_sections:
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "Paki-describe muna o mag-attach ng file/image kung anong n8n workflow automation ang gusto mong ipagawa kay Gemini!"}
-        )
-
-    live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
-    active_internal_key = _get_active_internal_api_key_token()
-    preferred_model = (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip() or "gemini-3.5-flash"
-    candidate_models = [preferred_model]
-    for fallback in [
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-flash-latest",
-    ]:
-        if fallback not in candidate_models:
-            candidate_models.append(fallback)
-
-    try:
-        live_spec = _build_dynamic_glennbot_n8n_system_specification(live_base_api)
-    except Exception as spec_err:
-        print(f"⚠️ Warning building live n8n system specification: {spec_err}")
-        live_spec = f"Active GlennBot Base API URL: {live_base_api} | Active X-API-Key: {active_internal_key}"
-
-    system_instruction = (
-        "You are GlennBot Master n8n Workflow Architect AI (powered by Gemini 3.5 Flash). "
-        "You have complete, line-by-line mastery of the entire GlennBot Automations Python backend (main.py), "
-        "every frontend modal, tab, setting, DOM ID, database table, Cloudinary store, Google Drive Files Vault, "
-        "Spreadsheet (.xlsx) engine, Unified Inbox, Email Hub, CRM Contacts, and n8n JSON schema. "
-        "Given the user's automation request and/or any attached files (flowcharts, diagrams, UI screenshots, PDFs, "
-        "Word docs, Excel spreadsheets, text specs, or JSON files), you must carefully inspect every detail and "
-        "generate a 100% valid, production-ready n8n Workflow JSON object (`workflow_json`) with zero missing steps."
-    )
-
-    effective_user_request = user_prompt if user_prompt else (
-        "Please carefully read and interpret the attached file(s)/image(s) to understand the automation workflow requested, "
-        "and build the complete GlennBot-compatible n8n Workflow .json for it."
-    )
-
-    attachments_context_block = ""
-    if extracted_text_sections:
-        attachments_context_block = (
-            "\n\n=== USER ATTACHED FILES / DOCUMENTS / VISUALS FOR INTERPRETATION ===\n"
-            + "\n\n".join(extracted_text_sections)
-            + "\n"
-        )
-
-    full_prompt = f"""{live_spec}
+ _load_internal_api_state(force_cloud=False)
+ api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+ if not api_key:
+  return JSONResponse(
+  status_code=400,
+  content={
+  "status": "error",
+  "message": "GEMINI_API_KEY is not configured in .env. Please check your .env file."
+  }
+  )
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ user_prompt = str(body.get("prompt") or body.get("topic") or "").strip()
+ raw_attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+ inline_parts, extracted_text_sections, attachment_names = _prepare_ask_ai_n8n_attachment_parts(raw_attachments)
+ if not user_prompt and not inline_parts and not extracted_text_sections:
+  return JSONResponse(
+  status_code=400,
+  content={"status": "error", "message": "Paki-describe muna o mag-attach ng file/image kung anong n8n workflow automation ang gusto mong ipagawa kay Gemini!"}
+  )
+ live_base_api = f"{get_dynamic_base_url(request=request, prefer_public=True)}/api/v1"
+ active_internal_key = _get_active_internal_api_key_token()
+ preferred_model = (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+ candidate_models = [preferred_model]
+ for fallback in [
+ "gemini-3.5-flash-lite",
+ "gemini-3.1-flash-lite",
+ "gemini-3-flash-preview",
+ "gemini-2.5-flash",
+ "gemini-2.0-flash",
+ "gemini-flash-latest",
+ ]:
+  if fallback not in candidate_models:
+   candidate_models.append(fallback)
+ try:
+  live_spec = _build_dynamic_glennbot_n8n_system_specification(live_base_api)
+ except Exception as spec_err:
+  print(f"⚠️ Warning building live n8n system specification: {spec_err}")
+  live_spec = f"Active GlennBot Base API URL: {live_base_api} | Active X-API-Key: {active_internal_key}"
+ system_instruction = (
+ "You are GlennBot Master n8n Workflow Architect AI (powered by Gemini 3.5 Flash). "
+ "You have complete, line-by-line mastery of the entire GlennBot Automations Python backend (main.py), "
+ "every frontend modal, tab, setting, DOM ID, database table, Cloudinary store, Google Drive Files Vault, "
+ "Spreadsheet (.xlsx) engine, Unified Inbox, Email Hub, CRM Contacts, and n8n JSON schema. "
+ "Given the user's automation request and/or any attached files (flowcharts, diagrams, UI screenshots, PDFs, "
+ "Word docs, Excel spreadsheets, text specs, or JSON files), you must carefully inspect every detail and "
+ "generate a 100% valid, production-ready n8n Workflow JSON object (`workflow_json`) with zero missing steps."
+ )
+ effective_user_request = user_prompt if user_prompt else (
+ "Please carefully read and interpret the attached file(s)/image(s) to understand the automation workflow requested, "
+ "and build the complete GlennBot-compatible n8n Workflow .json for it."
+ )
+ attachments_context_block = ""
+ if extracted_text_sections:
+  attachments_context_block = (
+  "\n\n=== USER ATTACHED FILES / DOCUMENTS / VISUALS FOR INTERPRETATION ===\n"
+  + "\n\n".join(extracted_text_sections)
+  + "\n"
+  )
+ full_prompt = f"""{live_spec}
 
 === USER'S N8N AUTOMATION REQUEST ===
 "{effective_user_request}"{attachments_context_block}
@@ -2138,259 +1998,220 @@ async def api_ask_ai_generate_n8n_workflow(request: Request):
   }}
 }}
 """
-
-    request_parts = list(inline_parts) + [{"text": f"{system_instruction}\n\n{full_prompt}"}]
-
-    last_err = ""
-    for current_model in candidate_models:
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{"parts": request_parts}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 8192,
-                "responseMimeType": "application/json"
-            }
-        }
-
-        for attempt in range(1, 3):
-            try:
-                resp = await run_in_threadpool(lambda: requests.post(gemini_url, json=payload, timeout=65))
-                if resp.status_code == 200:
-                    res_data = resp.json()
-                    candidates = res_data.get("candidates", [])
-                    if not candidates:
-                        last_err = f"No response returned from Gemini ({current_model})."
-                        break
-
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    raw_text = "".join(part.get("text", "") for part in parts).strip()
-
-                    if raw_text.startswith("```"):
-                        lines = raw_text.splitlines()
-                        if lines and lines[0].startswith("```"):
-                            lines = lines[1:]
-                        if lines and lines[-1].startswith("```"):
-                            lines = lines[:-1]
-                        raw_text = "\n".join(lines).strip()
-
-                    parsed = None
-                    try:
-                        parsed = json.loads(raw_text)
-                    except Exception:
-                        m = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                        if m:
-                            try:
-                                parsed = json.loads(m.group(0))
-                            except Exception:
-                                pass
-
-                    if not isinstance(parsed, dict):
-                        last_err = f"Gemini ({current_model}) returned an invalid JSON format."
-                        break
-
-                    # Extract workflow_json whether nested under "workflow_json" or returned directly as an n8n workflow object
-                    wf_json_obj = parsed.get("workflow_json") if isinstance(parsed.get("workflow_json"), dict) else None
-                    if not wf_json_obj and isinstance(parsed.get("nodes"), list):
-                        wf_json_obj = parsed
-
-                    if not isinstance(wf_json_obj, dict) or not isinstance(wf_json_obj.get("nodes"), list):
-                        last_err = f"Generated JSON from {current_model} did not contain valid n8n 'nodes'."
-                        break
-
-                    wf_name = str(parsed.get("workflow_name") or wf_json_obj.get("name") or "AI Generated n8n Workflow").strip()
-                    wf_json_obj["name"] = wf_name
-                    explanation = str(parsed.get("explanation") or f"Generated n8n workflow '{wf_name}' with {len(wf_json_obj.get('nodes') or [])} nodes.").strip()
-
-                    # Auto-inject live X-API-Key & live /api/v1/* URLs and run GlennBot's workflow analyzer
-                    patched_json = _auto_inject_credentials_into_workflow_json(wf_json_obj, live_base_api)
-                    analysis = _analyze_n8n_workflow_json(patched_json)
-
-                    # Remember the most recently generated AI workflow so live webhooks work immediately even before manual card save
-                    with INTERNAL_API_LOCK:
-                        INTERNAL_API_STATE["last_ai_generated_workflow"] = {
-                            "name": wf_name,
-                            "webhook_path": analysis.get("webhook_path") or "",
-                            "events": analysis.get("events") or {},
-                            "workflow_json": patched_json
-                        }
-
-                    return {
-                        "status": "success",
-                        "model": current_model,
-                        "workflow_name": wf_name,
-                        "explanation": explanation,
-                        "workflow_json": patched_json,
-                        "analysis": analysis
-                    }
-                elif resp.status_code in (429, 404):
-                    last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
-                    break
-                elif resp.status_code in (503, 500) and attempt < 2:
-                    await run_in_threadpool(lambda: time.sleep(1.0))
-                    continue
-                else:
-                    err_detail = (resp.text or "")[:300]
-                    last_err = f"Gemini API ({current_model}) returned HTTP {resp.status_code}: {err_detail}"
-                    break
-            except Exception as ex:
-                last_err = f"Network error connecting to Gemini ({current_model}): {str(ex)}"
-                if attempt < 2:
-                    await run_in_threadpool(lambda: time.sleep(1.0))
-
-    return JSONResponse(status_code=500, content={"status": "error", "message": last_err or "Failed to generate n8n workflow with Gemini."})
-
-
-
+ request_parts = list(inline_parts) + [{"text": f"{system_instruction}\n\n{full_prompt}"}]
+ last_err = ""
+ for current_model in candidate_models:
+  gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={api_key}"
+  payload = {
+  "contents": [{"parts": request_parts}],
+  "generationConfig": {
+  "temperature": 0.2,
+  "maxOutputTokens": 8192,
+  "responseMimeType": "application/json"
+  }
+  }
+  for attempt in range(1, 3):
+   try:
+    resp = await run_in_threadpool(lambda: requests.post(gemini_url, json=payload, timeout=65))
+    if resp.status_code == 200:
+     res_data = resp.json()
+     candidates = res_data.get("candidates", [])
+     if not candidates:
+      last_err = f"No response returned from Gemini ({current_model})."
+      break
+     parts = candidates[0].get("content", {}).get("parts", [])
+     raw_text = "".join(part.get("text", "") for part in parts).strip()
+     if raw_text.startswith("```"):
+      lines = raw_text.splitlines()
+      if lines and lines[0].startswith("```"):
+       lines = lines[1:]
+      if lines and lines[-1].startswith("```"):
+       lines = lines[:-1]
+      raw_text = "\n".join(lines).strip()
+     parsed = None
+     try:
+      parsed = json.loads(raw_text)
+     except Exception:
+      m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+      if m:
+       try:
+        parsed = json.loads(m.group(0))
+       except Exception:
+        pass
+     if not isinstance(parsed, dict):
+      last_err = f"Gemini ({current_model}) returned an invalid JSON format."
+      break
+     # Extract workflow_json whether nested under "workflow_json" or returned directly as an n8n workflow object
+     wf_json_obj = parsed.get("workflow_json") if isinstance(parsed.get("workflow_json"), dict) else None
+     if not wf_json_obj and isinstance(parsed.get("nodes"), list):
+      wf_json_obj = parsed
+     if not isinstance(wf_json_obj, dict) or not isinstance(wf_json_obj.get("nodes"), list):
+      last_err = f"Generated JSON from {current_model} did not contain valid n8n 'nodes'."
+      break
+     wf_name = str(parsed.get("workflow_name") or wf_json_obj.get("name") or "AI Generated n8n Workflow").strip()
+     wf_json_obj["name"] = wf_name
+     explanation = str(parsed.get("explanation") or f"Generated n8n workflow '{wf_name}' with {len(wf_json_obj.get('nodes') or [])} nodes.").strip()
+     # Auto-inject live X-API-Key & live /api/v1/* URLs and run GlennBot's workflow analyzer
+     patched_json = _auto_inject_credentials_into_workflow_json(wf_json_obj, live_base_api)
+     analysis = _analyze_n8n_workflow_json(patched_json)
+     # Remember the most recently generated AI workflow so live webhooks work immediately even before manual card save
+     with INTERNAL_API_LOCK:
+      INTERNAL_API_STATE["last_ai_generated_workflow"] = {
+      "name": wf_name,
+      "webhook_path": analysis.get("webhook_path") or "",
+      "events": analysis.get("events") or {},
+      "workflow_json": patched_json
+      }
+     return {
+     "status": "success",
+     "model": current_model,
+     "workflow_name": wf_name,
+     "explanation": explanation,
+     "workflow_json": patched_json,
+     "analysis": analysis
+     }
+    elif resp.status_code in (429, 404):
+     last_err = f"Gemini {current_model} returned HTTP {resp.status_code}: {resp.text[:200]}"
+     break
+    elif resp.status_code in (503, 500) and attempt < 2:
+     await run_in_threadpool(lambda: time.sleep(1.0))
+     continue
+    else:
+     err_detail = (resp.text or "")[:300]
+     last_err = f"Gemini API ({current_model}) returned HTTP {resp.status_code}: {err_detail}"
+     break
+   except Exception as ex:
+    last_err = f"Network error connecting to Gemini ({current_model}): {str(ex)}"
+    if attempt < 2:
+     await run_in_threadpool(lambda: time.sleep(1.0))
+ return JSONResponse(status_code=500, content={"status": "error", "message": last_err or "Failed to generate n8n workflow with Gemini."})
 @router.post("/api/internal-api/n8n-workflows/save")
 async def api_save_n8n_workflow(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    def _do_save_wf():
-        _load_internal_api_state(force_cloud=False)
-        if body.get("global_webhook_secret") is not None:
-            sec_g = str(body.get("global_webhook_secret") or "").strip()
-            if sec_g:
-                with INTERNAL_API_LOCK:
-                    INTERNAL_API_STATE["n8n_webhook_secret"] = sec_g
-        return _upsert_n8n_workflow_in_db(body, sync_cloud=True)
-    saved_wf = await run_in_threadpool(_do_save_wf)
-    return {
-        "status": "success",
-        "message": f"Saved workflow '{saved_wf.get('name')}'!",
-        "workflow": saved_wf,
-        "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or [],
-        "n8n_webhook_secret": INTERNAL_API_STATE.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026"
-    }
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ def _do_save_wf():
+  _load_internal_api_state(force_cloud=False)
+  if body.get("global_webhook_secret") is not None:
+   sec_g = str(body.get("global_webhook_secret") or "").strip()
+   if sec_g:
+    with INTERNAL_API_LOCK:
+     INTERNAL_API_STATE["n8n_webhook_secret"] = sec_g
+  return _upsert_n8n_workflow_in_db(body, sync_cloud=True)
+ saved_wf = await run_in_threadpool(_do_save_wf)
+ return {
+ "status": "success",
+ "message": f"Saved workflow '{saved_wf.get('name')}'!",
+ "workflow": saved_wf,
+ "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or [],
+ "n8n_webhook_secret": INTERNAL_API_STATE.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026"
+ }
 @router.delete("/api/internal-api/n8n-workflows/{workflow_id}")
 async def api_delete_n8n_workflow(workflow_id: str):
-    return await run_in_threadpool(lambda: _delete_n8n_workflow_sync(workflow_id))
-
-
+ return await run_in_threadpool(lambda: _delete_n8n_workflow_sync(workflow_id))
 def _delete_n8n_workflow_sync(workflow_id: str):
-    _load_internal_api_state(force_cloud=False)
-    clean_id = str(workflow_id or "").strip()
-    with INTERNAL_API_LOCK:
-        INTERNAL_API_STATE["n8n_workflows"] = [
-            w for w in (INTERNAL_API_STATE.get("n8n_workflows") or [])
-            if str(w.get("id")) != clean_id
-        ]
-        deleted_ids = set(INTERNAL_API_STATE.get("deleted_workflow_ids") or [])
-        if clean_id:
-            deleted_ids.add(clean_id)
-        INTERNAL_API_STATE["deleted_workflow_ids"] = list(deleted_ids)
-    try:
-        with db_engine.begin() as conn:
-            conn.execute(text("DELETE FROM glennbot_n8n_workflows WHERE id = :id"), {"id": clean_id})
-    except Exception as e:
-        print(f"[InternalAPI] Delete workflow warning: {e}")
-
-    _save_internal_api_to_cloudinary()
-    return {
-        "status": "success",
-        "message": "Workflow automation permanently removed from Database and Cloudinary.",
-        "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or []
-    }
-
-
+ _load_internal_api_state(force_cloud=False)
+ clean_id = str(workflow_id or "").strip()
+ with INTERNAL_API_LOCK:
+  INTERNAL_API_STATE["n8n_workflows"] = [
+  w for w in (INTERNAL_API_STATE.get("n8n_workflows") or [])
+  if str(w.get("id")) != clean_id
+  ]
+  deleted_ids = set(INTERNAL_API_STATE.get("deleted_workflow_ids") or [])
+  if clean_id:
+   deleted_ids.add(clean_id)
+  INTERNAL_API_STATE["deleted_workflow_ids"] = list(deleted_ids)
+ try:
+  with db_engine.begin() as conn:
+   conn.execute(text("DELETE FROM glennbot_n8n_workflows WHERE id = :id"), {"id": clean_id})
+ except Exception as e:
+  print(f"[InternalAPI] Delete workflow warning: {e}")
+ _save_internal_api_to_cloudinary()
+ return {
+ "status": "success",
+ "message": "Workflow automation permanently removed from Database and Cloudinary.",
+ "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or []
+ }
 @router.post("/api/internal-api/n8n-webhook")
 async def api_save_outbound_n8n_webhook(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
-
-    wh_url = str(body.get("n8n_webhook_url") or "").strip()
-    wh_sec = str(body.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026").strip()
-    events_in = body.get("n8n_events")
-
-    with INTERNAL_API_LOCK:
-        if wh_url:
-            INTERNAL_API_STATE["n8n_webhook_url"] = wh_url
-        if wh_sec:
-            INTERNAL_API_STATE["n8n_webhook_secret"] = wh_sec
-        if isinstance(events_in, dict):
-            for k, v in events_in.items():
-                INTERNAL_API_STATE["n8n_events"][str(k)] = bool(v)
-
-    threading.Thread(target=_save_internal_api_to_cloudinary, daemon=True).start()
-    return {
-        "status": "success",
-        "message": "Global n8n Webhook Signing Secret & settings saved!",
-        "n8n_webhook_url": INTERNAL_API_STATE["n8n_webhook_url"],
-        "n8n_webhook_secret": INTERNAL_API_STATE["n8n_webhook_secret"],
-        "n8n_events": INTERNAL_API_STATE["n8n_events"],
-        "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or []
-    }
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
+ wh_url = str(body.get("n8n_webhook_url") or "").strip()
+ wh_sec = str(body.get("n8n_webhook_secret") or "gb_whsec_n8n_automation_2026").strip()
+ events_in = body.get("n8n_events")
+ with INTERNAL_API_LOCK:
+  if wh_url:
+   INTERNAL_API_STATE["n8n_webhook_url"] = wh_url
+  if wh_sec:
+   INTERNAL_API_STATE["n8n_webhook_secret"] = wh_sec
+  if isinstance(events_in, dict):
+   for k, v in events_in.items():
+    INTERNAL_API_STATE["n8n_events"][str(k)] = bool(v)
+ threading.Thread(target=_save_internal_api_to_cloudinary, daemon=True).start()
+ return {
+ "status": "success",
+ "message": "Global n8n Webhook Signing Secret & settings saved!",
+ "n8n_webhook_url": INTERNAL_API_STATE["n8n_webhook_url"],
+ "n8n_webhook_secret": INTERNAL_API_STATE["n8n_webhook_secret"],
+ "n8n_events": INTERNAL_API_STATE["n8n_events"],
+ "n8n_workflows": INTERNAL_API_STATE.get("n8n_workflows") or []
+ }
 @router.post("/api/internal-api/n8n-webhook/test")
 async def api_test_outbound_n8n_webhook(request: Request):
-    """
+ """
     Dynamically tests a specific n8n Workflow Automation (or custom URL) by inspecting its uploaded
     `workflow_json` and auto-generating a matching sample payload with any required IF-node keywords!
     Runs inside the worker threadpool so the FastAPI event loop remains 100% unblocked when n8n
     simultaneously calls back into /api/v1/* endpoints during the workflow run!
     """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    return await run_in_threadpool(lambda: _test_outbound_n8n_webhook_sync(body))
-
-
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ return await run_in_threadpool(lambda: _test_outbound_n8n_webhook_sync(body))
 def _test_outbound_n8n_webhook_sync(body: Dict[str, Any]):
-    _load_internal_api_state(force_cloud=False)
-
-    wf_id = str(body.get("workflow_id") or "").strip()
-    override_url = str(body.get("n8n_webhook_url") or body.get("webhook_url") or "").strip()
-    override_sec = str(body.get("webhook_secret") or "").strip()
-
-    workflows = list(INTERNAL_API_STATE.get("n8n_workflows") or [])
-    matched_wf = next((w for w in workflows if str(w.get("id")) == wf_id), None) if wf_id else None
-
-    if matched_wf and override_url:
-        matched_wf["webhook_url"] = override_url
-        _upsert_n8n_workflow_in_db(matched_wf, sync_cloud=True)
-
-    target_url = override_url or str((matched_wf or {}).get("webhook_url") or INTERNAL_API_STATE.get("n8n_webhook_url") or "").strip()
-    if not target_url or not target_url.startswith("http"):
-        return JSONResponse({
-            "status": "error",
-            "message": "Please paste an n8n Webhook Trigger URL (POST) for this workflow before sending a Test Event."
-        }, status_code=400)
-
-    # Determine which event to simulate from request or from the workflow's enabled `events`
-    sim_event = str(body.get("event_type") or "").strip()
-    if not sim_event and matched_wf:
-        wf_evts = matched_wf.get("events") if isinstance(matched_wf.get("events"), dict) else {}
-        sim_event = next((k for k, v in wf_evts.items() if v), "")
-    if not sim_event:
-        sim_event = "comment.received"
-
-    sample_data = _build_dynamic_test_payload_for_workflow(sim_event, matched_wf or body)
-    res = _dispatch_outbound_n8n_webhook_sync(
-        sim_event,
-        sample_data,
-        target_workflow_id=wf_id if matched_wf else None,
-        override_url=target_url,
-        override_secret=override_sec or None
-    )
-    if res.get("dispatched"):
-        return {
-            "status": "success",
-            "message": f"Dynamic '{sim_event}' test event sent to '{(matched_wf or {}).get('name') or 'n8n Webhook'}' (HTTP {res.get('status_code')})!",
-            "result": res
-        }
-    return JSONResponse({
-        "status": "error",
-        "message": f"Failed to reach n8n Webhook URL: {res.get('error') or res.get('reason')}",
-        "result": res
-    }, status_code=400)
-
-
+ _load_internal_api_state(force_cloud=False)
+ wf_id = str(body.get("workflow_id") or "").strip()
+ override_url = str(body.get("n8n_webhook_url") or body.get("webhook_url") or "").strip()
+ override_sec = str(body.get("webhook_secret") or "").strip()
+ workflows = list(INTERNAL_API_STATE.get("n8n_workflows") or [])
+ matched_wf = next((w for w in workflows if str(w.get("id")) == wf_id), None) if wf_id else None
+ if matched_wf and override_url:
+  matched_wf["webhook_url"] = override_url
+  _upsert_n8n_workflow_in_db(matched_wf, sync_cloud=True)
+ target_url = override_url or str((matched_wf or {}).get("webhook_url") or INTERNAL_API_STATE.get("n8n_webhook_url") or "").strip()
+ if not target_url or not target_url.startswith("http"):
+  return JSONResponse({
+  "status": "error",
+  "message": "Please paste an n8n Webhook Trigger URL (POST) for this workflow before sending a Test Event."
+  }, status_code=400)
+ # Determine which event to simulate from request or from the workflow's enabled `events`
+ sim_event = str(body.get("event_type") or "").strip()
+ if not sim_event and matched_wf:
+  wf_evts = matched_wf.get("events") if isinstance(matched_wf.get("events"), dict) else {}
+  sim_event = next((k for k, v in wf_evts.items() if v), "")
+ if not sim_event:
+  sim_event = "comment.received"
+ sample_data = _build_dynamic_test_payload_for_workflow(sim_event, matched_wf or body)
+ res = _dispatch_outbound_n8n_webhook_sync(
+ sim_event,
+ sample_data,
+ target_workflow_id=wf_id if matched_wf else None,
+ override_url=target_url,
+ override_secret=override_sec or None
+ )
+ if res.get("dispatched"):
+  return {
+  "status": "success",
+  "message": f"Dynamic '{sim_event}' test event sent to '{(matched_wf or {}).get('name') or 'n8n Webhook'}' (HTTP {res.get('status_code')})!",
+  "result": res
+  }
+ return JSONResponse({
+ "status": "error",
+ "message": f"Failed to reach n8n Webhook URL: {res.get('error') or res.get('reason')}",
+ "result": res
+ }, status_code=400)
