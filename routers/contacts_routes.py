@@ -1665,6 +1665,53 @@ def _delete_crm_contact_sync(contact_id: str):
  return {"status": "success", "message": "Contact deleted from CRM."}
 
 
+@router.post("/api/contacts/bulk-delete")
+async def api_bulk_delete_crm_contacts(request: Request):
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ return await run_in_threadpool(lambda: _bulk_delete_crm_contacts_sync(body))
+
+
+def _bulk_delete_crm_contacts_sync(body: Dict[str, Any]):
+ _load_crm_contacts_state(force_cloud=False)
+ delete_all = bool(body.get("delete_all"))
+ raw_ids = body.get("contact_ids")
+ target_ids = {str(x).strip() for x in (raw_ids if isinstance(raw_ids, list) else []) if str(x).strip()}
+
+ with CONTACTS_CRM_LOCK:
+  before_list = list(CONTACTS_CRM_STATE.get("contacts") or [])
+  if delete_all or not target_ids:
+   deleted_count = len(before_list)
+   CONTACTS_CRM_STATE["contacts"] = []
+   remaining_list = []
+  else:
+   remaining_list = [c for c in before_list if str(c.get("id") or "").strip() not in target_ids]
+   deleted_count = len(before_list) - len(remaining_list)
+   CONTACTS_CRM_STATE["contacts"] = remaining_list
+
+ try:
+  with db_engine.begin() as conn:
+   if delete_all or not target_ids:
+    conn.execute(text("DELETE FROM glennbot_crm_contacts"))
+   else:
+    for cid in target_ids:
+     conn.execute(text("DELETE FROM glennbot_crm_contacts WHERE id = :id"), {"id": cid})
+ except Exception as e:
+  print(f"[ContactsCRM] Bulk delete DB warning: {e}")
+
+ threading.Thread(target=_save_crm_contacts_to_cloudinary, daemon=True).start()
+ return {
+  "status": "success",
+  "deleted_count": deleted_count,
+  "contacts": remaining_list,
+  "count": len(remaining_list),
+  "message": f"Deleted {deleted_count} contact(s) from CRM.",
+ }
+
+
+
 def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
  """
  Saves parsed Apollo CSV leads into CONTACTS_CRM_STATE, PostgreSQL glennbot_crm_contacts, and Cloudinary.

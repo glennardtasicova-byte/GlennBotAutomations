@@ -571,12 +571,176 @@
    if (!c) return;
    openCrmContactModal(c);
   }
+  let selectedCrmContactIds = new Set();
+
+  function getFilteredCrmContactsList() {
+   const searchVal = (document.getElementById('crm-contacts-search')?.value || '').trim().toLowerCase();
+   const platFilter = (document.getElementById('crm-filter-platform')?.value || 'all').toLowerCase();
+   const catFilter = (document.getElementById('crm-filter-category')?.value || 'all');
+   return (crmContactsList || []).filter(c => {
+    if (platFilter !== 'all') {
+     const combinedPlats = `${c.platform || 'manual'},${c.source_type || ''}`.toLowerCase();
+     if (!combinedPlats.includes(platFilter)) return false;
+    }
+    if (catFilter !== 'all' && (c.category || 'New Lead') !== catFilter) return false;
+    if (searchVal) {
+     const hay = [
+      c.first_name,
+      c.middle_name,
+      c.last_name,
+      c.contact_number,
+      c.email_address,
+      c.social_username,
+      c.account_name,
+      c.company,
+      c.category,
+      c.notes,
+      c.platform,
+      c.source_type
+     ].join(' ').toLowerCase();
+     if (!hay.includes(searchVal)) return false;
+    }
+    return true;
+   });
+  }
+
+  function updateCrmSelectionUI() {
+   const validIds = new Set((crmContactsList || []).map(c => String(c.id)));
+   for (const id of Array.from(selectedCrmContactIds)) {
+    if (!validIds.has(String(id))) {
+     selectedCrmContactIds.delete(id);
+    }
+   }
+   const filtered = getFilteredCrmContactsList();
+   const filteredIds = filtered.map(c => String(c.id));
+   const selectedFilteredCount = filteredIds.filter(id => selectedCrmContactIds.has(id)).length;
+   const selectAllEl = document.getElementById('crm-select-all-checkbox');
+   if (selectAllEl) {
+    if (filteredIds.length === 0) {
+     selectAllEl.checked = false;
+     selectAllEl.indeterminate = false;
+    } else if (selectedFilteredCount === filteredIds.length) {
+     selectAllEl.checked = true;
+     selectAllEl.indeterminate = false;
+    } else if (selectedFilteredCount > 0) {
+     selectAllEl.checked = false;
+     selectAllEl.indeterminate = true;
+    } else {
+     selectAllEl.checked = false;
+     selectAllEl.indeterminate = false;
+    }
+   }
+   const trashLabel = document.getElementById('crm-trash-btn-label');
+   const trashBtn = document.getElementById('btn-bulk-delete-crm-contacts');
+   const totalSelected = selectedCrmContactIds.size;
+   const totalAll = (crmContactsList || []).length;
+   if (trashLabel) {
+    if (totalSelected > 0 && totalSelected < totalAll) {
+     trashLabel.textContent = `Delete (${totalSelected})`;
+    } else if (totalSelected > 0 && totalSelected === totalAll) {
+     trashLabel.textContent = `Delete All (${totalAll})`;
+    } else {
+     trashLabel.textContent = totalAll > 0 ? `Delete All (${totalAll})` : 'Delete All';
+    }
+   }
+   if (trashBtn) {
+    trashBtn.title = totalSelected > 0 && totalSelected < totalAll
+     ? `Delete ${totalSelected} Selected Contact(s)`
+     : `Delete All Contacts (${totalAll})`;
+   }
+  }
+
+  function toggleSingleCrmContactSelection(contactId, checked) {
+   const cid = String(contactId || '');
+   if (!cid) return;
+   if (checked) {
+    selectedCrmContactIds.add(cid);
+   } else {
+    selectedCrmContactIds.delete(cid);
+   }
+   const rowEl = document.querySelector(`tr[data-crm-row-id="${CSS.escape(cid)}"]`);
+   if (rowEl) {
+    if (checked) {
+     rowEl.classList.add('bg-gb-cyan/10');
+    } else {
+     rowEl.classList.remove('bg-gb-cyan/10');
+    }
+   }
+   updateCrmSelectionUI();
+  }
+
+  function toggleSelectAllCrmContacts(checked) {
+   const filtered = getFilteredCrmContactsList();
+   for (const c of filtered) {
+    const cid = String(c.id || '');
+    if (!cid) continue;
+    if (checked) {
+     selectedCrmContactIds.add(cid);
+    } else {
+     selectedCrmContactIds.delete(cid);
+    }
+   }
+   document.querySelectorAll('.crm-row-checkbox').forEach(cb => {
+    cb.checked = Boolean(checked);
+    const tr = cb.closest('tr');
+    if (tr) {
+     if (checked) tr.classList.add('bg-gb-cyan/10');
+     else tr.classList.remove('bg-gb-cyan/10');
+    }
+   });
+   updateCrmSelectionUI();
+  }
+
+  async function handleTopTrashDeleteCrmContacts() {
+   const totalAll = (crmContactsList || []).length;
+   if (totalAll === 0) {
+    showToast('⚠️ No contacts in CRM to delete.');
+    return;
+   }
+   const totalSelected = selectedCrmContactIds.size;
+   const isDeletingSubset = totalSelected > 0 && totalSelected < totalAll;
+   const btn = document.getElementById('btn-bulk-delete-crm-contacts');
+   const origHTML = btn ? btn.innerHTML : '';
+   if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Deleting...</span>`;
+   }
+   try {
+    const payload = isDeletingSubset
+     ? { delete_all: false, contact_ids: Array.from(selectedCrmContactIds) }
+     : { delete_all: true, contact_ids: [] };
+    const res = await fetch('/api/contacts/bulk-delete', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok && data.status === 'success') {
+     crmContactsList = Array.isArray(data.contacts) ? data.contacts : [];
+     selectedCrmContactIds.clear();
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+     showToast(`🗑️ Deleted ${data.deleted_count || (isDeletingSubset ? totalSelected : totalAll)} contact(s) from CRM!`);
+    } else {
+     showToast('❌ ' + (data.message || 'Failed to delete contacts.'));
+    }
+   } catch (e) {
+    showToast('❌ Network error while deleting contacts.');
+   } finally {
+    if (btn) {
+     btn.disabled = false;
+     btn.innerHTML = origHTML || `<i class="fas fa-trash-alt"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Delete All</span>`;
+    }
+    updateCrmSelectionUI();
+   }
+  }
+
   async function deleteCrmContactById(contactId, displayName) {
-   if (!confirm(`Delete "${displayName}" from your CRM Contacts Database?`)) return;
    try {
     const res = await fetch(`/api/contacts/${encodeURIComponent(contactId)}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.status === 'success') {
+     selectedCrmContactIds.delete(String(contactId));
      crmContactsList = crmContactsList.filter(c => c.id !== contactId);
      updateCrmBadgesAndStats();
      renderCrmContactsTable();
@@ -870,34 +1034,8 @@
   function renderCrmContactsTable() {
    const container = document.getElementById('crm-contacts-table-container');
    if (!container) return;
-   const searchVal = (document.getElementById('crm-contacts-search')?.value || '').trim().toLowerCase();
-   const platFilter = (document.getElementById('crm-filter-platform')?.value || 'all').toLowerCase();
-   const catFilter = (document.getElementById('crm-filter-category')?.value || 'all');
-   const filtered = crmContactsList.filter(c => {
-    if (platFilter !== 'all') {
-     const combinedPlats = `${c.platform || 'manual'},${c.source_type || ''}`.toLowerCase();
-     if (!combinedPlats.includes(platFilter)) return false;
-    }
-    if (catFilter !== 'all' && (c.category || 'New Lead') !== catFilter) return false;
-    if (searchVal) {
-     const hay = [
-      c.first_name,
-      c.middle_name,
-      c.last_name,
-      c.contact_number,
-      c.email_address,
-      c.social_username,
-      c.account_name,
-      c.company,
-      c.category,
-      c.notes,
-      c.platform,
-      c.source_type
-     ].join(' ').toLowerCase();
-     if (!hay.includes(searchVal)) return false;
-    }
-    return true;
-   });
+   const filtered = getFilteredCrmContactsList();
+   updateCrmSelectionUI();
    if (filtered.length === 0) {
     container.innerHTML = `
  <div class="flex flex-col items-center justify-center py-16 px-4 text-center text-slate-400">
@@ -907,7 +1045,7 @@
  <h4 class="text-sm font-bold text-white">${crmContactsList.length === 0 ? 'No Contacts in CRM Database Yet' : 'No Matching Contacts Found'}</h4>
  <p class="text-xs text-slate-400 max-w-md mt-1">
                             ${crmContactsList.length === 0
-                                ? 'Click "+ Create Contact", click "Sync & Combine" to pull from Cloudinary / WhatsApp / Telegram, or click "+ Add to Contacts" on any message or comment!'
+                                ? 'Click "+ Create Contact", click "Import Contacts" (Google Contacts or via Apollo CSV), or click "Sync & Combine" to pull from Cloudinary / WhatsApp / Telegram!'
                                 : 'Try clearing your search or changing the Platform / Category filter above.'}
  </p>
                         ${crmContactsList.length === 0 ? `
@@ -916,9 +1054,9 @@
          <i class="fas fa-user-plus"></i>
          <span>+ Create Your First Contact</span>
         </button>
-        <button type="button" onclick="syncAllCrmContactsWithDeduplication()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-gb-cyan/50 text-gb-cyan font-bold text-xs flex items-center gap-2">
-         <i class="fas fa-sync-alt"></i>
-         <span>Sync from Cloudinary, WhatsApp &amp; Telegram</span>
+        <button type="button" onclick="openApolloCsvImportModal(event)" class="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/50 text-amber-200 hover:text-white font-bold text-xs flex items-center gap-2">
+         <i class="fas fa-rocket text-amber-400"></i>
+         <span>Import via Apollo CSV</span>
         </button>
         <button type="button" onclick="startGoogleContactsOAuthImport()" class="px-4 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-400/50 text-red-200 hover:text-white font-bold text-xs flex items-center gap-2">
          <i class="fab fa-google text-red-400"></i>
@@ -930,9 +1068,11 @@
                 `;
     return;
    }
+   const allFilteredSelected = filtered.length > 0 && filtered.every(c => selectedCrmContactIds.has(String(c.id)));
    const rowsHTML = filtered.map((c, idx) => {
     const fullName = [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' ') || c.social_username || 'Unnamed Contact';
     const plat = (c.platform || 'manual').toLowerCase();
+    const isRowSelected = selectedCrmContactIds.has(String(c.id));
     // Build multi-platform badges if this contact was combined from multiple sources (e.g. Gmail + WhatsApp)
     const rawSources = `${plat},${c.source_type || ''}`
      .split(',')
@@ -974,8 +1114,13 @@
      ? 'Open Chat in Message Tab (Choose Platform: Email, SMS, WhatsApp, or Telegram)'
      : 'Open Chat in Message Tab (No Mobile Number, Email, or Social Username saved)';
     return `
- <tr class="border-b border-slate-800/80 hover:bg-slate-900/80 transition-colors">
- <td class="py-3 px-3.5 text-xs font-bold text-slate-500">#${idx + 1}</td>
+ <tr data-crm-row-id="${escapeHTML(String(c.id))}" class="border-b border-slate-800/80 hover:bg-slate-900/80 transition-colors ${isRowSelected ? 'bg-gb-cyan/10' : ''}">
+ <td class="py-3 px-3.5 text-xs font-bold text-slate-500 whitespace-nowrap">
+  <label class="inline-flex items-center gap-2.5 cursor-pointer select-none">
+   <input type="checkbox" class="crm-row-checkbox w-4 h-4 rounded border-slate-600 bg-slate-900 text-gb-cyan focus:ring-gb-cyan cursor-pointer accent-[#00f0ff]" data-contact-id="${escapeHTML(String(c.id))}" ${isRowSelected ? 'checked' : ''} onchange="toggleSingleCrmContactSelection('${escapeHTML(String(c.id))}', this.checked)">
+   <span>#${idx + 1}</span>
+  </label>
+ </td>
  <td class="py-3 px-3.5 whitespace-nowrap">
  <span class="text-xs sm:text-sm font-bold text-white">${escapeHTML(c.first_name || '—')}</span>
  </td>
@@ -1028,7 +1173,12 @@
                 <table class="w-full text-left border-collapse min-w-[1050px]">
  <thead>
  <tr class="border-b border-slate-800 bg-slate-900/95 text-[10px] font-bold uppercase tracking-wider text-slate-400 sticky top-0 z-10">
- <th class="py-3 px-3.5">#</th>
+ <th class="py-3 px-3.5 whitespace-nowrap">
+  <label class="inline-flex items-center gap-2.5 cursor-pointer select-none" title="Select All Contacts">
+   <input type="checkbox" id="crm-select-all-checkbox" ${allFilteredSelected ? 'checked' : ''} onchange="toggleSelectAllCrmContacts(this.checked)" class="w-4 h-4 rounded border-slate-600 bg-slate-900 text-gb-cyan focus:ring-gb-cyan cursor-pointer accent-[#00f0ff]">
+   <span>#</span>
+  </label>
+ </th>
  <th class="py-3 px-3.5">First Name</th>
  <th class="py-3 px-3.5">Middle Name</th>
  <th class="py-3 px-3.5">Last Name</th>
@@ -1046,6 +1196,7 @@
  </tbody>
  </table>
             `;
+   updateCrmSelectionUI();
   }
   // =========================================================================
   // --- GOOGLE CONTACTS OAUTH2 POPUP & AUTO-IMPORT (COMPOSIO API) ---
@@ -1054,8 +1205,8 @@
   async function startGoogleContactsOAuthImport() {
    const btn = document.getElementById('btn-import-google-contacts');
    if (btn) {
+    if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-circle-notch fa-spin text-red-400"></i> <span>Connecting Google...</span>';
    }
    const width = 560;
    const height = 680;
@@ -1128,7 +1279,7 @@
        }
        if (btn) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fab fa-google text-red-400"></i> <span>Import Google Contacts</span>';
+        if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
        }
       }
      }, 3000);
@@ -1137,7 +1288,7 @@
      showToast('❌ ' + (data.message || 'Could not start Google Contacts OAuth.'));
      if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '<i class="fab fa-google text-red-400"></i> <span>Import Google Contacts</span>';
+      if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
      }
     }
    } catch (err) {
@@ -1145,7 +1296,7 @@
     showToast('❌ Failed to launch Google Contacts OAuth popup.');
     if (btn) {
      btn.disabled = false;
-     btn.innerHTML = '<i class="fab fa-google text-red-400"></i> <span>Import Google Contacts</span>';
+     if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
     }
    }
   }
@@ -1159,7 +1310,7 @@
     const btn = document.getElementById('btn-import-google-contacts');
     if (btn) {
      btn.disabled = false;
-     btn.innerHTML = '<i class="fab fa-google text-red-400"></i> <span>Import Google Contacts</span>';
+     if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
     }
     await fetchCrmContacts(false);
     showToast(`✅ Imported ${d.imported_count || 0} Google Contact(s) from ${d.account_email || 'Google Account'}!`);
