@@ -854,40 +854,54 @@ preferred_api_key: str = ""
  now_ts = time.time()
  cached_tok_info = YOUTUBE_LIVE_TOKEN_CACHE.get(video_id)
  newest_token = ""
- if cached_tok_info and (now_ts - cached_tok_info.get("ts", 0)) < 5:
+ if cached_tok_info and (now_ts - cached_tok_info.get("ts", 0)) < 300:
   newest_token = str(cached_tok_info.get("token") or "")
+ def _post_yt_next_with_retry(payload_body: Dict[str, Any], read_timeout: float = 12.0):
+  last_err = None
+  for attempt in range(2):
+   try:
+    return HTTP_SESSION.post(
+    "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+    json=payload_body,
+    headers=yt_headers,
+    timeout=(4.0, read_timeout)
+    )
+   except Exception as exc:
+    last_err = exc
+    if attempt == 0:
+     time.sleep(0.35)
+  if last_err:
+   raise last_err
+  return None
+ def _discover_newest_comment_token() -> Optional[str]:
+  init_resp = _post_yt_next_with_retry({"context": yt_ctx, "videoId": video_id}, read_timeout=12.0)
+  if not init_resp or init_resp.status_code != 200 or not init_resp.text:
+   return None
+  tok = ""
+  m_sub = re.search(r'"subMenuItems":\[(.*?)\]', init_resp.text)
+  if m_sub:
+   sub_toks = re.findall(r'"token":"([^"]+)"', m_sub.group(1))
+   if len(sub_toks) >= 2:
+    tok = sub_toks[1]
+   elif sub_toks:
+    tok = sub_toks[0]
+  if not tok:
+   all_toks = re.findall(r'"continuationCommand":\{"token":"([^"]+)"\}', init_resp.text)
+   if all_toks:
+    tok = all_toks[0]
+  return tok
  try:
   if not newest_token:
-   init_resp = HTTP_SESSION.post(
-   "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
-   json={"context": yt_ctx, "videoId": video_id},
-   headers=yt_headers,
-   timeout=6
-   )
-   if init_resp.status_code != 200 or not init_resp.text:
+   discovered_tok = _discover_newest_comment_token()
+   if discovered_tok is None:
     return None
-   m_sub = re.search(r'"subMenuItems":\[(.*?)\]', init_resp.text)
-   if m_sub:
-    sub_toks = re.findall(r'"token":"([^"]+)"', m_sub.group(1))
-    if len(sub_toks) >= 2:
-     newest_token = sub_toks[1]
-    elif sub_toks:
-     newest_token = sub_toks[0]
-   if not newest_token:
-    all_toks = re.findall(r'"continuationCommand":\{"token":"([^"]+)"\}', init_resp.text)
-    if all_toks:
-     newest_token = all_toks[0]
-   if not newest_token:
+   if not discovered_tok:
     YOUTUBE_LIVE_TOKEN_CACHE.pop(video_id, None)
     return []
+   newest_token = discovered_tok
    YOUTUBE_LIVE_TOKEN_CACHE[video_id] = {"token": newest_token, "ts": now_ts}
-  c_resp = HTTP_SESSION.post(
-  "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
-  json={"context": yt_ctx, "continuation": newest_token},
-  headers=yt_headers,
-  timeout=6
-  )
-  if c_resp.status_code != 200 or not c_resp.text:
+  c_resp = _post_yt_next_with_retry({"context": yt_ctx, "continuation": newest_token}, read_timeout=12.0)
+  if not c_resp or c_resp.status_code != 200 or not c_resp.text:
    YOUTUBE_LIVE_TOKEN_CACHE.pop(video_id, None)
    return None
   c_data = c_resp.json()
@@ -895,15 +909,21 @@ preferred_api_key: str = ""
   reply_tokens: List[str] = []
   _collect_yt_comment_entities(c_data, entities_map)
   _collect_yt_thread_reply_tokens(c_data, reply_tokens)
+  if not entities_map and cached_tok_info:
+   YOUTUBE_LIVE_TOKEN_CACHE.pop(video_id, None)
+   refreshed_tok = _discover_newest_comment_token()
+   if refreshed_tok:
+    newest_token = refreshed_tok
+    YOUTUBE_LIVE_TOKEN_CACHE[video_id] = {"token": newest_token, "ts": time.time()}
+    c_resp2 = _post_yt_next_with_retry({"context": yt_ctx, "continuation": newest_token}, read_timeout=12.0)
+    if c_resp2 and c_resp2.status_code == 200 and c_resp2.text:
+     c_data = c_resp2.json()
+     _collect_yt_comment_entities(c_data, entities_map)
+     _collect_yt_thread_reply_tokens(c_data, reply_tokens)
   for r_tok in reply_tokens[:6]:
    try:
-    r_resp = HTTP_SESSION.post(
-    "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
-    json={"context": yt_ctx, "continuation": r_tok},
-    headers=yt_headers,
-    timeout=5
-    )
-    if r_resp.status_code == 200 and r_resp.text:
+    r_resp = _post_yt_next_with_retry({"context": yt_ctx, "continuation": r_tok}, read_timeout=8.0)
+    if r_resp and r_resp.status_code == 200 and r_resp.text:
      _collect_yt_comment_entities(r_resp.json(), entities_map)
    except Exception:
     pass
