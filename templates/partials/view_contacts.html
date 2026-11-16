@@ -117,10 +117,10 @@
       <i class="fas fa-sync-alt" id="crm-sync-icon"></i>
       <span>Sync &amp; Combine</span>
      </button>
-     <!-- Top Trash Icon Button (Delete Selected or Delete All Contacts) -->
-     <button type="button" id="btn-bulk-delete-crm-contacts" onclick="handleTopTrashDeleteCrmContacts()" class="px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-600 border border-rose-500/50 text-rose-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(244,63,94,0.18)]" title="Delete Selected / Delete All Contacts">
+     <!-- Top Trash Icon Button (Disabled until at least 1 Contact Tickbox is checked) -->
+     <button type="button" id="btn-bulk-delete-crm-contacts" onclick="handleTopTrashDeleteCrmContacts()" disabled aria-disabled="true" class="px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700/80 text-slate-500 text-xs font-bold flex items-center gap-1.5 transition-all opacity-45 cursor-not-allowed" title="Tick at least one contact checkbox to enable delete">
       <i class="fas fa-trash-alt"></i>
-      <span id="crm-trash-btn-label" class="hidden sm:inline">Delete All</span>
+      <span id="crm-trash-btn-label" class="hidden sm:inline">Delete</span>
      </button>
      <!-- + Create Contact Primary Button -->
      <button type="button" onclick="openCrmContactModal()" class="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,240,255,0.3)] hover:shadow-[0_0_22px_rgba(0,240,255,0.55)] transition-all">

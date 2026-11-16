@@ -1680,9 +1680,18 @@ def _bulk_delete_crm_contacts_sync(body: Dict[str, Any]):
  raw_ids = body.get("contact_ids")
  target_ids = {str(x).strip() for x in (raw_ids if isinstance(raw_ids, list) else []) if str(x).strip()}
 
+ if not delete_all and not target_ids:
+  return JSONResponse(
+   {
+    "status": "error",
+    "message": "Please tick at least one contact checkbox before clicking Delete.",
+   },
+   status_code=400,
+  )
+
  with CONTACTS_CRM_LOCK:
   before_list = list(CONTACTS_CRM_STATE.get("contacts") or [])
-  if delete_all or not target_ids:
+  if delete_all and not target_ids:
    deleted_count = len(before_list)
    CONTACTS_CRM_STATE["contacts"] = []
    remaining_list = []
@@ -1693,7 +1702,9 @@ def _bulk_delete_crm_contacts_sync(body: Dict[str, Any]):
 
  try:
   with db_engine.begin() as conn:
-   if delete_all or not target_ids:
+   if delete_all and not target_ids:
+    conn.execute(text("DELETE FROM glennbot_crm_contacts"))
+   elif len(remaining_list) == 0:
     conn.execute(text("DELETE FROM glennbot_crm_contacts"))
    else:
     for cid in target_ids:
@@ -1711,8 +1722,128 @@ def _bulk_delete_crm_contacts_sync(body: Dict[str, Any]):
  }
 
 
+APOLLO_IMPORT_JOBS_LOCK = threading.Lock()
+APOLLO_IMPORT_JOBS: Dict[str, Dict[str, Any]] = {}
 
-def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+
+def _update_apollo_import_job(
+ job_id: str,
+ stage_number: int,
+ percent: int,
+ stage_title: str,
+ detail: str = "",
+ status: str = "running",
+ processed_rows: int = 0,
+ total_rows: int = 0,
+) -> None:
+ clean_jid = str(job_id or "").strip()
+ if not clean_jid:
+  return
+ with APOLLO_IMPORT_JOBS_LOCK:
+  # Keep at most 50 recent job entries
+  if len(APOLLO_IMPORT_JOBS) > 50:
+   oldest_keys = list(APOLLO_IMPORT_JOBS.keys())[:-30]
+   for k in oldest_keys:
+    APOLLO_IMPORT_JOBS.pop(k, None)
+  APOLLO_IMPORT_JOBS[clean_jid] = {
+   "job_id": clean_jid,
+   "status": status,
+   "stage_number": int(stage_number),
+   "total_stages": 4,
+   "percent": max(0, min(100, int(percent))),
+   "stage_title": str(stage_title or ""),
+   "detail": str(detail or ""),
+   "processed_rows": int(processed_rows or 0),
+   "total_rows": int(total_rows or 0),
+   "updated_at": time.time(),
+  }
+
+
+@router.get("/api/contacts/import/apollo-csv/progress/{job_id}")
+def api_get_apollo_csv_import_progress(job_id: str):
+ clean_jid = str(job_id or "").strip()
+ with APOLLO_IMPORT_JOBS_LOCK:
+  job_info = dict(APOLLO_IMPORT_JOBS.get(clean_jid) or {})
+ if not job_info:
+  return {
+   "status": "pending",
+   "job_id": clean_jid,
+   "stage_number": 1,
+   "total_stages": 4,
+   "percent": 10,
+   "stage_title": "Stage 1/4 • Initializing Apollo CSV Import...",
+   "detail": "Preparing CSV file and verifying column structure...",
+   "processed_rows": 0,
+   "total_rows": 0,
+  }
+ return job_info
+
+
+def _batch_upsert_crm_contacts_in_db(contacts_to_save: List[Dict[str, Any]]) -> None:
+ if not contacts_to_save:
+  return
+ _ensure_crm_contacts_table()
+ now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+ batch_params = []
+ for contact in contacts_to_save:
+  if not isinstance(contact, dict):
+   continue
+  batch_params.append({
+   "id": str(contact.get("id") or f"crm_{int(time.time() * 1000)}"),
+   "first_name": str(contact.get("first_name") or "").strip(),
+   "middle_name": str(contact.get("middle_name") or "").strip(),
+   "last_name": str(contact.get("last_name") or "").strip(),
+   "contact_number": str(contact.get("contact_number") or "").strip(),
+   "email_address": str(contact.get("email_address") or "").strip(),
+   "platform": str(contact.get("platform") or "manual").strip().lower(),
+   "social_username": str(contact.get("social_username") or "").strip(),
+   "account_name": str(contact.get("account_name") or "").strip(),
+   "category": str(contact.get("category") or "New Lead").strip(),
+   "company": str(contact.get("company") or "").strip(),
+   "notes": str(contact.get("notes") or "").strip(),
+   "source_type": str(contact.get("source_type") or contact.get("platform") or "manual").strip(),
+   "source_ref_id": str(contact.get("source_ref_id") or "").strip(),
+   "avatar_url": str(contact.get("avatar_url") or "").strip(),
+   "created_at": str(contact.get("created_at") or now_str).strip(),
+   "updated_at": str(contact.get("updated_at") or now_str).strip(),
+  })
+ if not batch_params:
+  return
+ try:
+  with db_engine.begin() as conn:
+   conn.execute(text("""
+    INSERT INTO glennbot_crm_contacts
+    (id, first_name, middle_name, last_name, contact_number, email_address,
+     platform, social_username, account_name, category, company, notes,
+     source_type, source_ref_id, avatar_url, created_at, updated_at)
+    VALUES (:id, :first_name, :middle_name, :last_name, :contact_number, :email_address,
+            :platform, :social_username, :account_name, :category, :company, :notes,
+            :source_type, :source_ref_id, :avatar_url, :created_at, :updated_at)
+    ON CONFLICT (id) DO UPDATE SET
+        first_name = EXCLUDED.first_name,
+        middle_name = EXCLUDED.middle_name,
+        last_name = EXCLUDED.last_name,
+        contact_number = EXCLUDED.contact_number,
+        email_address = EXCLUDED.email_address,
+        platform = EXCLUDED.platform,
+        social_username = EXCLUDED.social_username,
+        account_name = EXCLUDED.account_name,
+        category = EXCLUDED.category,
+        company = EXCLUDED.company,
+        notes = EXCLUDED.notes,
+        source_type = EXCLUDED.source_type,
+        source_ref_id = EXCLUDED.source_ref_id,
+        avatar_url = EXCLUDED.avatar_url,
+        updated_at = EXCLUDED.updated_at
+   """), batch_params)
+ except Exception as e:
+  print(f"[ContactsCRM] Batch upsert DB warning: {e}")
+
+
+def _ingest_parsed_apollo_contacts_into_crm(
+ parsed_contacts: List[Dict[str, Any]],
+ job_id: str = "",
+) -> Tuple[int, int, List[Dict[str, Any]]]:
  """
  Saves parsed Apollo CSV leads into CONTACTS_CRM_STATE, PostgreSQL glennbot_crm_contacts, and Cloudinary.
  Returns (newly_added_count, updated_or_merged_count, full_contacts_list).
@@ -1721,11 +1852,12 @@ def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]
  now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
  added_count = 0
  updated_count = 0
+ total_rows = len(parsed_contacts)
 
  with CONTACTS_CRM_LOCK:
   current_list = list(CONTACTS_CRM_STATE.get("contacts") or [])
 
- for item in parsed_contacts:
+ for row_idx, item in enumerate(parsed_contacts, start=1):
   first_name = str(item.get("first_name") or "").strip()
   middle_name = str(item.get("middle_name") or "").strip()
   last_name = str(item.get("last_name") or "").strip()
@@ -1738,6 +1870,20 @@ def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]
   notes = str(item.get("notes") or "").strip()
   source_ref = str(item.get("source_ref") or "").strip()
 
+  if job_id and (row_idx == 1 or row_idx == total_rows or row_idx % max(1, total_rows // 5) == 0):
+   pct = 50 + int(round((row_idx / float(max(1, total_rows))) * 35))
+   lead_label = f"{first_name} {last_name}".strip() or company or email_address or f"Row #{row_idx}"
+   _update_apollo_import_job(
+    job_id=job_id,
+    stage_number=3,
+    percent=pct,
+    stage_title=f"Stage 3/4 • Importing & Deduplicating Leads ({row_idx}/{total_rows})...",
+    detail=f"Processing lead #{row_idx} of {total_rows}: {lead_label} ({company or 'Apollo Lead'})",
+    status="running",
+    processed_rows=row_idx,
+    total_rows=total_rows,
+   )
+
   norm_email = _normalize_email_key(email_address)
   norm_phone = _normalize_phone_key(contact_number)
 
@@ -1749,7 +1895,6 @@ def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]
     existing_idx = idx
     break
    if norm_phone and ex_phone and norm_phone == ex_phone and not (norm_email and ex_email and norm_email != ex_email):
-    # Also check same full name if corporate phone is shared
     ex_name = f"{ex.get('first_name') or ''} {ex.get('last_name') or ''}".strip().lower()
     in_name = f"{first_name} {last_name}".strip().lower()
     if not ex_name or not in_name or ex_name == in_name:
@@ -1797,9 +1942,24 @@ def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]
  with CONTACTS_CRM_LOCK:
   CONTACTS_CRM_STATE["contacts"] = deduped_list
 
- for rec in deduped_list:
-  _upsert_crm_contact_in_db(rec, sync_cloud=False)
- threading.Thread(target=_save_crm_contacts_to_cloudinary, daemon=True).start()
+ if job_id:
+  _update_apollo_import_job(
+   job_id=job_id,
+   stage_number=4,
+   percent=92,
+   stage_title="Stage 4/4 • Saving Contacts to CRM Database & Cloud Sync...",
+   detail=f"Persisting {len(deduped_list)} CRM contact(s) to database & Cloudinary backup...",
+   status="running",
+   processed_rows=total_rows,
+   total_rows=total_rows,
+  )
+
+ # Persist to PostgreSQL in a single batched transaction & Cloudinary in background
+ def _bg_persist_crm_batch():
+  _batch_upsert_crm_contacts_in_db(deduped_list)
+  _save_crm_contacts_to_cloudinary()
+
+ threading.Thread(target=_bg_persist_crm_batch, daemon=True).start()
  return added_count, updated_count, deduped_list
 
 
@@ -1808,6 +1968,7 @@ async def api_import_contacts_via_apollo_csv(
  source_mode: str = Form("local"),
  file_id: str = Form(""),
  category_override: str = Form("auto"),
+ job_id: str = Form(""),
  file: Optional[UploadFile] = File(None),
 ):
  """
@@ -1827,6 +1988,7 @@ async def api_import_contacts_via_apollo_csv(
 
  clean_mode = (source_mode or "local").strip().lower()
  clean_cat = (category_override or "auto").strip()
+ clean_jid = (job_id or "").strip()
 
  if clean_mode == "local":
   if not file or not file.filename:
@@ -1843,15 +2005,33 @@ async def api_import_contacts_via_apollo_csv(
    )
 
   def _process_local_apollo_csv():
-   # 1. Directly save the uploaded CSV file into the "Files" Modal (Files Vault)
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=1,
+    percent=20,
+    stage_title=f"Stage 1/4 • Saving '{orig_filename}' to Files Modal...",
+    detail="Generating Python File ID and storing CSV inside your Files Modal...",
+    status="running",
+   )
+   # 1. Directly save the uploaded CSV file into the "Files" Modal (Files Vault) without blocking on GDrive
    vault_res = save_uploaded_bytes_to_files_vault(
     file_bytes=csv_bytes,
     filename=orig_filename,
     content_type=file.content_type or "text/csv",
     notes="Apollo CSV Leads • Auto-saved from Contacts Import",
+    async_gdrive=True,
    )
    saved_file_rec = vault_res.get("record") or {}
    saved_fid = str(saved_file_rec.get("file_id") or "")
+
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=2,
+    percent=42,
+    stage_title="Stage 2/4 • Extracting Apollo CSV Columns (Col E, Col F, Col T)...",
+    detail=f"Saved to Files Modal ({saved_fid}). Parsing Company (Col E), Email (Col F) & Contact Number (Col T)...",
+    status="running",
+   )
 
    # 2. Parse Apollo CSV (Column E = Company, Column F = Email, Column T = Contact Number)
    parsed = parse_apollo_csv_bytes(
@@ -1862,6 +2042,14 @@ async def api_import_contacts_via_apollo_csv(
    )
    parsed_rows = parsed.get("contacts") or []
    if not parsed_rows:
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=2,
+     percent=100,
+     stage_title="Import Error • No Valid Rows Found",
+     detail=f"No valid contact rows found in '{orig_filename}'.",
+     status="error",
+    )
     return {
      "status": "error",
      "message": f"No valid contact rows found in '{orig_filename}'. Make sure it is a valid Apollo CSV export.",
@@ -1869,11 +2057,22 @@ async def api_import_contacts_via_apollo_csv(
      "vault_files": vault_res.get("files") or [],
     }
 
-   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows)
+   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows, job_id=clean_jid)
    total_processed = added_cnt + updated_cnt
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=4,
+    percent=100,
+    stage_title=f"Stage 4/4 • Import Complete! ({total_processed} Leads Imported)",
+    detail=f"Saved '{orig_filename}' to Files Modal ({saved_fid}) • {added_cnt} new, {updated_cnt} updated.",
+    status="completed",
+    processed_rows=total_processed,
+    total_rows=len(parsed_rows),
+   )
    return {
     "status": "success",
     "source_mode": "local",
+    "job_id": clean_jid,
     "message": (
      f"Imported {total_processed} lead(s) from '{orig_filename}' "
      f"({added_cnt} new, {updated_cnt} updated) and auto-saved CSV to Files Modal ({saved_fid})!"
@@ -1902,18 +2101,50 @@ async def api_import_contacts_via_apollo_csv(
    )
 
   def _process_vault_apollo_csv():
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=1,
+    percent=20,
+    stage_title=f"Stage 1/4 • Reading CSV ({clean_fid}) from Files Modal...",
+    detail="Fetching CSV bytes from Files Vault storage...",
+    status="running",
+   )
    csv_bytes, target_rec = read_vault_file_bytes_by_id(clean_fid)
    if not target_rec:
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=1,
+     percent=100,
+     stage_title="Import Error • File Not Found",
+     detail=f"CSV File ID '{clean_fid}' was not found in the Files Modal.",
+     status="error",
+    )
     return {
      "status": "error",
      "message": f"CSV File ID '{clean_fid}' was not found in the Files Modal.",
     }
    if not csv_bytes:
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=1,
+     percent=100,
+     stage_title="Import Error • Empty or Unreadable CSV",
+     detail=f"Could not read CSV content for '{target_rec.get('filename') or clean_fid}'.",
+     status="error",
+    )
     return {
      "status": "error",
      "message": f"Could not read CSV content for '{target_rec.get('filename') or clean_fid}'. Please re-upload or check Google Drive connection.",
     }
    fname = str(target_rec.get("filename") or f"{clean_fid}.csv")
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=2,
+    percent=42,
+    stage_title=f"Stage 2/4 • Extracting Apollo Columns from '{fname}'...",
+    detail="Parsing Col E (Company Name), Col F (Email Address), Col T (Contact Number) & Smart Lead Category...",
+    status="running",
+   )
    parsed = parse_apollo_csv_bytes(
     csv_bytes=csv_bytes,
     source_filename=fname,
@@ -1922,15 +2153,34 @@ async def api_import_contacts_via_apollo_csv(
    )
    parsed_rows = parsed.get("contacts") or []
    if not parsed_rows:
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=2,
+     percent=100,
+     stage_title="Import Error • No Valid Rows Found",
+     detail=f"No valid contact rows found in '{fname}'.",
+     status="error",
+    )
     return {
      "status": "error",
      "message": f"No valid contact rows found in '{fname}'.",
     }
-   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows)
+   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows, job_id=clean_jid)
    total_processed = added_cnt + updated_cnt
+   _update_apollo_import_job(
+    job_id=clean_jid,
+    stage_number=4,
+    percent=100,
+    stage_title=f"Stage 4/4 • Import Complete! ({total_processed} Leads Imported)",
+    detail=f"Imported {total_processed} lead(s) from Files Modal CSV '{fname}' ({added_cnt} new, {updated_cnt} updated).",
+    status="completed",
+    processed_rows=total_processed,
+    total_rows=len(parsed_rows),
+   )
    return {
     "status": "success",
     "source_mode": "files_modal",
+    "job_id": clean_jid,
     "message": (
      f"Imported {total_processed} lead(s) from Files Modal CSV '{fname}' ({clean_fid}) "
      f"({added_cnt} new, {updated_cnt} updated)!"
@@ -1953,4 +2203,5 @@ async def api_import_contacts_via_apollo_csv(
   {"status": "error", "message": f"Unsupported source_mode '{source_mode}'."},
   status_code=400,
  )
+
 

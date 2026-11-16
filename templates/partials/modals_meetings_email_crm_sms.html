@@ -1082,6 +1082,51 @@
      </div>
     </div>
 
+    <!-- Live Stage-by-Stage Import Progress Bar & Status Tracker -->
+    <div id="apollo-csv-progress-container" class="hidden p-4 rounded-2xl bg-slate-900/95 border border-amber-400/50 space-y-3 shadow-[0_0_25px_rgba(245,158,11,0.18)]">
+     <div class="flex items-center justify-between gap-2 flex-wrap">
+      <div class="flex items-center gap-2 min-w-0">
+       <span id="apollo-csv-progress-stage-badge" class="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/50 text-amber-300 font-mono font-extrabold text-[10px] uppercase tracking-wider shrink-0">
+        STAGE 1 / 4
+       </span>
+       <span id="apollo-csv-progress-stage-title" class="text-xs sm:text-sm font-extrabold text-white truncate">
+        Uploading CSV &amp; Saving to Files Modal...
+       </span>
+      </div>
+      <span id="apollo-csv-progress-percent" class="text-xs sm:text-sm font-mono font-extrabold text-gb-cyan shrink-0">
+       0%
+      </span>
+     </div>
+     <!-- Progress Bar Track -->
+     <div class="w-full h-3 rounded-full bg-slate-950 border border-slate-800 overflow-hidden p-0.5">
+      <div id="apollo-csv-progress-bar-fill" class="h-full rounded-full bg-gradient-to-r from-amber-400 via-gb-cyan to-emerald-400 transition-all duration-300 ease-out" style="width: 0%;"></div>
+     </div>
+     <!-- Current Detailed Stage Status Message -->
+     <div id="apollo-csv-progress-detail" class="text-[11px] text-slate-300 flex items-center gap-1.5">
+      <i id="apollo-csv-progress-spinner" class="fas fa-circle-notch fa-spin text-amber-300 text-xs shrink-0"></i>
+      <span id="apollo-csv-progress-detail-text" class="truncate">Preparing Apollo CSV file...</span>
+     </div>
+     <!-- 4-Stage Visual Step Indicators -->
+     <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1 text-[10px] font-bold">
+      <div id="apollo-stage-step-1" class="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5">
+       <i class="fas fa-cloud-upload-alt text-[10px]"></i>
+       <span class="truncate">1. Files Modal</span>
+      </div>
+      <div id="apollo-stage-step-2" class="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5">
+       <i class="fas fa-columns text-[10px]"></i>
+       <span class="truncate">2. Col E / F / T</span>
+      </div>
+      <div id="apollo-stage-step-3" class="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5">
+       <i class="fas fa-users-cog text-[10px]"></i>
+       <span class="truncate">3. Import Leads</span>
+      </div>
+      <div id="apollo-stage-step-4" class="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5">
+       <i class="fas fa-check-double text-[10px]"></i>
+       <span class="truncate">4. CRM Synced</span>
+      </div>
+     </div>
+    </div>
+
     <!-- Live Import Result / Feedback Banner -->
     <div id="apollo-csv-import-result-banner" class="hidden p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-400/50 text-xs text-emerald-200 space-y-1.5"></div>
    </div>

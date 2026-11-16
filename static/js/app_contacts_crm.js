@@ -634,19 +634,29 @@
    const trashBtn = document.getElementById('btn-bulk-delete-crm-contacts');
    const totalSelected = selectedCrmContactIds.size;
    const totalAll = (crmContactsList || []).length;
-   if (trashLabel) {
-    if (totalSelected > 0 && totalSelected < totalAll) {
-     trashLabel.textContent = `Delete (${totalSelected})`;
-    } else if (totalSelected > 0 && totalSelected === totalAll) {
-     trashLabel.textContent = `Delete All (${totalAll})`;
-    } else {
-     trashLabel.textContent = totalAll > 0 ? `Delete All (${totalAll})` : 'Delete All';
+   if (totalSelected === 0) {
+    if (trashLabel) {
+     trashLabel.textContent = 'Delete';
     }
-   }
-   if (trashBtn) {
-    trashBtn.title = totalSelected > 0 && totalSelected < totalAll
-     ? `Delete ${totalSelected} Selected Contact(s)`
-     : `Delete All Contacts (${totalAll})`;
+    if (trashBtn) {
+     trashBtn.disabled = true;
+     trashBtn.setAttribute('aria-disabled', 'true');
+     trashBtn.className = 'px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700/80 text-slate-500 text-xs font-bold flex items-center gap-1.5 transition-all opacity-45 cursor-not-allowed';
+     trashBtn.title = 'Tick at least one contact checkbox to enable delete';
+    }
+   } else {
+    const isAllSelected = totalAll > 0 && totalSelected === totalAll;
+    if (trashLabel) {
+     trashLabel.textContent = isAllSelected ? `Delete All (${totalAll})` : `Delete (${totalSelected})`;
+    }
+    if (trashBtn) {
+     trashBtn.disabled = false;
+     trashBtn.setAttribute('aria-disabled', 'false');
+     trashBtn.className = 'px-3 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-600 border border-rose-500/60 text-rose-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-[0_0_12px_rgba(244,63,94,0.22)]';
+     trashBtn.title = isAllSelected
+      ? `Delete All (${totalAll}) Ticked Contact(s)`
+      : `Delete ${totalSelected} Selected Contact(s)`;
+    }
    }
   }
 
@@ -693,22 +703,24 @@
 
   async function handleTopTrashDeleteCrmContacts() {
    const totalAll = (crmContactsList || []).length;
-   if (totalAll === 0) {
-    showToast('⚠️ No contacts in CRM to delete.');
+   const totalSelected = selectedCrmContactIds.size;
+   // Strictly require at least 1 ticked checkbox before allowing top delete button to execute
+   if (totalSelected === 0) {
+    showToast('⚠️ Please tick at least one contact checkbox first before clicking Delete.');
+    updateCrmSelectionUI();
     return;
    }
-   const totalSelected = selectedCrmContactIds.size;
-   const isDeletingSubset = totalSelected > 0 && totalSelected < totalAll;
+   const isDeletingAll = totalAll > 0 && totalSelected === totalAll;
    const btn = document.getElementById('btn-bulk-delete-crm-contacts');
-   const origHTML = btn ? btn.innerHTML : '';
    if (btn) {
     btn.disabled = true;
-    btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Deleting...</span>`;
+    btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Deleting (${totalSelected})...</span>`;
    }
    try {
-    const payload = isDeletingSubset
-     ? { delete_all: false, contact_ids: Array.from(selectedCrmContactIds) }
-     : { delete_all: true, contact_ids: [] };
+    const payload = {
+     delete_all: isDeletingAll,
+     contact_ids: Array.from(selectedCrmContactIds)
+    };
     const res = await fetch('/api/contacts/bulk-delete', {
      method: 'POST',
      headers: { 'Content-Type': 'application/json' },
@@ -720,7 +732,7 @@
      selectedCrmContactIds.clear();
      updateCrmBadgesAndStats();
      renderCrmContactsTable();
-     showToast(`🗑️ Deleted ${data.deleted_count || (isDeletingSubset ? totalSelected : totalAll)} contact(s) from CRM!`);
+     showToast(`🗑️ Deleted ${data.deleted_count || totalSelected} contact(s) from CRM!`);
     } else {
      showToast('❌ ' + (data.message || 'Failed to delete contacts.'));
     }
@@ -728,8 +740,7 @@
     showToast('❌ Network error while deleting contacts.');
    } finally {
     if (btn) {
-     btn.disabled = false;
-     btn.innerHTML = origHTML || `<i class="fas fa-trash-alt"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Delete All</span>`;
+     btn.innerHTML = `<i class="fas fa-trash-alt"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Delete</span>`;
     }
     updateCrmSelectionUI();
    }
@@ -1657,9 +1668,243 @@
    }
   });
 
+  function updateApolloCsvImportProgressUI({
+   visible = true,
+   stageNumber = 1,
+   percent = 0,
+   title = '',
+   detail = '',
+   state = 'running' // 'running' | 'completed' | 'error'
+  } = {}) {
+   const container = document.getElementById('apollo-csv-progress-container');
+   const badgeEl = document.getElementById('apollo-csv-progress-stage-badge');
+   const titleEl = document.getElementById('apollo-csv-progress-stage-title');
+   const pctEl = document.getElementById('apollo-csv-progress-percent');
+   const fillEl = document.getElementById('apollo-csv-progress-bar-fill');
+   const detailTextEl = document.getElementById('apollo-csv-progress-detail-text');
+   const spinnerEl = document.getElementById('apollo-csv-progress-spinner');
+
+   if (!container) return;
+   if (!visible) {
+    container.classList.add('hidden');
+    return;
+   }
+   container.classList.remove('hidden');
+
+   const clampedPct = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+   const stNum = Math.max(1, Math.min(4, Number(stageNumber) || 1));
+
+   if (badgeEl) {
+    if (state === 'completed') {
+     badgeEl.textContent = 'STAGE 4 / 4 • DONE';
+     badgeEl.className = 'px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 font-mono font-extrabold text-[10px] uppercase tracking-wider shrink-0';
+    } else if (state === 'error') {
+     badgeEl.textContent = 'IMPORT ERROR';
+     badgeEl.className = 'px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-400/50 text-rose-300 font-mono font-extrabold text-[10px] uppercase tracking-wider shrink-0';
+    } else {
+     badgeEl.textContent = `STAGE ${stNum} / 4`;
+     badgeEl.className = 'px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/50 text-amber-300 font-mono font-extrabold text-[10px] uppercase tracking-wider shrink-0';
+    }
+   }
+
+   if (titleEl && title) {
+    titleEl.textContent = title;
+   }
+   if (pctEl) {
+    pctEl.textContent = `${clampedPct}%`;
+    pctEl.className = state === 'completed'
+     ? 'text-xs sm:text-sm font-mono font-extrabold text-emerald-300 shrink-0'
+     : state === 'error'
+      ? 'text-xs sm:text-sm font-mono font-extrabold text-rose-300 shrink-0'
+      : 'text-xs sm:text-sm font-mono font-extrabold text-gb-cyan shrink-0';
+   }
+   if (fillEl) {
+    fillEl.style.width = `${clampedPct}%`;
+    if (state === 'completed') {
+     fillEl.className = 'h-full rounded-full bg-gradient-to-r from-emerald-400 to-gb-cyan transition-all duration-300 ease-out';
+    } else if (state === 'error') {
+     fillEl.className = 'h-full rounded-full bg-rose-500 transition-all duration-300 ease-out';
+    } else {
+     fillEl.className = 'h-full rounded-full bg-gradient-to-r from-amber-400 via-gb-cyan to-emerald-400 transition-all duration-300 ease-out';
+    }
+   }
+   if (detailTextEl && detail) {
+    detailTextEl.textContent = detail;
+   }
+   if (spinnerEl) {
+    if (state === 'completed') {
+     spinnerEl.className = 'fas fa-check-circle text-emerald-400 text-xs shrink-0';
+    } else if (state === 'error') {
+     spinnerEl.className = 'fas fa-exclamation-triangle text-rose-400 text-xs shrink-0';
+    } else {
+     spinnerEl.className = 'fas fa-circle-notch fa-spin text-amber-300 text-xs shrink-0';
+    }
+   }
+
+   for (let i = 1; i <= 4; i++) {
+    const stepEl = document.getElementById(`apollo-stage-step-${i}`);
+    if (!stepEl) continue;
+    if (state === 'completed' || i < stNum) {
+     stepEl.className = 'px-2.5 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-400/50 text-emerald-300 flex items-center gap-1.5 transition-all';
+    } else if (i === stNum && state === 'error') {
+     stepEl.className = 'px-2.5 py-1.5 rounded-lg bg-rose-500/20 border border-rose-400/60 text-rose-300 flex items-center gap-1.5 transition-all';
+    } else if (i === stNum) {
+     stepEl.className = 'px-2.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/60 text-amber-200 flex items-center gap-1.5 shadow-[0_0_10px_rgba(245,158,11,0.2)] transition-all';
+    } else {
+     stepEl.className = 'px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-500 flex items-center gap-1.5 transition-all';
+    }
+   }
+  }
+
+  function executeApolloCsvImportRequestWithLiveProgress({ formData, jobId, sourceMode, displayFilename }) {
+   return new Promise((resolve, reject) => {
+    let highestPercent = 8;
+    let currentStage = 1;
+    let isDone = false;
+
+    const initialTitle = sourceMode === 'local'
+     ? `Stage 1/4 • Uploading "${displayFilename}" & Saving to Files Modal...`
+     : `Stage 1/4 • Reading "${displayFilename}" from Files Modal...`;
+    const initialDetail = sourceMode === 'local'
+     ? 'Uploading CSV file from your Local Device directly to the Files Modal...'
+     : 'Loading CSV bytes from Files Vault storage...';
+
+    updateApolloCsvImportProgressUI({
+     visible: true,
+     stageNumber: 1,
+     percent: highestPercent,
+     title: initialTitle,
+     detail: initialDetail,
+     state: 'running'
+    });
+
+    // Poll backend job progress every 180ms while request is in flight
+    const pollTimer = setInterval(async () => {
+     if (isDone) return;
+     try {
+      const pRes = await fetch(`/api/contacts/import/apollo-csv/progress/${encodeURIComponent(jobId)}`);
+      if (!pRes.ok || isDone) return;
+      const pData = await pRes.json();
+      if (isDone || !pData) return;
+      const srvPct = Number(pData.percent || 0);
+      const srvStage = Number(pData.stage_number || currentStage);
+      if (srvPct >= highestPercent) {
+       highestPercent = Math.min(96, srvPct);
+      } else if (highestPercent < 90) {
+       highestPercent = Math.min(90, highestPercent + 4);
+      }
+      currentStage = Math.max(currentStage, srvStage);
+      updateApolloCsvImportProgressUI({
+       visible: true,
+       stageNumber: currentStage,
+       percent: highestPercent,
+       title: pData.stage_title || initialTitle,
+       detail: pData.detail || initialDetail,
+       state: 'running'
+      });
+     } catch (_) {}
+    }, 180);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/contacts/import/apollo-csv', true);
+
+    if (xhr.upload && sourceMode === 'local') {
+     xhr.upload.onprogress = (evt) => {
+      if (isDone || !evt.lengthComputable || evt.total <= 0) return;
+      const uploadRatio = evt.loaded / evt.total;
+      const uploadPct = Math.min(30, Math.max(10, Math.round(uploadRatio * 30)));
+      if (uploadPct > highestPercent) {
+       highestPercent = uploadPct;
+       updateApolloCsvImportProgressUI({
+        visible: true,
+        stageNumber: 1,
+        percent: highestPercent,
+        title: `Stage 1/4 • Uploading "${displayFilename}" to Files Modal (${Math.round(uploadRatio * 100)}%)...`,
+        detail: `Transferred ${(evt.loaded / 1024).toFixed(1)} KB of ${(evt.total / 1024).toFixed(1)} KB • Auto-saving to Files Modal...`,
+        state: 'running'
+       });
+      }
+     };
+    }
+
+    xhr.onload = async () => {
+     isDone = true;
+     clearInterval(pollTimer);
+     let data = {};
+     try {
+      data = JSON.parse(xhr.responseText || '{}');
+     } catch (_) {
+      data = { status: 'error', message: 'Invalid server response while importing Apollo CSV.' };
+     }
+     if (xhr.status >= 200 && xhr.status < 300 && data.status === 'success') {
+      // Ensure user clearly sees Stages 2 -> 3 -> 4 if the server finished super fast
+      if (highestPercent < 55) {
+       updateApolloCsvImportProgressUI({
+        visible: true,
+        stageNumber: 2,
+        percent: 58,
+        title: 'Stage 2/4 • Extracting Apollo Columns (Col E Company, Col F Email, Col T Phone)...',
+        detail: `Parsed ${data.imported_count || 0} lead row(s) from "${displayFilename}"...`,
+        state: 'running'
+       });
+       await new Promise(r => setTimeout(r, 180));
+      }
+      if (highestPercent < 85) {
+       updateApolloCsvImportProgressUI({
+        visible: true,
+        stageNumber: 3,
+        percent: 88,
+        title: `Stage 3/4 • Importing & Deduplicating ${data.imported_count || 0} Leads into CRM...`,
+        detail: `Adding ${data.added_count || 0} new lead(s) & merging ${data.updated_count || 0} existing contact(s)...`,
+        state: 'running'
+       });
+       await new Promise(r => setTimeout(r, 180));
+      }
+      updateApolloCsvImportProgressUI({
+       visible: true,
+       stageNumber: 4,
+       percent: 100,
+       title: `Stage 4/4 • Import Complete! (${data.imported_count || 0} Apollo Leads Imported)`,
+       detail: data.message || `Successfully imported ${data.imported_count || 0} lead(s) into Contacts CRM!`,
+       state: 'completed'
+      });
+      resolve({ ok: true, status: xhr.status, data });
+     } else {
+      const errMsg = data.message || 'Could not import Apollo CSV file.';
+      updateApolloCsvImportProgressUI({
+       visible: true,
+       stageNumber: currentStage,
+       percent: 100,
+       title: 'Import Failed • Please Check CSV File',
+       detail: errMsg,
+       state: 'error'
+      });
+      resolve({ ok: false, status: xhr.status, data });
+     }
+    };
+
+    xhr.onerror = () => {
+     isDone = true;
+     clearInterval(pollTimer);
+     updateApolloCsvImportProgressUI({
+      visible: true,
+      stageNumber: currentStage,
+      percent: 100,
+      title: 'Network Error During Import',
+      detail: 'Connection interrupted while importing Apollo CSV.',
+      state: 'error'
+     });
+     reject(new Error('Network error while importing Apollo CSV.'));
+    };
+
+    xhr.send(formData);
+   });
+  }
+
   function openApolloCsvImportModal(event) {
    if (event) event.stopPropagation();
    closeImportContactsSubmenu();
+   updateApolloCsvImportProgressUI({ visible: false });
    const resBanner = document.getElementById('apollo-csv-import-result-banner');
    if (resBanner) {
     resBanner.classList.add('hidden');
@@ -1698,29 +1943,31 @@
    const resBanner = document.getElementById('apollo-csv-import-result-banner');
    const catSelect = document.getElementById('apollo-csv-category-select');
    const categoryOverride = catSelect ? catSelect.value : 'auto';
+   const jobId = `apollo_job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
    if (localBox) {
     localBox.innerHTML = `<span class="truncate text-amber-300"><i class="fas fa-circle-notch fa-spin mr-1.5"></i>Saving "${escapeHTML(file.name)}" to Files Modal &amp; importing leads...</span>`;
    }
    if (resBanner) {
-    resBanner.className = 'p-3.5 rounded-xl bg-amber-500/15 border border-amber-400/50 text-xs text-amber-200 flex items-center gap-2';
-    resBanner.innerHTML = `<i class="fas fa-circle-notch fa-spin text-amber-300"></i> <span>Uploading <strong>${escapeHTML(file.name)}</strong> to <strong>Files Modal</strong> and extracting Apollo columns (Col E Company, Col F Email, Col T Contact Number)...</span>`;
-    resBanner.classList.remove('hidden');
+    resBanner.classList.add('hidden');
+    resBanner.innerHTML = '';
    }
 
    try {
     const formData = new FormData();
     formData.append('source_mode', 'local');
     formData.append('category_override', categoryOverride);
+    formData.append('job_id', jobId);
     formData.append('file', file);
 
-    const res = await fetch('/api/contacts/import/apollo-csv', {
-     method: 'POST',
-     body: formData
+    const { ok, data } = await executeApolloCsvImportRequestWithLiveProgress({
+     formData,
+     jobId,
+     sourceMode: 'local',
+     displayFilename: file.name
     });
-    const data = await res.json();
 
-    if (!res.ok || data.status !== 'success') {
+    if (!ok || data.status !== 'success') {
      const errMsg = data.message || 'Could not import Apollo CSV file.';
      if (localBox) {
       localBox.innerHTML = `<span class="truncate text-rose-300"><i class="fas fa-exclamation-triangle mr-1"></i>${escapeHTML(errMsg)}</span>`;
@@ -1728,6 +1975,7 @@
      if (resBanner) {
       resBanner.className = 'p-3.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200 space-y-1';
       resBanner.innerHTML = `<div><i class="fas fa-times-circle mr-1"></i><strong>Import Failed:</strong> ${escapeHTML(errMsg)}</div>`;
+      resBanner.classList.remove('hidden');
      }
      showToast('⚠️ ' + errMsg);
      return;
@@ -1769,6 +2017,7 @@
        • <strong>Extracted Columns:</strong> Col E (Company Name) • Col F (Email Address) • Col T (Contact Number)
       </div>
      `;
+     resBanner.classList.remove('hidden');
     }
     showToast(`✅ Imported ${data.imported_count || 0} Apollo contact(s) & saved "${file.name}" to Files Modal (${savedFid})!`);
    } catch (err) {
@@ -1865,32 +2114,36 @@
    const resBanner = document.getElementById('apollo-csv-import-result-banner');
    const catSelect = document.getElementById('apollo-csv-category-select');
    const categoryOverride = catSelect ? catSelect.value : 'auto';
+   const jobId = `apollo_job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
    const origHTML = btnEl ? btnEl.innerHTML : '';
    if (btnEl) {
     btnEl.disabled = true;
     btnEl.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Importing...</span>`;
    }
    if (resBanner) {
-    resBanner.className = 'p-3.5 rounded-xl bg-gb-cyan/15 border border-gb-cyan/50 text-xs text-gb-cyan flex items-center gap-2';
-    resBanner.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Reading <strong>${escapeHTML(filename || fileId)}</strong> from Files Modal and extracting Col E (Company), Col F (Email), Col T (Contact Number)...</span>`;
-    resBanner.classList.remove('hidden');
+    resBanner.classList.add('hidden');
+    resBanner.innerHTML = '';
    }
    try {
     const formData = new FormData();
     formData.append('source_mode', 'files_modal');
     formData.append('file_id', fileId);
     formData.append('category_override', categoryOverride);
+    formData.append('job_id', jobId);
 
-    const res = await fetch('/api/contacts/import/apollo-csv', {
-     method: 'POST',
-     body: formData
+    const { ok, data } = await executeApolloCsvImportRequestWithLiveProgress({
+     formData,
+     jobId,
+     sourceMode: 'files_modal',
+     displayFilename: filename || fileId
     });
-    const data = await res.json();
-    if (!res.ok || data.status !== 'success') {
+
+    if (!ok || data.status !== 'success') {
      const errMsg = data.message || 'Could not import CSV from Files Modal.';
      if (resBanner) {
       resBanner.className = 'p-3.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200';
       resBanner.innerHTML = `<i class="fas fa-times-circle mr-1"></i><strong>Import Failed:</strong> ${escapeHTML(errMsg)}`;
+      resBanner.classList.remove('hidden');
      }
      showToast('⚠️ ' + errMsg);
      return;
@@ -1916,6 +2169,7 @@
        • <strong>Extracted Columns:</strong> Col E (Company Name) • Col F (Email Address) • Col T (Contact Number)
       </div>
      `;
+     resBanner.classList.remove('hidden');
     }
     showToast(`✅ Imported ${data.imported_count || 0} Apollo contact(s) from Files Modal (${filename || fileId})!`);
    } catch (err) {

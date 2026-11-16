@@ -763,7 +763,8 @@ def save_uploaded_bytes_to_files_vault(
  file_bytes: bytes,
  filename: str,
  content_type: str = "text/csv",
- notes: str = ""
+ notes: str = "",
+ async_gdrive: bool = False
 ) -> Dict[str, Any]:
  """
  Saves an uploaded file (such as an Apollo CSV from Local Device) directly into the 'Files' Modal
@@ -779,13 +780,28 @@ def save_uploaded_bytes_to_files_vault(
  py_file_id = _generate_python_automation_file_id(existing_ids)
  existing_ids.add(py_file_id)
  size_bytes = len(file_bytes or b"")
- up_info = _upload_vault_file_bytes_with_fallback(
-  file_bytes=file_bytes,
-  orig_name=orig_name,
-  py_file_id=py_file_id,
-  mime_type=mime_type,
-  allow_local_fallback=True
- )
+ if async_gdrive:
+  _save_local_vault_file_bytes(py_file_id, file_bytes)
+  stream_u = f"/api/files/{py_file_id}/stream"
+  up_info = {
+   "gdrive_file_id": "",
+   "gdrive_file_name": orig_name,
+   "web_view_link": "",
+   "download_url": stream_u,
+   "preview_url": stream_u,
+   "zernio_media_url": "",
+   "zernio_media_ts": 0.0,
+   "storage_provider": "google_drive" if is_gdrive_authorized() else "files_vault",
+   "bucket_name": GOOGLE_DRIVE_FOLDER_NAME
+  }
+ else:
+  up_info = _upload_vault_file_bytes_with_fallback(
+   file_bytes=file_bytes,
+   orig_name=orig_name,
+   py_file_id=py_file_id,
+   mime_type=mime_type,
+   allow_local_fallback=True
+  )
  now_manila = datetime.now(manila_tz)
  record = {
   "file_id": py_file_id,
@@ -810,6 +826,31 @@ def save_uploaded_bytes_to_files_vault(
  with FILES_VAULT_LOCK:
   FILES_VAULT_STORE["files"] = existing_files
  _save_files_vault_store()
+ if async_gdrive and is_gdrive_authorized():
+  def _bg_sync_csv_to_gdrive():
+   try:
+    g_res = upload_media_to_gdrive(
+     file_bytes=file_bytes,
+     original_filename=orig_name,
+     media_type="file",
+     is_thumb=False,
+     custom_subfolder="files_vault",
+     custom_file_prefix=py_file_id
+    )
+    g_fid = str(g_res.get("gdrive_file_id") or "").strip()
+    if g_fid:
+     with FILES_VAULT_LOCK:
+      for f_item in (FILES_VAULT_STORE.get("files") or []):
+       if str(f_item.get("file_id") or "") == py_file_id:
+        f_item["gdrive_file_id"] = g_fid
+        f_item["gdrive_file_name"] = str(g_res.get("gdrive_file_name") or orig_name)
+        f_item["web_view_link"] = str(g_res.get("web_view_link") or f"https://drive.google.com/file/d/{g_fid}/view")
+        f_item["storage_provider"] = "google_drive"
+        break
+     _save_files_vault_store()
+   except Exception as bg_err:
+    print(f"[⚠️ BG GDRIVE CSV SYNC WARNING] ({orig_name}): {bg_err}")
+  threading.Thread(target=_bg_sync_csv_to_gdrive, daemon=True).start()
  return {
   "record": _refresh_vault_file_entry_urls(record),
   "files": [_refresh_vault_file_entry_urls(f) for f in existing_files]
