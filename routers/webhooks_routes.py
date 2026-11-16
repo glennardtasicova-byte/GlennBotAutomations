@@ -394,7 +394,10 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
     or ""
     ).strip()
     sender_psid = str((m_obj.get("sender") or {}).get("id") or "").strip()
-    conv_id = plat_conv_id or z_conv_id or sender_psid or f"conv_{uuid.uuid4().hex[:8]}"
+    if (plat or "").strip().lower() == "whatsapp" and z_conv_id:
+     conv_id = z_conv_id
+    else:
+     conv_id = plat_conv_id or z_conv_id or sender_psid or f"conv_{uuid.uuid4().hex[:8]}"
     p_info = _extract_participant_from_conversation_obj(conv_obj or m_obj, db_acc_id, acc_name, plat)
     parsed_msg = _parse_single_message_item(
     m_obj,
@@ -418,7 +421,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
     part_name = (
     p_info["participant_name"]
     if parsed_msg["is_own"]
-    else (parsed_msg["sender_name"] if parsed_msg["sender_name"] not in ("User", "Facebook User", "Instagram User", "TikTok User") else p_info["participant_name"])
+    else (parsed_msg["sender_name"] if _normalize_participant_name_key(parsed_msg["sender_name"]) else p_info["participant_name"])
     )
     # If participant name is still generic (e.g. 'Facebook User' on a Private Reply webhook), resolve from commenter identity
     if not _normalize_participant_name_key(part_name):
@@ -468,7 +471,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
       "conv_key": ckey,
       "conversation_id": conv_id,
       "platform_conversation_id": plat_conv_id or conv_id,
-      "zernio_conversation_id": z_conv_id,
+      "zernio_conversation_id": z_conv_id or conv_id,
       "alternate_conversation_ids": alt_ids,
       "platform": plat,
       "account_id": db_acc_id,
@@ -479,6 +482,7 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
       "participant_id": part_id,
       "participant_name": part_name,
       "participant_handle": p_info["participant_handle"],
+      "participant_phone": p_info.get("participant_phone") or (plat_conv_id if plat == "whatsapp" else ""),
       "participant_avatar": parsed_msg["sender_avatar"] if not parsed_msg["is_own"] else p_info["participant_avatar"],
       "last_message_text": parsed_msg["message"],
       "last_message_is_own": parsed_msg["is_own"],
@@ -500,7 +504,11 @@ def _receive_webhook_event_sync(request: Request, body: Dict[str, Any], raw_byte
      if z_conv_id:
       existing_conv["zernio_conversation_id"] = z_conv_id
      if conv_id:
-      existing_conv["conversation_id"] = conv_id
+      prev_cid_val = str(existing_conv.get("conversation_id") or "").strip()
+      if not (plat == "whatsapp" and len(prev_cid_val) == 24 and len(conv_id) != 24):
+       existing_conv["conversation_id"] = conv_id
+     if p_info.get("participant_phone") and not existing_conv.get("participant_phone"):
+      existing_conv["participant_phone"] = p_info["participant_phone"]
      if _normalize_participant_name_key(part_name) and not _normalize_participant_name_key(existing_conv.get("participant_name") or ""):
       existing_conv["participant_name"] = part_name
      ex_alts = list(existing_conv.get("alternate_conversation_ids") or [])

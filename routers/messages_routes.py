@@ -211,7 +211,7 @@ participant_fallback_avatar: str = ""
  )
  if is_own and not sender_name:
   sender_name = account_name or platform.capitalize()
- elif not is_own and (not sender_name or sender_name in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User")):
+ elif not is_own and (not sender_name or sender_name in ("User", "TikTok User", "Facebook User", "Instagram User", "YouTube User", "WhatsApp User", "Telegram User")):
   sender_name = participant_fallback_name or f"{platform.capitalize()} User"
   if not sender_avatar and participant_fallback_avatar:
    sender_avatar = participant_fallback_avatar
@@ -336,6 +336,8 @@ def _normalize_participant_name_key(name: str) -> str:
  "instagram user",
  "tiktok user",
  "youtube user",
+ "whatsapp user",
+ "telegram user",
  "unknown",
  "customer",
  "portfolio client",
@@ -344,6 +346,42 @@ def _normalize_participant_name_key(name: str) -> str:
  ):
   return ""
  return cleaned
+
+def _extract_comparable_phone_digits(val: Any) -> str:
+ raw = str(val or "").strip()
+ if not raw or raw.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
+  return ""
+ if "@" in raw:
+  raw = raw.split("@", 1)[0].strip()
+ if raw.startswith("wa_") or raw.startswith("sms_"):
+  raw = raw.split("_", 1)[1].strip()
+ # Ignore 24-hex Mongo/Zernio ObjectIds that happen to contain digits
+ if re.fullmatch(r"[0-9a-fA-F]{24}", raw) and not raw.isdigit():
+  return ""
+ digits = re.sub(r"\D", "", raw)
+ if 7 <= len(digits) <= 15:
+  if len(digits) == 11 and digits.startswith("09"):
+   return "63" + digits[1:]
+  if len(digits) == 10 and digits.startswith("9"):
+   return "63" + digits
+  return digits
+ return ""
+
+def _are_phone_or_participant_ids_matching(val_a: Any, val_b: Any, platform: str = "") -> bool:
+ sa = str(val_a or "").strip()
+ sb = str(val_b or "").strip()
+ if not sa or not sb:
+  return False
+ if sa == sb:
+  return True
+ da = _extract_comparable_phone_digits(sa)
+ db = _extract_comparable_phone_digits(sb)
+ if da and db:
+  if da == db:
+   return True
+  if len(da) >= 10 and len(db) >= 10 and da[-10:] == db[-10:]:
+   return True
+ return False
 RECENT_PRIVATE_REPLY_RECIPIENTS: List[Dict[str, Any]] = []
 def register_private_reply_recipient(
 platform: str,
@@ -518,7 +556,7 @@ platform: str
    c_phone = str(cand.get("phone") or cand.get("phoneNumber") or cand.get("wa_id") or "").strip()
    c_email = str(cand.get("email") or cand.get("emailAddress") or "").strip()
    c_av = str(cand.get("avatar") or cand.get("avatarUrl") or cand.get("profilePictureUrl") or cand.get("picture") or "").strip()
-   c_digits = re.sub(r"\D", (c_phone or c_id or ""), "")
+   c_digits = re.sub(r"\D", "", str(c_phone or c_id or ""))
    is_distinct_wa_contact = bool(
    (platform or "").strip().lower() == "whatsapp"
    and c_digits
@@ -557,7 +595,7 @@ platform: str
     c_phone = str(pt.get("phone") or pt.get("phoneNumber") or pt.get("wa_id") or "").strip()
     c_email = str(pt.get("email") or pt.get("emailAddress") or "").strip()
     c_av = str(pt.get("avatar") or pt.get("avatarUrl") or pt.get("profilePictureUrl") or pt.get("picture") or "").strip()
-    pt_digits = re.sub(r"\D", (c_phone or c_id or ""), "")
+    pt_digits = re.sub(r"\D", "", str(c_phone or c_id or ""))
     is_distinct_wa_pt = bool(
     (platform or "").strip().lower() == "whatsapp"
     and pt_digits
@@ -803,32 +841,38 @@ def _fetch_conversations_for_connected_account(acc_item: Dict[str, Any], seen_co
   if not parsed_msgs and last_text and last_text != "Start a conversation":
    # For top recent conversations (especially WhatsApp where /inbox/conversations only returns summaries),
    # fetch the latest messages from /inbox/conversations/{conv_id}/messages so real message IDs and directions are captured!
-   if order_idx < 4 and conv_id and used_api_key:
-    try:
-     safe_c = requests.utils.quote(conv_id, safe="")
-     m_resp = HTTP_SESSION.get(
-     f"{ZERNIO_BASE_URL}/inbox/conversations/{safe_c}/messages",
-     params={"accountId": effective_z_acc_id, "limit": 15},
-     headers=get_zernio_headers(used_api_key),
-     timeout=8
-     )
-     if m_resp.status_code == 200:
-      m_list = extract_list_from_api_payload(m_resp.json() if m_resp.text else {}) or []
-      for m_item in m_list:
-       if isinstance(m_item, dict):
-        parsed_msgs.append(
-        _parse_single_message_item(
-        m_item,
-        effective_z_acc_id,
-        acc_name,
-        platform,
-        participant_fallback_name=p_info["participant_name"],
-        participant_fallback_avatar=p_info["participant_avatar"]
-        )
-        )
-      parsed_msgs = _deduplicate_messages_list(parsed_msgs)
-    except Exception:
-     pass
+   fetch_msg_limit_idx = 10 if platform == "whatsapp" else 4
+   if order_idx < fetch_msg_limit_idx and (z_internal_conv_id or conv_id) and used_api_key:
+    for cid_fetch_try in ([z_internal_conv_id, conv_id] if z_internal_conv_id and z_internal_conv_id != conv_id else [conv_id]):
+     if not cid_fetch_try:
+      continue
+     try:
+      safe_c = requests.utils.quote(cid_fetch_try, safe="")
+      m_resp = HTTP_SESSION.get(
+      f"{ZERNIO_BASE_URL}/inbox/conversations/{safe_c}/messages",
+      params={"accountId": effective_z_acc_id, "limit": 25 if platform == "whatsapp" else 15},
+      headers=get_zernio_headers(used_api_key),
+      timeout=10
+      )
+      if m_resp.status_code == 200:
+       m_list = extract_list_from_api_payload(m_resp.json() if m_resp.text else {}) or []
+       for m_item in m_list:
+        if isinstance(m_item, dict):
+         parsed_msgs.append(
+         _parse_single_message_item(
+         m_item,
+         effective_z_acc_id,
+         acc_name,
+         platform,
+         participant_fallback_name=p_info["participant_name"],
+         participant_fallback_avatar=p_info["participant_avatar"]
+         )
+         )
+       parsed_msgs = _deduplicate_messages_list(parsed_msgs)
+       if parsed_msgs:
+        break
+     except Exception:
+      pass
   if not parsed_msgs and last_text and last_text != "Start a conversation":
    dir_hint = str(item.get("lastMessageDirection") or item.get("direction") or "").strip().lower()
    synth_raw = dict(item)
@@ -962,9 +1006,25 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
   c_acc_id = str(c_obj.get("account_id") or "").strip()
   c_acc_name = (c_obj.get("account_name") or "").strip()
   c_name_clean = c_acc_name.lstrip("@").lower()
+  c_cid_check = str(c_obj.get("conversation_id") or "").strip()
+  is_portfolio_thread = bool(
+  c_obj.get("is_portfolio_live_dm")
+  or c_cid_check.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
+  )
+  # Remap Portfolio Live DM threads or WhatsApp threads that used legacy WhatsApp ID 6adda70399e7b30829e8859c
+  if c_acc_id == "6adda70399e7b30829e8859c" and (is_portfolio_thread or c_plat == "whatsapp") and "happyfinds" not in c_name_clean:
+   c_obj["account_id"] = "6af6210fb722435238788b8f"
+   c_obj["zernio_account_id"] = "6af6210fb722435238788b8f"
+   c_acc_id = "6af6210fb722435238788b8f"
+   if not c_acc_name or "happyfinds" in c_name_clean:
+    c_obj["account_name"] = "Glennard Tasico"
+    c_acc_name = "Glennard Tasico"
+    c_name_clean = "glennard tasico"
+   changed = True
   # Purge leftover conversations from disconnected legacy WhatsApp account HappyFinds Hub (6adda70399e7b30829e8859c)
   if (
-  (c_acc_id == "6adda70399e7b30829e8859c" or "happyfinds" in c_name_clean)
+  not is_portfolio_thread
+  and (c_acc_id == "6adda70399e7b30829e8859c" or "happyfinds" in c_name_clean)
   and "6adda70399e7b30829e8859c" not in acc_by_id
   ):
    convs_store.pop(ckey, None)
@@ -1107,8 +1167,15 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
   p_id = str(c_obj.get("participant_id") or "").strip()
   if p_id and p_id in (c_acc_id, str(c_obj.get("zernio_account_id") or "")):
    p_id = ""
-  # Prefer normalized participant name when available so webhook PSID vs thread ID still group together
-  person_ident = p_name_norm or p_id
+  # On WhatsApp/SMS, prefer normalized phone digits so threads for the same phone number always merge cleanly
+  wa_phone_ident = ""
+  if c_plat in ("whatsapp", "sms"):
+   for ph_cand in (c_obj.get("participant_phone"), p_id, c_obj.get("participant_handle"), c_obj.get("platform_conversation_id"), c_cid):
+    ph_d = _extract_comparable_phone_digits(ph_cand)
+    if ph_d and "9175497760" not in ph_d:
+     wa_phone_ident = ph_d[-10:] if len(ph_d) >= 10 else ph_d
+     break
+  person_ident = wa_phone_ident or p_name_norm or p_id
   if not person_ident:
    continue
   group_key = f"{c_plat}::{page_ident}::{person_ident}"
@@ -1150,10 +1217,15 @@ def deduplicate_and_merge_conversations_store(connected_items: Optional[List[Dic
      alt_ids.append(str(d_cid))
    if not primary_conv.get("participant_id") and dup_conv.get("participant_id"):
     primary_conv["participant_id"] = dup_conv["participant_id"]
+   if not primary_conv.get("participant_phone") and dup_conv.get("participant_phone"):
+    primary_conv["participant_phone"] = dup_conv["participant_phone"]
    if not primary_conv.get("participant_avatar") and dup_conv.get("participant_avatar"):
     primary_conv["participant_avatar"] = dup_conv["participant_avatar"]
-   # IMPORTANT: Do NOT copy dup_conv's older platform_conversation_id or zernio_conversation_id
-   # onto primary_conv, because dup_conv is an older thread! Keep them only in alternate_conversation_ids.
+   # If primary_conv only has a phone number as zernio_conversation_id while dup_conv has a real 24-hex Zernio ObjectId, preserve it!
+   prim_z_cid = str(primary_conv.get("zernio_conversation_id") or "").strip()
+   dup_z_cid = str(dup_conv.get("zernio_conversation_id") or dup_conv.get("conversation_id") or "").strip()
+   if dup_z_cid and re.fullmatch(r"[0-9a-fA-F]{24}", dup_z_cid) and not re.fullmatch(r"[0-9a-fA-F]{24}", prim_z_cid):
+    primary_conv["zernio_conversation_id"] = dup_z_cid
    convs_store.pop(dup_key, None)
    changed = True
   merged_msgs = _deduplicate_messages_list(all_msgs)
@@ -1219,7 +1291,7 @@ participant_name: str = ""
   stored_ids.discard("")
   if cand_id_set & stored_ids:
    return c_obj
- # 3. Match by participant_id or participant_name on the same account/page (skip isolated Portfolio Live DM threads)
+ # 3. Match by participant_id, phone number, or participant_name on the same account/page (skip isolated Portfolio Live DM threads)
  for k, c_obj in convs_store.items():
   if not isinstance(c_obj, dict) or not _conv_belongs_to_same_page(c_obj):
    continue
@@ -1227,8 +1299,16 @@ participant_name: str = ""
   if c_obj.get("is_portfolio_live_dm") or c_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_")):
    continue
   c_pid = str(c_obj.get("participant_id") or "").strip()
-  if part_id_clean and c_pid and part_id_clean == c_pid and part_id_clean not in valid_acc_ids:
-   return c_obj
+  if part_id_clean and c_pid and part_id_clean not in valid_acc_ids:
+   if part_id_clean == c_pid or _are_phone_or_participant_ids_matching(part_id_clean, c_pid, plat_clean):
+    return c_obj
+  if plat_clean in ("whatsapp", "sms"):
+   for cand_ph in [part_id_clean] + list(cand_id_set):
+    if not cand_ph:
+     continue
+    for stored_ph in (c_pid, c_obj.get("participant_phone"), c_obj.get("participant_handle"), c_obj.get("platform_conversation_id"), c_cid):
+     if stored_ph and _are_phone_or_participant_ids_matching(cand_ph, stored_ph, plat_clean):
+      return c_obj
   c_pname_norm = _normalize_participant_name_key(c_obj.get("participant_name") or "")
   if part_name_norm and c_pname_norm and part_name_norm == c_pname_norm:
    return c_obj
@@ -1312,8 +1392,13 @@ def sync_all_messages_to_cloudinary(force_refresh: bool = False) -> bool:
        else:
         if not prev_c.get("platform_conversation_id") and fc.get("platform_conversation_id"):
          prev_c["platform_conversation_id"] = fc["platform_conversation_id"]
-        if not prev_c.get("zernio_conversation_id") and fc.get("zernio_conversation_id"):
-         prev_c["zernio_conversation_id"] = fc["zernio_conversation_id"]
+        fc_z_cid = str(fc.get("zernio_conversation_id") or fc.get("conversation_id") or "").strip()
+        prev_z_cid = str(prev_c.get("zernio_conversation_id") or "").strip()
+        if fc_z_cid and (not prev_z_cid or (re.fullmatch(r"[0-9a-fA-F]{24}", fc_z_cid) and not re.fullmatch(r"[0-9a-fA-F]{24}", prev_z_cid))):
+         prev_c["zernio_conversation_id"] = fc_z_cid
+         if re.fullmatch(r"[0-9a-fA-F]{24}", fc_z_cid) and not re.fullmatch(r"[0-9a-fA-F]{24}", str(prev_c.get("conversation_id") or "")):
+          prev_c["conversation_id"] = fc_z_cid
+          any_change = True
        alt_ids = list(prev_c.get("alternate_conversation_ids") or [])
        for cid_c in (
        prev_c.get("conversation_id"),
@@ -1341,7 +1426,7 @@ def sync_all_messages_to_cloudinary(force_refresh: bool = False) -> bool:
        if new_incoming_msgs and "_notify_n8n_new_message" in globals():
         # Trigger Auto DM with the full merged thread history on the latest incoming message
         _notify_n8n_new_message(prev_c, new_incoming_msgs[-1], is_background_sync=True)
-       if fc.get("participant_name") and fc["participant_name"] not in ("User", "Facebook User", "Instagram User", "TikTok User"):
+       if fc.get("participant_name") and _normalize_participant_name_key(fc["participant_name"]):
         prev_c["participant_name"] = fc["participant_name"]
        if fc.get("participant_id") and (is_fc_newer or not prev_c.get("participant_id")):
         prev_c["participant_id"] = fc["participant_id"]
@@ -1438,6 +1523,8 @@ page_limits: str = ""
       k, v = pair.split(":", 1)
       if v.strip().isdigit():
        custom_limits[k.strip()] = max(1, int(v.strip()))
+  if str(account_id or "").strip() == "6adda70399e7b30829e8859c":
+   account_id = "6af6210fb722435238788b8f"
   seen_conv_map = _get_cached_seen_messages_map(ttl_sec=3.0)
   convs_store = CLOUDINARY_MESSAGES_STORE.get("conversations") or {}
   grouped_by_page: Dict[str, List[Dict[str, Any]]] = {str(a.get("account_id") or ""): [] for a in connected_items}
@@ -1446,16 +1533,22 @@ page_limits: str = ""
     continue
    c_acc_id = str(c_obj.get("account_id") or "").strip()
    c_plat = (c_obj.get("platform") or "").strip().lower()
+   c_cid = str(c_obj.get("conversation_id") or "").strip()
+   if c_acc_id == "6adda70399e7b30829e8859c" and (c_plat == "whatsapp" or c_cid.startswith("wa_live_")):
+    c_acc_id = "6af6210fb722435238788b8f"
+    c_obj["account_id"] = "6af6210fb722435238788b8f"
    if c_acc_id and c_acc_id not in connected_by_acc_id and (
    c_acc_id == TEXTBEE_ACCOUNT_ID
-   or c_plat == "sms"
+   or c_plat in ("sms", "whatsapp")
+   or c_obj.get("is_portfolio_live_dm")
+   or c_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
    ):
     synth_acc = {
     "account_id": c_acc_id,
     "zernio_account_id": str(c_obj.get("zernio_account_id") or c_acc_id),
     "platform": c_plat or "sms",
-    "account_name": str(c_obj.get("account_name") or "SMS Gateway (SIM 2)"),
-    "username": str(c_obj.get("account_username") or ""),
+    "account_name": str(c_obj.get("account_name") or ("Glennard Tasico" if c_plat == "whatsapp" else "SMS Gateway (SIM 2)")),
+    "username": str(c_obj.get("account_username") or c_obj.get("username") or ("+63 917 549 7760" if c_plat == "whatsapp" else "")),
     "avatar_url": ""
     }
     connected_by_acc_id[c_acc_id] = synth_acc
@@ -1556,39 +1649,76 @@ force: bool = True
   convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
   target_conv = None
   target_key = ""
-  is_req_portfolio_dm = str(conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
-  if account_id and f"{account_id}_{conversation_id}" in convs_store:
-   target_key = f"{account_id}_{conversation_id}"
+  clean_req_cid = str(conversation_id or "").strip()
+  clean_req_aid = str(account_id or "").strip()
+  if clean_req_aid == "6adda70399e7b30829e8859c":
+   clean_req_aid = "6af6210fb722435238788b8f"
+  is_req_portfolio_dm = clean_req_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
+  if clean_req_aid and f"{clean_req_aid}_{clean_req_cid}" in convs_store:
+   target_key = f"{clean_req_aid}_{clean_req_cid}"
+   target_conv = convs_store[target_key]
+  elif account_id and f"{account_id}_{clean_req_cid}" in convs_store:
+   target_key = f"{account_id}_{clean_req_cid}"
    target_conv = convs_store[target_key]
   else:
    for k, c_obj in convs_store.items():
     if not isinstance(c_obj, dict):
      continue
     if is_req_portfolio_dm:
-     if str(c_obj.get("conversation_id")) == str(conversation_id) or k == str(conversation_id):
-      if not account_id or str(c_obj.get("account_id")) == str(account_id):
-       target_key = k
-       target_conv = c_obj
-       break
-     continue
-    alt_ids = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
-    if (
-    str(c_obj.get("conversation_id")) == str(conversation_id)
-    or str(c_obj.get("platform_conversation_id")) == str(conversation_id)
-    or str(c_obj.get("zernio_conversation_id")) == str(conversation_id)
-    or str(conversation_id) in alt_ids
-    or k == str(conversation_id)
-    ):
-     if not account_id or str(c_obj.get("account_id")) == str(account_id):
+     if (
+     str(c_obj.get("conversation_id") or "").strip() == clean_req_cid
+     or k == clean_req_cid
+     or k.endswith(f"_{clean_req_cid}")
+     ):
       target_key = k
       target_conv = c_obj
       break
+     continue
+    alt_ids = [str(x) for x in (c_obj.get("alternate_conversation_ids") or []) if x]
+    c_acc_str = str(c_obj.get("account_id") or "").strip()
+    acc_matches = (
+    not clean_req_aid
+    or c_acc_str == clean_req_aid
+    or (clean_req_aid in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c") and c_acc_str in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c"))
+    )
+    if (
+    str(c_obj.get("conversation_id")) == clean_req_cid
+    or str(c_obj.get("platform_conversation_id")) == clean_req_cid
+    or str(c_obj.get("zernio_conversation_id")) == clean_req_cid
+    or clean_req_cid in alt_ids
+    or k == clean_req_cid
+    ):
+     if acc_matches:
+      target_key = k
+      target_conv = c_obj
+      break
+    if acc_matches and str(c_obj.get("platform") or "").lower() in ("whatsapp", "sms"):
+     for stored_ph in (c_obj.get("participant_id"), c_obj.get("participant_phone"), c_obj.get("platform_conversation_id"), c_obj.get("conversation_id")):
+      if stored_ph and _are_phone_or_participant_ids_matching(clean_req_cid, stored_ph, str(c_obj.get("platform") or "")):
+       target_key = k
+       target_conv = c_obj
+       break
+     if target_conv:
+      break
   if not target_conv and is_req_portfolio_dm:
-   clean_cid = str(conversation_id).strip()
-   eff_plat = "instagram" if clean_cid.startswith("ig_live_") else "facebook"
-   default_acc_id = "6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6"
-   eff_acc_id = str(account_id or default_acc_id).strip()
-   eff_acc_name = "GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations"
+   clean_cid = clean_req_cid
+   eff_plat = (
+   "whatsapp" if clean_cid.startswith("wa_live_")
+   else ("instagram" if clean_cid.startswith("ig_live_") else "facebook")
+   )
+   default_acc_id = (
+   "6af6210fb722435238788b8f" if eff_plat == "whatsapp"
+   else ("6ad9e9b2e5d470e468e58d87" if eff_plat == "instagram" else "6af0b109818eb5c88d1e87a6")
+   )
+   eff_acc_id = default_acc_id if (not clean_req_aid or clean_req_aid in ("6adda70399e7b30829e8859c", "6af0b109818eb5c88d1e87a6", "6ad9e9b2e5d470e468e58d87") and eff_plat == "whatsapp") else clean_req_aid
+   eff_acc_name = (
+   "Glennard Tasico" if eff_plat == "whatsapp"
+   else ("GlennBot Automations (@glennard.tasico.va)" if eff_plat == "instagram" else "GlennBot Automations")
+   )
+   eff_uname = (
+   "+63 917 549 7760" if eff_plat == "whatsapp"
+   else ("glennard.tasico.va" if eff_plat == "instagram" else "GlennBot Automations")
+   )
    now_dt = datetime.now(pytz.timezone("Asia/Manila"))
    target_key = f"{eff_acc_id}_{clean_cid}"
    target_conv = {
@@ -1601,7 +1731,7 @@ force: bool = True
    "account_id": eff_acc_id,
    "zernio_account_id": eff_acc_id,
    "account_name": eff_acc_name,
-   "username": "glennard.tasico.va" if eff_plat == "instagram" else "GlennBot Automations",
+   "username": eff_uname,
    "account_avatar": "",
    "participant_id": f"visitor_{clean_cid}",
    "participant_name": "Portfolio Client",
@@ -1625,17 +1755,24 @@ force: bool = True
    convs_store[target_key] = target_conv
   if not target_conv:
    return {"status": "error", "message": "Conversation not found."}
-  acc_id = str(target_conv.get("account_id") or account_id or "")
+  acc_id = str(target_conv.get("account_id") or clean_req_aid or account_id or "")
+  if acc_id == "6adda70399e7b30829e8859c":
+   acc_id = "6af6210fb722435238788b8f"
+   target_conv["account_id"] = acc_id
   acc_name = target_conv.get("account_name") or ""
   platform = target_conv.get("platform") or "facebook"
   pref_key = target_conv.get("zernio_api_key") or ""
   stored_z_acc_id = str(target_conv.get("zernio_account_id") or "")
+  if stored_z_acc_id == "6adda70399e7b30829e8859c":
+   stored_z_acc_id = "6af6210fb722435238788b8f"
+   target_conv["zernio_account_id"] = stored_z_acc_id
   real_conv_id = str(target_conv.get("conversation_id") or conversation_id)
   participant_id = str(target_conv.get("participant_id") or "").strip()
   participant_name = str(target_conv.get("participant_name") or "").strip()
   is_portfolio_dm = bool(
   target_conv.get("is_portfolio_live_dm")
-  or real_conv_id.startswith(("fb_live_", "ig_live_", "portfolio_"))
+  or real_conv_id.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
+  or clean_req_cid.startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
   )
   verified_pairs = (
   []
@@ -1645,9 +1782,9 @@ force: bool = True
   if force and verified_pairs:
    cand_conv_ids: List[str] = []
    for cid_c in (
-   real_conv_id,
-   str(conversation_id).strip(),
    target_conv.get("zernio_conversation_id"),
+   real_conv_id,
+   clean_req_cid,
    target_conv.get("platform_conversation_id"),
    *(target_conv.get("alternate_conversation_ids") or []),
    participant_id
@@ -1682,15 +1819,29 @@ force: bool = True
       for idx_lc, lc in enumerate(live_convs):
        if not isinstance(lc, dict):
         continue
-       lc_id = str(lc.get("id") or lc.get("conversationId") or lc.get("platformConversationId") or "").strip()
+       lc_id = str(lc.get("id") or lc.get("conversationId") or lc.get("_id") or lc.get("platformConversationId") or "").strip()
        if not lc_id:
         continue
+       lc_plat_id = str(lc.get("platformConversationId") or lc.get("threadId") or "").strip()
        lc_pinfo = _extract_participant_from_conversation_obj(lc, z_acc_id, acc_name, platform)
        lc_pid = str(lc_pinfo.get("participant_id") or lc.get("participantId") or "").strip()
+       lc_pphone = str(lc_pinfo.get("participant_phone") or lc.get("participantPhone") or lc.get("phone") or lc.get("wa_id") or "").strip()
        lc_pname_norm = _normalize_participant_name_key(lc_pinfo.get("participant_name") or lc.get("participantName") or "")
-       id_match = bool(participant_id and lc_pid and participant_id == lc_pid)
+       id_match = bool(
+       (participant_id and lc_pid and _are_phone_or_participant_ids_matching(participant_id, lc_pid, platform))
+       or (
+       platform == "whatsapp"
+       and any(
+       _are_phone_or_participant_ids_matching(our_v, their_v, "whatsapp")
+       for our_v in (participant_id, target_conv.get("participant_phone"), real_conv_id, clean_req_cid)
+       if our_v
+       for their_v in (lc_pid, lc_pphone, lc_plat_id, lc_id)
+       if their_v
+       )
+       )
+       )
        name_match = bool(target_pname_norm and lc_pname_norm and target_pname_norm == lc_pname_norm)
-       if id_match or name_match or lc_id in cand_conv_ids:
+       if id_match or name_match or lc_id in cand_conv_ids or (lc_plat_id and lc_plat_id in cand_conv_ids):
         raw_ts = lc.get("updatedTime") or lc.get("updatedAt") or lc.get("lastMessageAt") or ""
         ts_ep = _msg_iso_to_epoch(parse_meta_timestamp(raw_ts, fallback_offset_seconds=idx_lc)["iso"])
         matched_live_cids.append((ts_ep, lc_id))
@@ -1698,8 +1849,9 @@ force: bool = True
       for idx_m, (_, m_cid) in enumerate(matched_live_cids):
        if idx_m == 0 and not newest_working_cid:
         newest_working_cid = m_cid
-       if m_cid not in cand_conv_ids:
-        cand_conv_ids.insert(idx_m, m_cid)
+       if m_cid in cand_conv_ids:
+        cand_conv_ids.remove(m_cid)
+       cand_conv_ids.insert(idx_m, m_cid)
     except Exception:
      pass
     for c_id_try in cand_conv_ids[:6]:
@@ -2092,10 +2244,14 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
   if not CLOUDINARY_MESSAGES_STORE.get("loaded"):
    load_messages_store_from_cloudinary()
   deduplicate_and_merge_conversations_store()
+  req_aid_clean = str(payload.account_id or "").strip()
+  if req_aid_clean == "6adda70399e7b30829e8859c":
+   req_aid_clean = "6af6210fb722435238788b8f"
+   payload.account_id = "6af6210fb722435238788b8f"
   convs_store = CLOUDINARY_MESSAGES_STORE.setdefault("conversations", {})
   conv_key = f"{payload.account_id}_{payload.conversation_id}"
   target_conv = convs_store.get(conv_key)
-  is_send_portfolio_dm = str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "portfolio_"))
+  is_send_portfolio_dm = str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
   if not target_conv:
    for k, c_obj in convs_store.items():
     if not isinstance(c_obj, dict):
@@ -2117,12 +2273,16 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
      target_conv = c_obj
      conv_key = k
      break
-  req_aid_clean = str(payload.account_id or "").strip()
-  if req_aid_clean == "6adda70399e7b30829e8859c":
-   req_aid_clean = "6af6210fb722435238788b8f"
-   payload.account_id = "6af6210fb722435238788b8f"
-  default_plat = "whatsapp" if req_aid_clean in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c") else (
-  "instagram" if req_aid_clean == "6ad9e9b2e5d470e468e58d87" else "facebook"
+    if str(c_obj.get("platform") or "").strip().lower() == "whatsapp":
+     c_phone_cand = str(c_obj.get("participant_phone") or c_obj.get("participant_id") or c_obj.get("platform_conversation_id") or "").strip()
+     if _are_phone_or_participant_ids_matching(payload.conversation_id, c_phone_cand) or (
+      payload.recipient_id and _are_phone_or_participant_ids_matching(payload.recipient_id, c_phone_cand)
+     ):
+      target_conv = c_obj
+      conv_key = k
+      break
+  default_plat = "whatsapp" if req_aid_clean in ("6af6210fb722435238788b8f", "6adda70399e7b30829e8859c") or str(payload.conversation_id).startswith("wa_live_") else (
+  "instagram" if req_aid_clean == "6ad9e9b2e5d470e468e58d87" or str(payload.conversation_id).startswith("ig_live_") else "facebook"
   )
   platform = ((target_conv or {}).get("platform") or default_plat).strip().lower()
   default_acc_name = (
@@ -2141,7 +2301,7 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
   stored_z_acc_id = str((target_conv or {}).get("zernio_account_id") or "").strip()
   pref_key = (target_conv or {}).get("zernio_api_key") or ""
   real_conv_id = str((target_conv or {}).get("conversation_id") or payload.conversation_id).strip()
-  participant_id = str(payload.recipient_id or (target_conv or {}).get("participant_id") or "").strip()
+  participant_id = str(payload.recipient_id or (target_conv or {}).get("participant_id") or (target_conv or {}).get("participant_phone") or "").strip()
   participant_name = str((target_conv or {}).get("participant_name") or "").strip()
   # If this conversation belongs to TextBee.dev SMS Gateway (platform == 'sms'), send directly via TextBee API
   if (
@@ -2164,7 +2324,7 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
     "conversation": sms_res.get("conversation")
     }
    return {"status": "error", "message": sms_res.get("message") or "Failed to send SMS via TextBee.dev."}
-  # If this conversation belongs to Portfolio Live Showcase (Idea B: fb_live_, ig_live_, portfolio_), record outbound reply directly
+  # If this conversation belongs to Portfolio Live Showcase (Idea B: fb_live_, ig_live_, wa_live_, portfolio_), record outbound reply directly
   if (
   bool((target_conv or {}).get("is_portfolio_live_dm"))
   or str(payload.conversation_id).strip().startswith(("fb_live_", "ig_live_", "wa_live_", "portfolio_"))
@@ -2184,7 +2344,38 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
    "created_iso": now_dt.isoformat(),
    "display_time": now_dt.strftime("%b %d, %Y • %I:%M %p")
    }
-   if target_conv is not None:
+   if target_conv is None:
+    clean_p_cid = str(payload.conversation_id).strip()
+    conv_key = f"{payload.account_id}_{clean_p_cid}"
+    target_conv = {
+    "conv_key": conv_key,
+    "conversation_id": clean_p_cid,
+    "platform_conversation_id": clean_p_cid,
+    "zernio_conversation_id": clean_p_cid,
+    "alternate_conversation_ids": [clean_p_cid],
+    "platform": platform,
+    "account_id": str(payload.account_id),
+    "zernio_account_id": str(payload.account_id),
+    "account_name": acc_name or "GlennBot Automations",
+    "account_avatar": "",
+    "participant_id": participant_id or f"visitor_{clean_p_cid}",
+    "participant_name": participant_name or "Portfolio Client",
+    "participant_handle": "",
+    "participant_phone": "",
+    "participant_email": "",
+    "participant_avatar": "",
+    "last_message_text": msg_text,
+    "last_message_is_own": True,
+    "updated_iso": sent_msg_obj["created_iso"],
+    "display_time": sent_msg_obj["display_time"],
+    "is_read": True,
+    "unread_count": 0,
+    "is_portfolio_live_dm": True,
+    "messages": [sent_msg_obj]
+    }
+    convs_store[conv_key] = target_conv
+    save_messages_store_async()
+   else:
     msgs = list(target_conv.get("messages") or [])
     target_conv["messages"] = _deduplicate_messages_list(msgs + [sent_msg_obj])
     target_conv["last_message_text"] = msg_text
@@ -2194,7 +2385,7 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
     target_conv["is_read"] = True
     target_conv["unread_count"] = 0
     save_messages_store_async()
-   return {"status": "success", "message_id": new_msg_id, "message": sent_msg_obj}
+   return {"status": "success", "message_id": new_msg_id, "message": sent_msg_obj, "conversation": target_conv}
   # Validate Telegram Social Username / Handle BEFORE attempting to send
   tg_handle_raw = str(
   (target_conv or {}).get("participant_handle")
@@ -2294,13 +2485,17 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
       candidate_conv_ids.insert(0, v)
      else:
       candidate_conv_ids.append(v)
+  # Prioritize Zernio's internal 24-hex conversation ID (`zernio_conversation_id`) FIRST!
+  # On WhatsApp, `conversation_id` from a webhook might be the phone number (`639952601753`),
+  # whereas Zernio's `POST /inbox/conversations/{id}/messages` endpoint requires Zernio's internal conversationId!
   for raw_cid in (
+  (target_conv or {}).get("zernio_conversation_id"),
   real_conv_id,
   str(payload.conversation_id).strip(),
-  (target_conv or {}).get("zernio_conversation_id"),
   (target_conv or {}).get("platform_conversation_id"),
   *((target_conv or {}).get("alternate_conversation_ids") or []),
   participant_id,
+  (target_conv or {}).get("participant_phone"),
   (target_conv or {}).get("participant_handle")
   ):
    _add_candidate_cid(raw_cid, prepend=False)
@@ -2308,25 +2503,34 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
    _add_candidate_cid(tg_handle_raw, prepend=False)
    _add_candidate_cid(tg_handle_raw.lstrip("@"), prepend=False)
    _add_candidate_cid(f"@{tg_handle_raw.lstrip('@')}", prepend=False)
-  elif platform == "whatsapp" and participant_id:
-   norm_wa = _normalize_sms_phone_number(participant_id)
-   wa_digits = re.sub(r"\D", "", norm_wa or participant_id)
-   if norm_wa:
-    _add_candidate_cid(norm_wa, prepend=False)
-   if wa_digits:
-    _add_candidate_cid(wa_digits, prepend=False)
-    _add_candidate_cid(f"{wa_digits}@s.whatsapp.net", prepend=False)
+  elif platform == "whatsapp":
+   for wa_src in (participant_id, (target_conv or {}).get("participant_phone"), (target_conv or {}).get("platform_conversation_id"), real_conv_id):
+    if not wa_src:
+     continue
+    norm_wa = _normalize_sms_phone_number(str(wa_src))
+    wa_digits = re.sub(r"\D", "", norm_wa or str(wa_src))
+    if norm_wa:
+     _add_candidate_cid(norm_wa, prepend=False)
+    if wa_digits and len(wa_digits) >= 7:
+     _add_candidate_cid(wa_digits, prepend=False)
+     _add_candidate_cid(f"+{wa_digits}", prepend=False)
+     _add_candidate_cid(f"{wa_digits}@s.whatsapp.net", prepend=False)
   sent_ok = False
   new_msg_id = f"msg_{int(time.time() * 1000)}"
   plat_msg_id = ""
   primary_error_text = ""
   primary_error_status = 0
-  def _record_success_from_resp(resp_obj: Any, api_key: str, cand_acc_id: str, cid_used: str):
-   nonlocal sent_ok, new_msg_id, plat_msg_id
+  def _record_success_from_resp(resp_obj: Any, api_key: str, cand_acc_id: str, cid_used: str) -> bool:
+   nonlocal sent_ok, new_msg_id, plat_msg_id, primary_error_text
    try:
     r_data = resp_obj.json() if resp_obj.text else {}
    except Exception:
     r_data = {}
+   if isinstance(r_data, dict):
+    if r_data.get("success") is False or (r_data.get("error") and not r_data.get("id") and not r_data.get("data") and not r_data.get("messageId")):
+     err_val = r_data.get("message") or r_data.get("error") or resp_obj.text
+     primary_error_text = str(err_val)
+     return False
    inner = r_data.get("data") or r_data.get("message") or r_data
    if isinstance(inner, dict):
     if inner.get("messageId") or inner.get("platformMessageId"):
@@ -2339,7 +2543,10 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
    if target_conv is not None:
     target_conv["zernio_account_id"] = cand_acc_id
     target_conv["zernio_api_key"] = api_key
+    if re.fullmatch(r"[0-9a-fA-F]{24}", str(cid_used)):
+     target_conv["zernio_conversation_id"] = str(cid_used)
     target_conv["conversation_id"] = cid_used
+   return True
   def _execute_send_on_endpoint(send_ep: str, api_key: str, cand_acc_id: str, extra_fields: Optional[Dict[str, Any]] = None) -> Any:
    """
             Executes a message send (text-only, attachment-only, or text + native attachment)
@@ -2420,21 +2627,24 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
     resp = _execute_send_on_endpoint(send_ep, api_key, cand_acc_id)
     first_status = resp.status_code
     if resp.status_code in (200, 201):
-     _record_success_from_resp(resp, api_key, cand_acc_id, cid_to_use)
-     return True
+     if _record_success_from_resp(resp, api_key, cand_acc_id, cid_to_use):
+      return True
     first_err_text = (resp.text or f"HTTP {resp.status_code}").strip()
     err_lower = first_err_text.lower()
     is_not_found_err = (
     "account not found" in err_lower
     or "conversation not found" in err_lower
+    or "invalid conversation" in err_lower
+    or "cast to objectid failed" in err_lower
+    or "not a valid objectid" in err_lower
     or resp.status_code == 404
     )
     # Record ONLY the real primary error from the standard untagged attempt!
     if not primary_error_text or not is_not_found_err:
      primary_error_text = first_err_text
      primary_error_status = resp.status_code
-    # If this conversation ID doesn't exist on this account, move to the next candidate ID immediately
-    if resp.status_code in (401, 404) or is_not_found_err:
+    # If this conversation ID doesn't exist on this account (or is a phone number rejected by Zernio ObjectId validation), move to the next candidate ID immediately
+    if resp.status_code in (401, 404) or is_not_found_err or (platform == "whatsapp" and not re.fullmatch(r"[0-9a-fA-F]{24}", str(cid_to_use))):
      return False
    except Exception as req_err:
     if not primary_error_text:
@@ -2452,8 +2662,8 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
      if tc_resp.status_code in (200, 201, 204):
       retry_resp = _execute_send_on_endpoint(send_ep, api_key, cand_acc_id)
       if retry_resp.status_code in (200, 201):
-       _record_success_from_resp(retry_resp, api_key, cand_acc_id, cid_to_use)
-       return True
+       if _record_success_from_resp(retry_resp, api_key, cand_acc_id, cid_to_use):
+        return True
     except Exception:
      pass
    # ATTEMPT 3: Message Request Acceptance (`POST /v1/inbox/conversations/{id}/accept`)
@@ -2468,8 +2678,8 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
      if acc_resp.status_code in (200, 201):
       if resolved_attachments:
        _post_zernio_conversation_attachment_request(send_ep, api_key, cand_acc_id, resolved_attachments[0])
-      _record_success_from_resp(acc_resp, api_key, cand_acc_id, cid_to_use)
-      return True
+      if _record_success_from_resp(acc_resp, api_key, cand_acc_id, cid_to_use):
+       return True
     except Exception:
      pass
    # ATTEMPT 4: Silent Tag Fallbacks (tried ONLY if standard send failed, and NEVER allowed to overwrite primary_error_text!)
@@ -2487,14 +2697,15 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
      extra_fields={"messagingType": "MESSAGE_TAG", "messageTag": tag_name}
      )
      if fb_resp.status_code in (200, 201):
-      _record_success_from_resp(fb_resp, api_key, cand_acc_id, cid_to_use)
-      return True
+      if _record_success_from_resp(fb_resp, api_key, cand_acc_id, cid_to_use):
+       return True
     except Exception:
      continue
    return False
   # Step 3: Live Conversation Discovery + Send Execution
   # Before relying on potentially old stored IDs, query Zernio's live conversations for this Page
-  # so if the person has a NEWER active thread on Zernio, we try the NEWEST thread ID first!
+  # so if the person has a NEWER active thread on Zernio (or if our stored ID was a phone number like 639952601753),
+  # we discover Zernio's true 24-hex conversationId and try it FIRST!
   for pair in verified_pairs:
    api_key = pair["api_key"]
    cand_acc_id = pair["account_id"]
@@ -2510,26 +2721,46 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
      live_convs = extract_list_from_api_payload(list_resp.json() if list_resp.text else {}) or []
      target_pname_norm = _normalize_participant_name_key(participant_name)
      matched_live: List[Tuple[float, str]] = []
+     unmatched_wa_live: List[Tuple[float, str]] = []
      for idx_lc, lc in enumerate(live_convs):
       if not isinstance(lc, dict):
        continue
-      lc_id = str(lc.get("id") or lc.get("conversationId") or lc.get("platformConversationId") or "").strip()
+      lc_id = str(lc.get("id") or lc.get("_id") or lc.get("conversationId") or lc.get("platformConversationId") or "").strip()
       if not lc_id:
        continue
+      plat_lc_id = str(lc.get("platformConversationId") or lc.get("threadId") or lc.get("wa_id") or lc.get("chatId") or "").strip()
       lc_pinfo = _extract_participant_from_conversation_obj(lc, cand_acc_id, acc_name, platform)
       lc_pid = str(lc_pinfo.get("participant_id") or lc.get("participantId") or "").strip()
+      lc_pphone = str(lc_pinfo.get("participant_phone") or lc.get("participantPhone") or lc.get("phone") or "").strip()
       lc_pname_norm = _normalize_participant_name_key(lc_pinfo.get("participant_name") or lc.get("participantName") or "")
-      id_match = bool(participant_id and lc_pid and participant_id == lc_pid)
+      id_match = False
+      for our_id_cand in (participant_id, real_conv_id, payload.conversation_id, (target_conv or {}).get("platform_conversation_id"), (target_conv or {}).get("participant_phone")):
+       if not our_id_cand:
+        continue
+       for their_id_cand in (lc_pid, lc_pphone, plat_lc_id, lc_id):
+        if not their_id_cand:
+         continue
+        if _are_phone_or_participant_ids_matching(our_id_cand, their_id_cand):
+         id_match = True
+         break
+       if id_match:
+        break
       name_match = bool(target_pname_norm and lc_pname_norm and target_pname_norm == lc_pname_norm)
+      raw_ts = lc.get("updatedTime") or lc.get("updatedAt") or lc.get("lastMessageAt") or ""
+      ts_ep = _msg_iso_to_epoch(parse_meta_timestamp(raw_ts, fallback_offset_seconds=idx_lc)["iso"])
       if id_match or name_match:
-       raw_ts = lc.get("updatedTime") or lc.get("updatedAt") or lc.get("lastMessageAt") or ""
-       ts_ep = _msg_iso_to_epoch(parse_meta_timestamp(raw_ts, fallback_offset_seconds=idx_lc)["iso"])
-       matched_live.append((ts_ep, lc_id))
-       plat_lc_id = str(lc.get("platformConversationId") or "").strip()
        if plat_lc_id and plat_lc_id != lc_id:
         matched_live.append((ts_ep - 0.1, plat_lc_id))
-     # Sort ascending so when we prepend each item, the NEWEST conversation ID ends up at index 0!
-     matched_live.sort(key=lambda x: x[0])
+       matched_live.append((ts_ep, lc_id))
+       if target_conv is not None and re.fullmatch(r"[0-9a-fA-F]{24}", lc_id):
+        target_conv["zernio_conversation_id"] = lc_id
+      elif platform == "whatsapp":
+       unmatched_wa_live.append((ts_ep, lc_id))
+     # If there is only 1 active WhatsApp conversation on this Zernio account and none matched by metadata, use it!
+     if not matched_live and platform == "whatsapp" and len(unmatched_wa_live) == 1:
+      matched_live.append(unmatched_wa_live[0])
+     # Sort ascending so when we prepend each item, the NEWEST 24-hex conversation ID ends up at index 0!
+     matched_live.sort(key=lambda x: (x[0], 1 if re.fullmatch(r"[0-9a-fA-F]{24}", x[1]) else 0))
      for _, m_cid in matched_live:
       _add_candidate_cid(m_cid, prepend=True)
    except Exception:

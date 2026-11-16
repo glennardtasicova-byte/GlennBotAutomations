@@ -1660,8 +1660,15 @@
        }
       }
      } else if (selectedConversationKey || selectedConversationId) {
-      const stillExists = messagesConversationsList.find(c => c.conv_key === selectedConversationKey);
-      if (stillExists && activeTab === 'messages') {
+      const stillExists = messagesConversationsList.find(c =>
+       c.conv_key === selectedConversationKey
+       || (selectedConversationId && (
+        String(c.conversation_id) === String(selectedConversationId)
+        || String(c.platform_conversation_id || '') === String(selectedConversationId)
+        || String(c.zernio_conversation_id || '') === String(selectedConversationId)
+       ))
+      );
+      if (stillExists && (activeTab === 'messages' || window.gbActivePopoutMode === 'message_thread')) {
        await refreshOpenConversationSilently(stillExists.conversation_id, stillExists.account_id);
       } else if (selectedConversationId && (activeTab === 'messages' || window.gbActivePopoutMode === 'message_thread')) {
        await refreshOpenConversationSilently(selectedConversationId, selectedConversationAccountId || '6af0b109818eb5c88d1e87a6');
@@ -1815,10 +1822,18 @@
    if (selectedConversationKey !== convKey) {
     clearAttachmentForContext('messages_chat');
    }
+   const normAccId = String(accountId || '').trim() === '6adda70399e7b30829e8859c' ? '6af6210fb722435238788b8f' : String(accountId || '').trim();
    selectedConversationKey = convKey;
    selectedConversationId = conversationId;
-   selectedConversationAccountId = accountId;
-   const target = messagesConversationsList.find(c => c.conv_key === convKey);
+   selectedConversationAccountId = normAccId || accountId;
+   const target = messagesConversationsList.find(c =>
+    c.conv_key === convKey
+    || (conversationId && (
+     String(c.conversation_id) === String(conversationId)
+     || String(c.platform_conversation_id || '') === String(conversationId)
+     || String(c.zernio_conversation_id || '') === String(conversationId)
+    ))
+   );
    if (target) {
     target.is_read = true;
     target.unread_count = 0;
@@ -1836,12 +1851,24 @@
                 `;
    }
    try {
-    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(accountId)}&force=true`);
+    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=true`);
     const data = await res.json();
     if (data.status === 'success') {
      activeConversationObj = data.conversation || target;
+     if (activeConversationObj) {
+      if (activeConversationObj.conv_key) selectedConversationKey = activeConversationObj.conv_key;
+      if (activeConversationObj.conversation_id) selectedConversationId = activeConversationObj.conversation_id;
+      if (activeConversationObj.account_id) selectedConversationAccountId = activeConversationObj.account_id;
+     }
      activeConversationMessages = data.messages || [];
      renderActiveConversationThread(true);
+     if (window.gbActivePopoutMode === 'message_thread' && activeConversationObj?.participant_name && typeof setGlennBotPopoutBarHeader === 'function') {
+      setGlennBotPopoutBarHeader(
+       `Chat with ${activeConversationObj.participant_name} — Expanded View`,
+       'Focused Conversation Window • Real-Time Direct Messaging & Replies',
+       'fa-comments'
+      );
+     }
     } else {
      if (panel) {
       panel.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">${escapeHTML(data.message || 'Could not load conversation messages.')}</div>`;
@@ -1856,11 +1883,17 @@
   }
   async function refreshOpenConversationSilently(conversationId, accountId) {
    try {
-    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(accountId)}&force=false`);
+    const normAccId = String(accountId || '').trim() === '6adda70399e7b30829e8859c' ? '6af6210fb722435238788b8f' : String(accountId || '').trim();
+    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=false`);
     const data = await res.json();
     if (data.status === 'success') {
      const prevName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
      activeConversationObj = data.conversation || activeConversationObj;
+     if (activeConversationObj) {
+      if (activeConversationObj.conv_key) selectedConversationKey = activeConversationObj.conv_key;
+      if (activeConversationObj.conversation_id) selectedConversationId = activeConversationObj.conversation_id;
+      if (activeConversationObj.account_id) selectedConversationAccountId = activeConversationObj.account_id;
+     }
      const nextName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
      const incomingMsgs = data.messages || [];
      const pendingList = pendingOptimisticMessages[selectedConversationKey] || [];
@@ -2114,7 +2147,7 @@
  <span class="text-[11px] font-semibold text-slate-300">
  <i class="fas fa-paper-plane text-gb-cyan mr-1"></i>Replying as <span class="text-gb-cyan">${escapeHTML(c.account_name)}</span>
  </span>
-                                ${(c.platform === 'facebook' || c.platform === 'instagram') ? (() => {
+                                ${(c.platform === 'facebook' || c.platform === 'instagram' || c.platform === 'whatsapp') ? (() => {
                                     let lastCustIso = '';
                                     const msgsArr = Array.isArray(activeConversationMessages) ? activeConversationMessages : [];
                                     for (let i = msgsArr.length - 1; i >= 0; i--) {
@@ -2125,6 +2158,15 @@
                                     }
                                     if (!lastCustIso && !c.last_message_is_own && c.updated_iso) lastCustIso = c.updated_iso;
                                     const diffHrs = lastCustIso ? Math.max(0, (Date.now() - new Date(lastCustIso).getTime()) / 3600000) : 0;
+                                    if (c.platform === 'whatsapp') {
+                                        if (hideShowcaseAdminBtns) {
+                                            return '<span class="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold"><i class="fab fa-whatsapp mr-1"></i>Live WhatsApp Session Ready</span>';
+                                        }
+                                        if (diffHrs < 24) {
+                                            return '<span class="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold" title="Customer messaged within the last 24 hours — free-form WhatsApp replies are active"><i class="fab fa-whatsapp mr-1"></i>24h WhatsApp Window Active</span>';
+                                        }
+                                        return '<span class="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/50 text-amber-300 text-[10px] font-semibold" title="Meta WhatsApp Business API requires the customer to have messaged within the last 24 hours for free-form text replies"><i class="fas fa-clock mr-1"></i>24h Window Expired (' + Math.floor(diffHrs) + 'h ago)</span>';
+                                    }
                                     let winBadge = '<span class="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold"><i class="fas fa-clock mr-1"></i>24h Window Active</span>';
                                     if (diffHrs >= 24 && diffHrs <= 168) {
                                         winBadge = '<span class="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/50 text-amber-300 text-[10px] font-semibold" title="Standard 24h window expired; HUMAN_AGENT tag extends reply window up to 7 days"><i class="fas fa-user-shield mr-1"></i>7-Day Human Agent Window (' + Math.floor(diffHrs / 24) + 'd ago)</span>';

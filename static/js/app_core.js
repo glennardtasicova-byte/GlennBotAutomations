@@ -2817,6 +2817,12 @@
     let cKey = String(params.conv_key || '').trim();
     let cId = String(params.conv_id || '').trim();
     let aId = String(params.account_id || '').trim();
+    if (aId === '6adda70399e7b30829e8859c') {
+     aId = '6af6210fb722435238788b8f';
+    }
+    if (cKey.startsWith('6adda70399e7b30829e8859c_')) {
+     cKey = '6af6210fb722435238788b8f_' + cKey.slice('6adda70399e7b30829e8859c_'.length);
+    }
     const targetPlat = String(params.platform || '').trim().toLowerCase();
     const targetAccName = String(params.account_name || '').trim().toLowerCase();
     const autoLatest = ['1', 'true', 'yes'].includes(String(params.auto_latest || '').trim().toLowerCase()) || Boolean((targetPlat || targetAccName) && !cId);
