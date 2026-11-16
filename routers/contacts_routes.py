@@ -470,10 +470,14 @@ def _deduplicate_and_combine_crm_contacts(contacts_list: List[dict]) -> Tuple[Li
   plat = str(item.get("platform") or "manual").strip().lower()
   h_key = f"{plat}::{raw_u}" if raw_u and len(raw_u) >= 3 else ""
   match_idx = None
-  if ph_key and ph_key in phone_index:
-   match_idx = phone_index[ph_key]
-  elif em_key and em_key in email_index:
+  if em_key and em_key in email_index:
    match_idx = email_index[em_key]
+  elif ph_key and ph_key in phone_index:
+   cand_idx = phone_index[ph_key]
+   cand_rec = unique_contacts[cand_idx]
+   cand_em = _normalize_email_key(cand_rec.get("email_address") or "")
+   if not (em_key and cand_em and em_key != cand_em):
+    match_idx = cand_idx
   elif h_key and h_key in handle_index:
    match_idx = handle_index[h_key]
   if match_idx is not None:
@@ -721,13 +725,13 @@ def _create_or_update_crm_contact_sync(body: Dict[str, Any]):
    if not contact_id:
     ex_phone = _normalize_phone_key(ex.get("contact_number") or "")
     ex_email = _normalize_email_key(ex.get("email_address") or "")
-    if norm_phone and ex_phone and norm_phone == ex_phone:
-     existing_match = ex
-     matched_reason = "Duplicate Contact Number Combined"
-     break
     if norm_email and ex_email and norm_email == ex_email:
      existing_match = ex
      matched_reason = "Duplicate Email Address Combined"
+     break
+    if norm_phone and ex_phone and norm_phone == ex_phone and not (norm_email and ex_email and norm_email != ex_email):
+     existing_match = ex
+     matched_reason = "Duplicate Contact Number Combined"
      break
     if social_username and str(ex.get("social_username") or "").strip().lower() == social_username.lower() and str(ex.get("platform") or "").lower() == platform:
      existing_match = ex
@@ -1659,3 +1663,247 @@ def _delete_crm_contact_sync(contact_id: str):
   print(f"[ContactsCRM] Delete DB warning: {e}")
  threading.Thread(target=_save_crm_contacts_to_cloudinary, daemon=True).start()
  return {"status": "success", "message": "Contact deleted from CRM."}
+
+
+def _ingest_parsed_apollo_contacts_into_crm(parsed_contacts: List[Dict[str, Any]]) -> Tuple[int, int, List[Dict[str, Any]]]:
+ """
+ Saves parsed Apollo CSV leads into CONTACTS_CRM_STATE, PostgreSQL glennbot_crm_contacts, and Cloudinary.
+ Returns (newly_added_count, updated_or_merged_count, full_contacts_list).
+ """
+ _load_crm_contacts_state(force_cloud=False)
+ now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+ added_count = 0
+ updated_count = 0
+
+ with CONTACTS_CRM_LOCK:
+  current_list = list(CONTACTS_CRM_STATE.get("contacts") or [])
+
+ for item in parsed_contacts:
+  first_name = str(item.get("first_name") or "").strip()
+  middle_name = str(item.get("middle_name") or "").strip()
+  last_name = str(item.get("last_name") or "").strip()
+  company = str(item.get("company") or "").strip()
+  email_address = str(item.get("email_address") or "").strip()
+  contact_number = str(item.get("contact_number") or "").strip()
+  category = str(item.get("category") or "New Lead").strip()
+  social_username = str(item.get("social_username") or "").strip()
+  account_name = str(item.get("account_name") or "Apollo CSV").strip()
+  notes = str(item.get("notes") or "").strip()
+  source_ref = str(item.get("source_ref") or "").strip()
+
+  norm_email = _normalize_email_key(email_address)
+  norm_phone = _normalize_phone_key(contact_number)
+
+  existing_idx = None
+  for idx, ex in enumerate(current_list):
+   ex_email = _normalize_email_key(ex.get("email_address") or "")
+   ex_phone = _normalize_phone_key(ex.get("contact_number") or "")
+   if norm_email and ex_email and norm_email == ex_email:
+    existing_idx = idx
+    break
+   if norm_phone and ex_phone and norm_phone == ex_phone and not (norm_email and ex_email and norm_email != ex_email):
+    # Also check same full name if corporate phone is shared
+    ex_name = f"{ex.get('first_name') or ''} {ex.get('last_name') or ''}".strip().lower()
+    in_name = f"{first_name} {last_name}".strip().lower()
+    if not ex_name or not in_name or ex_name == in_name:
+     existing_idx = idx
+     break
+
+  new_rec = {
+   "id": f"crm_apollo_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+   "first_name": first_name,
+   "middle_name": middle_name,
+   "last_name": last_name,
+   "contact_number": contact_number,
+   "email_address": email_address,
+   "platform": "apollo",
+   "social_username": social_username,
+   "account_name": account_name,
+   "category": category or "New Lead",
+   "company": company,
+   "notes": notes,
+   "source_type": "apollo",
+   "source_ref_id": source_ref,
+   "avatar_url": "",
+   "created_at": now_str,
+   "updated_at": now_str,
+  }
+
+  if existing_idx is not None:
+   combined = _combine_two_contact_records(current_list[existing_idx], new_rec)
+   if company:
+    combined["company"] = company
+   if email_address:
+    combined["email_address"] = email_address
+   if contact_number:
+    combined["contact_number"] = contact_number
+   if category:
+    combined["category"] = category
+   combined["updated_at"] = now_str
+   current_list[existing_idx] = combined
+   updated_count += 1
+  else:
+   current_list.insert(0, new_rec)
+   added_count += 1
+
+ deduped_list, _ = _deduplicate_and_combine_crm_contacts(current_list)
+ with CONTACTS_CRM_LOCK:
+  CONTACTS_CRM_STATE["contacts"] = deduped_list
+
+ for rec in deduped_list:
+  _upsert_crm_contact_in_db(rec, sync_cloud=False)
+ threading.Thread(target=_save_crm_contacts_to_cloudinary, daemon=True).start()
+ return added_count, updated_count, deduped_list
+
+
+@router.post("/api/contacts/import/apollo-csv")
+async def api_import_contacts_via_apollo_csv(
+ source_mode: str = Form("local"),
+ file_id: str = Form(""),
+ category_override: str = Form("auto"),
+ file: Optional[UploadFile] = File(None),
+):
+ """
+ Imports CRM Contacts from an Apollo CSV export:
+ - Extracts Column E (Company Name), Column F (Email Address), Column T (Contact Number),
+   First/Last Name, and assigns the appropriate Lead Status / Category.
+ - If source_mode == 'local' (Local Device):
+   1) Automatically saves the uploaded CSV file directly into the 'Files' Modal (Files Vault)
+      with a Python-generated file_id.
+   2) Parses the CSV and imports all leads into Contacts CRM.
+ - If source_mode == 'files_modal' (From 'Files' Modal):
+   1) Reads the selected CSV file by file_id from the 'Files' Modal.
+   2) Parses the CSV and imports all leads into Contacts CRM.
+ """
+ from services.apollo_csv_service import parse_apollo_csv_bytes
+ from routers.files_routes import save_uploaded_bytes_to_files_vault, read_vault_file_bytes_by_id
+
+ clean_mode = (source_mode or "local").strip().lower()
+ clean_cat = (category_override or "auto").strip()
+
+ if clean_mode == "local":
+  if not file or not file.filename:
+   return JSONResponse(
+    {"status": "error", "message": "Please select a .csv file from your Local Device."},
+    status_code=400,
+   )
+  orig_filename = os.path.basename(file.filename or "apollo-contacts-export.csv").strip()
+  csv_bytes = await file.read()
+  if not csv_bytes:
+   return JSONResponse(
+    {"status": "error", "message": "The selected CSV file is empty."},
+    status_code=400,
+   )
+
+  def _process_local_apollo_csv():
+   # 1. Directly save the uploaded CSV file into the "Files" Modal (Files Vault)
+   vault_res = save_uploaded_bytes_to_files_vault(
+    file_bytes=csv_bytes,
+    filename=orig_filename,
+    content_type=file.content_type or "text/csv",
+    notes="Apollo CSV Leads • Auto-saved from Contacts Import",
+   )
+   saved_file_rec = vault_res.get("record") or {}
+   saved_fid = str(saved_file_rec.get("file_id") or "")
+
+   # 2. Parse Apollo CSV (Column E = Company, Column F = Email, Column T = Contact Number)
+   parsed = parse_apollo_csv_bytes(
+    csv_bytes=csv_bytes,
+    source_filename=orig_filename,
+    file_id=saved_fid,
+    category_override=clean_cat,
+   )
+   parsed_rows = parsed.get("contacts") or []
+   if not parsed_rows:
+    return {
+     "status": "error",
+     "message": f"No valid contact rows found in '{orig_filename}'. Make sure it is a valid Apollo CSV export.",
+     "saved_vault_file": saved_file_rec,
+     "vault_files": vault_res.get("files") or [],
+    }
+
+   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows)
+   total_processed = added_cnt + updated_cnt
+   return {
+    "status": "success",
+    "source_mode": "local",
+    "message": (
+     f"Imported {total_processed} lead(s) from '{orig_filename}' "
+     f"({added_cnt} new, {updated_cnt} updated) and auto-saved CSV to Files Modal ({saved_fid})!"
+    ),
+    "imported_count": total_processed,
+    "added_count": added_cnt,
+    "updated_count": updated_cnt,
+    "column_mapping": parsed.get("column_mapping"),
+    "saved_vault_file": saved_file_rec,
+    "vault_files": vault_res.get("files") or [],
+    "contacts": all_contacts,
+    "count": len(all_contacts),
+   }
+
+  res_data = await run_in_threadpool(_process_local_apollo_csv)
+  if res_data.get("status") != "success":
+   return JSONResponse(res_data, status_code=400)
+  return res_data
+
+ elif clean_mode in ("files_modal", "files", "vault"):
+  clean_fid = (file_id or "").strip()
+  if not clean_fid:
+   return JSONResponse(
+    {"status": "error", "message": "Please select a CSV file from the 'Files' Modal first."},
+    status_code=400,
+   )
+
+  def _process_vault_apollo_csv():
+   csv_bytes, target_rec = read_vault_file_bytes_by_id(clean_fid)
+   if not target_rec:
+    return {
+     "status": "error",
+     "message": f"CSV File ID '{clean_fid}' was not found in the Files Modal.",
+    }
+   if not csv_bytes:
+    return {
+     "status": "error",
+     "message": f"Could not read CSV content for '{target_rec.get('filename') or clean_fid}'. Please re-upload or check Google Drive connection.",
+    }
+   fname = str(target_rec.get("filename") or f"{clean_fid}.csv")
+   parsed = parse_apollo_csv_bytes(
+    csv_bytes=csv_bytes,
+    source_filename=fname,
+    file_id=clean_fid,
+    category_override=clean_cat,
+   )
+   parsed_rows = parsed.get("contacts") or []
+   if not parsed_rows:
+    return {
+     "status": "error",
+     "message": f"No valid contact rows found in '{fname}'.",
+    }
+   added_cnt, updated_cnt, all_contacts = _ingest_parsed_apollo_contacts_into_crm(parsed_rows)
+   total_processed = added_cnt + updated_cnt
+   return {
+    "status": "success",
+    "source_mode": "files_modal",
+    "message": (
+     f"Imported {total_processed} lead(s) from Files Modal CSV '{fname}' ({clean_fid}) "
+     f"({added_cnt} new, {updated_cnt} updated)!"
+    ),
+    "imported_count": total_processed,
+    "added_count": added_cnt,
+    "updated_count": updated_cnt,
+    "column_mapping": parsed.get("column_mapping"),
+    "source_vault_file": target_rec,
+    "contacts": all_contacts,
+    "count": len(all_contacts),
+   }
+
+  res_data = await run_in_threadpool(_process_vault_apollo_csv)
+  if res_data.get("status") != "success":
+   return JSONResponse(res_data, status_code=400)
+  return res_data
+
+ return JSONResponse(
+  {"status": "error", "message": f"Unsupported source_mode '{source_mode}'."},
+  status_code=400,
+ )
+

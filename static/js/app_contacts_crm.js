@@ -937,12 +937,15 @@
     const rawSources = `${plat},${c.source_type || ''}`
      .split(',')
      .map(s => s.trim().toLowerCase())
-     .filter(s => ['facebook', 'instagram', 'tiktok', 'youtube', 'whatsapp', 'telegram', 'gmail', 'microsoft', 'imap', 'google_contacts', 'sms', 'textbee', 'manual'].includes(s));
+     .filter(s => ['facebook', 'instagram', 'tiktok', 'youtube', 'whatsapp', 'telegram', 'gmail', 'microsoft', 'imap', 'google_contacts', 'apollo', 'sms', 'textbee', 'manual'].includes(s));
     const uniqueSources = [...new Set(rawSources)];
     if (uniqueSources.length === 0) uniqueSources.push('manual');
     const multiBadgesHTML = uniqueSources.map(sp => {
      if (sp === 'manual') {
       return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800 border border-slate-600 text-[10px] font-semibold text-slate-300"><i class="fas fa-user-tag text-gb-cyan"></i> Manual</span>`;
+     }
+     if (sp === 'apollo') {
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/50 text-[10px] font-bold text-amber-300"><i class="fas fa-rocket text-amber-400"></i> Apollo CSV</span>`;
      }
      return getPlatformBadge(sp, uniqueSources.length === 1);
     }).join(' ');
@@ -1470,3 +1473,307 @@
     if (window._gbInFlightPolls) window._gbInFlightPolls.emailRealtime = false;
    }
   }
+
+  // =========================================================================
+  // --- IMPORT CONTACTS -> VIA APOLLO CSV (LOCAL DEVICE & "FILES" MODAL) ---
+  // =========================================================================
+  function toggleImportContactsSubmenu(event) {
+   if (event) event.stopPropagation();
+   const menu = document.getElementById('crm-import-contacts-submenu');
+   const chevron = document.getElementById('crm-import-contacts-chevron');
+   if (!menu) return;
+   const isHidden = menu.classList.contains('hidden');
+   if (isHidden) {
+    menu.classList.remove('hidden');
+    if (chevron) chevron.style.transform = 'rotate(180deg)';
+   } else {
+    menu.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+   }
+  }
+
+  function closeImportContactsSubmenu() {
+   const menu = document.getElementById('crm-import-contacts-submenu');
+   const chevron = document.getElementById('crm-import-contacts-chevron');
+   if (menu) menu.classList.add('hidden');
+   if (chevron) chevron.style.transform = '';
+  }
+
+  document.addEventListener('click', (e) => {
+   const wrap = document.getElementById('crm-import-contacts-dropdown-wrap');
+   if (wrap && !wrap.contains(e.target)) {
+    closeImportContactsSubmenu();
+   }
+  });
+
+  function openApolloCsvImportModal(event) {
+   if (event) event.stopPropagation();
+   closeImportContactsSubmenu();
+   const resBanner = document.getElementById('apollo-csv-import-result-banner');
+   if (resBanner) {
+    resBanner.classList.add('hidden');
+    resBanner.innerHTML = '';
+   }
+   const pickerPanel = document.getElementById('apollo-files-modal-picker-panel');
+   if (pickerPanel) pickerPanel.classList.add('hidden');
+   const localBox = document.getElementById('apollo-local-status-box');
+   if (localBox) {
+    localBox.innerHTML = `<span class="truncate"><i class="fas fa-folder-open mr-1"></i>Click to browse Local Device (.csv)</span><i class="fas fa-chevron-right text-[10px]"></i>`;
+   }
+   const pill = document.getElementById('apollo-csv-source-active-pill');
+   if (pill) pill.textContent = 'Select Local Device or Files Modal';
+   openModalWithFade('apollo-csv-import-modal');
+   refreshApolloFilesModalCsvList(false);
+  }
+
+  function closeApolloCsvImportModal() {
+   closeModalWithFade('apollo-csv-import-modal');
+  }
+
+  function triggerApolloLocalDevicePicker() {
+   const pill = document.getElementById('apollo-csv-source-active-pill');
+   if (pill) pill.textContent = 'Source: Local Device (Auto-Saves to Files Modal)';
+   const inp = document.getElementById('apollo-local-csv-file-input');
+   if (inp) {
+    inp.value = '';
+    inp.click();
+   }
+  }
+
+  async function onApolloLocalCsvFileSelected(inputEl) {
+   const file = inputEl?.files?.[0];
+   if (!file) return;
+   const localBox = document.getElementById('apollo-local-status-box');
+   const resBanner = document.getElementById('apollo-csv-import-result-banner');
+   const catSelect = document.getElementById('apollo-csv-category-select');
+   const categoryOverride = catSelect ? catSelect.value : 'auto';
+
+   if (localBox) {
+    localBox.innerHTML = `<span class="truncate text-amber-300"><i class="fas fa-circle-notch fa-spin mr-1.5"></i>Saving "${escapeHTML(file.name)}" to Files Modal &amp; importing leads...</span>`;
+   }
+   if (resBanner) {
+    resBanner.className = 'p-3.5 rounded-xl bg-amber-500/15 border border-amber-400/50 text-xs text-amber-200 flex items-center gap-2';
+    resBanner.innerHTML = `<i class="fas fa-circle-notch fa-spin text-amber-300"></i> <span>Uploading <strong>${escapeHTML(file.name)}</strong> to <strong>Files Modal</strong> and extracting Apollo columns (Col E Company, Col F Email, Col T Contact Number)...</span>`;
+    resBanner.classList.remove('hidden');
+   }
+
+   try {
+    const formData = new FormData();
+    formData.append('source_mode', 'local');
+    formData.append('category_override', categoryOverride);
+    formData.append('file', file);
+
+    const res = await fetch('/api/contacts/import/apollo-csv', {
+     method: 'POST',
+     body: formData
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.status !== 'success') {
+     const errMsg = data.message || 'Could not import Apollo CSV file.';
+     if (localBox) {
+      localBox.innerHTML = `<span class="truncate text-rose-300"><i class="fas fa-exclamation-triangle mr-1"></i>${escapeHTML(errMsg)}</span>`;
+     }
+     if (resBanner) {
+      resBanner.className = 'p-3.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200 space-y-1';
+      resBanner.innerHTML = `<div><i class="fas fa-times-circle mr-1"></i><strong>Import Failed:</strong> ${escapeHTML(errMsg)}</div>`;
+     }
+     showToast('⚠️ ' + errMsg);
+     return;
+    }
+
+    // 1. Sync Files Modal state immediately so the newly uploaded CSV appears in the "Files" Modal
+    if (Array.isArray(data.vault_files)) {
+     vaultFilesList = data.vault_files;
+     if (typeof updateVaultFilesBadges === 'function') updateVaultFilesBadges();
+     if (typeof renderVaultFilesList === 'function') renderVaultFilesList();
+    } else if (typeof fetchVaultFiles === 'function') {
+     fetchVaultFiles(false);
+    }
+    refreshApolloFilesModalCsvList(false);
+
+    // 2. Sync Contacts CRM state & table immediately
+    if (Array.isArray(data.contacts)) {
+     crmContactsList = data.contacts;
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+    } else {
+     await fetchCrmContacts(false);
+    }
+
+    const savedFile = data.saved_vault_file || {};
+    const savedFid = savedFile.file_id || 'file_csv';
+    if (localBox) {
+     localBox.innerHTML = `<span class="truncate text-emerald-300"><i class="fas fa-check-circle mr-1"></i>Saved to Files (${escapeHTML(savedFid)}) • ${data.imported_count || 0} leads imported!</span>`;
+    }
+    if (resBanner) {
+     resBanner.className = 'p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-400/50 text-xs text-emerald-200 space-y-1.5';
+     resBanner.innerHTML = `
+      <div class="font-extrabold text-emerald-300 flex items-center justify-between gap-2 flex-wrap">
+       <span><i class="fas fa-check-circle mr-1"></i>Successfully Imported ${data.imported_count || 0} Apollo Contact(s)!</span>
+       <span class="px-2 py-0.5 rounded bg-slate-950 border border-emerald-400/40 font-mono text-[10px] text-gb-cyan">Files Modal ID: ${escapeHTML(savedFid)}</span>
+      </div>
+      <div class="text-[11px] text-slate-200 leading-relaxed">
+       • <strong>CSV Auto-Saved to "Files" Modal:</strong> <code class="text-emerald-300">${escapeHTML(savedFile.filename || file.name)}</code><br>
+       • <strong>Extracted Columns:</strong> Col E (Company Name) • Col F (Email Address) • Col T (Contact Number)
+      </div>
+     `;
+    }
+    showToast(`✅ Imported ${data.imported_count || 0} Apollo contact(s) & saved "${file.name}" to Files Modal (${savedFid})!`);
+   } catch (err) {
+    const msg = err.message || String(err);
+    if (resBanner) {
+     resBanner.className = 'p-3.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200';
+     resBanner.innerHTML = `<i class="fas fa-exclamation-circle mr-1"></i>Network error while importing Apollo CSV: ${escapeHTML(msg)}`;
+     resBanner.classList.remove('hidden');
+    }
+    showToast('❌ Network error while importing Apollo CSV.');
+   }
+  }
+
+  async function showApolloFilesModalCsvSelector() {
+   const pill = document.getElementById('apollo-csv-source-active-pill');
+   if (pill) pill.textContent = 'Source: "Files" Modal (.csv)';
+   const panel = document.getElementById('apollo-files-modal-picker-panel');
+   if (panel) panel.classList.remove('hidden');
+   await refreshApolloFilesModalCsvList(true);
+  }
+
+  async function refreshApolloFilesModalCsvList(force = false) {
+   const icon = document.getElementById('apollo-files-refresh-icon');
+   const listEl = document.getElementById('apollo-files-modal-csv-list');
+   const countLabel = document.getElementById('apollo-vault-csv-count-label');
+   if (icon && force) icon.classList.add('fa-spin');
+   try {
+    if (force || !Array.isArray(vaultFilesList) || vaultFilesList.length === 0) {
+     const res = await fetch(`/api/files?force=${force ? 'true' : 'false'}`);
+     const data = await res.json();
+     if (data.status === 'success' && Array.isArray(data.files)) {
+      vaultFilesList = data.files;
+      if (typeof updateVaultFilesBadges === 'function') updateVaultFilesBadges();
+      if (typeof renderVaultFilesList === 'function') renderVaultFilesList();
+     }
+    }
+    const csvFiles = (vaultFilesList || []).filter(item => {
+     const fn = String(item.filename || '').toLowerCase();
+     const ct = String(item.content_type || '').toLowerCase();
+     return fn.endsWith('.csv') || ct.includes('csv');
+    });
+    if (countLabel) {
+     countLabel.innerHTML = `<i class="fas fa-file-csv mr-1"></i>${csvFiles.length} CSV file(s) available in "Files" Modal`;
+    }
+    if (!listEl) return;
+    if (csvFiles.length === 0) {
+     listEl.innerHTML = `
+      <div class="p-4 rounded-xl bg-slate-950/90 border border-slate-800 text-center space-y-2">
+       <div class="text-xs font-bold text-white">No <code class="text-gb-cyan">.csv</code> Files Found in "Files" Modal Yet</div>
+       <p class="text-[11px] text-slate-400">
+        Click <strong>"From Local Device"</strong> on the left to pick an Apollo CSV (it will automatically save to the "Files" Modal), or upload a CSV inside the <strong>Files</strong> tab first.
+       </p>
+      </div>
+     `;
+     return;
+    }
+    listEl.innerHTML = csvFiles.map(item => {
+     const fid = String(item.file_id || '');
+     const fname = String(item.filename || 'apollo.csv').replace(/^file_[a-fA-F0-9]{8,16}_+/, '') || 'apollo.csv';
+     const fsize = String(item.size_formatted || '');
+     const uploadedAt = String(item.uploaded_at || '');
+     return `
+      <div class="p-3 rounded-xl bg-slate-950/95 hover:bg-slate-900 border border-slate-800 hover:border-gb-cyan/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all">
+       <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-9 h-9 rounded-lg bg-emerald-500/15 border border-emerald-400/40 flex items-center justify-center text-emerald-300 shrink-0">
+         <i class="fas fa-file-csv text-base"></i>
+        </div>
+        <div class="min-w-0">
+         <div class="text-xs font-extrabold text-white truncate" title="${escapeHTML(fname)}">${escapeHTML(fname)}</div>
+         <div class="flex items-center gap-2 flex-wrap text-[10px] text-slate-400 mt-0.5">
+          <code class="text-gb-cyan font-mono font-bold">${escapeHTML(fid)}</code>
+          <span>•</span>
+          <span class="text-emerald-300 font-semibold">${escapeHTML(fsize)}</span>
+          ${uploadedAt ? `<span>• ${escapeHTML(uploadedAt)}</span>` : ''}
+         </div>
+        </div>
+       </div>
+       <button type="button" onclick="importApolloCsvFromFilesModal('${escapeHTML(fid)}', '${escapeHTML(fname)}', this)" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-400 to-gb-cyan text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 shrink-0 shadow-[0_0_12px_rgba(0,240,255,0.25)] hover:opacity-95 transition-all">
+        <i class="fas fa-file-import"></i>
+        <span>Import Leads</span>
+       </button>
+      </div>
+     `;
+    }).join('');
+   } catch (e) {
+    console.warn('Error refreshing Files Modal CSV list:', e);
+   } finally {
+    if (icon) icon.classList.remove('fa-spin');
+   }
+  }
+
+  async function importApolloCsvFromFilesModal(fileId, filename, btnEl) {
+   if (!fileId) return;
+   const resBanner = document.getElementById('apollo-csv-import-result-banner');
+   const catSelect = document.getElementById('apollo-csv-category-select');
+   const categoryOverride = catSelect ? catSelect.value : 'auto';
+   const origHTML = btnEl ? btnEl.innerHTML : '';
+   if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Importing...</span>`;
+   }
+   if (resBanner) {
+    resBanner.className = 'p-3.5 rounded-xl bg-gb-cyan/15 border border-gb-cyan/50 text-xs text-gb-cyan flex items-center gap-2';
+    resBanner.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>Reading <strong>${escapeHTML(filename || fileId)}</strong> from Files Modal and extracting Col E (Company), Col F (Email), Col T (Contact Number)...</span>`;
+    resBanner.classList.remove('hidden');
+   }
+   try {
+    const formData = new FormData();
+    formData.append('source_mode', 'files_modal');
+    formData.append('file_id', fileId);
+    formData.append('category_override', categoryOverride);
+
+    const res = await fetch('/api/contacts/import/apollo-csv', {
+     method: 'POST',
+     body: formData
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') {
+     const errMsg = data.message || 'Could not import CSV from Files Modal.';
+     if (resBanner) {
+      resBanner.className = 'p-3.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200';
+      resBanner.innerHTML = `<i class="fas fa-times-circle mr-1"></i><strong>Import Failed:</strong> ${escapeHTML(errMsg)}`;
+     }
+     showToast('⚠️ ' + errMsg);
+     return;
+    }
+
+    if (Array.isArray(data.contacts)) {
+     crmContactsList = data.contacts;
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+    } else {
+     await fetchCrmContacts(false);
+    }
+
+    if (resBanner) {
+     resBanner.className = 'p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-400/50 text-xs text-emerald-200 space-y-1.5';
+     resBanner.innerHTML = `
+      <div class="font-extrabold text-emerald-300 flex items-center justify-between gap-2 flex-wrap">
+       <span><i class="fas fa-check-circle mr-1"></i>Imported ${data.imported_count || 0} Apollo Contact(s) from Files Modal!</span>
+       <span class="px-2 py-0.5 rounded bg-slate-950 border border-gb-cyan/40 font-mono text-[10px] text-gb-cyan">${escapeHTML(fileId)}</span>
+      </div>
+      <div class="text-[11px] text-slate-200 leading-relaxed">
+       • <strong>Source File in "Files" Modal:</strong> <code class="text-gb-cyan">${escapeHTML(filename || fileId)}</code><br>
+       • <strong>Extracted Columns:</strong> Col E (Company Name) • Col F (Email Address) • Col T (Contact Number)
+      </div>
+     `;
+    }
+    showToast(`✅ Imported ${data.imported_count || 0} Apollo contact(s) from Files Modal (${filename || fileId})!`);
+   } catch (err) {
+    showToast('❌ Network error while importing CSV from Files Modal.');
+   } finally {
+    if (btnEl) {
+     btnEl.disabled = false;
+     btnEl.innerHTML = origHTML || `<i class="fas fa-file-import"></i> <span>Import Leads</span>`;
+    }
+   }
+  }
+

@@ -729,6 +729,7 @@
        <option value="tiktok" class="bg-slate-900 text-white">TikTok</option>
        <option value="youtube" class="bg-slate-900 text-white">YouTube</option>
        <option value="google_contacts" class="bg-slate-900 text-white">Google Contacts</option>
+       <option value="apollo" class="bg-slate-900 text-white">Apollo CSV</option>
        <option value="gmail" class="bg-slate-900 text-white">Gmail / Email</option>
        <option value="microsoft" class="bg-slate-900 text-white">Microsoft Outlook</option>
       </select>
@@ -922,3 +923,177 @@
    </div>
   </div>
  </div>
+ <!-- IMPORT CONTACTS VIA APOLLO CSV MODAL (LOCAL DEVICE AUTO-SAVES TO FILES MODAL OR PICK FROM FILES MODAL) -->
+ <div id="apollo-csv-import-modal" class="fixed inset-0 z-[9998] hidden bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4" onclick="if(event.target===this) closeApolloCsvImportModal()">
+  <div class="glass-panel rounded-2xl w-full max-w-2xl overflow-hidden border border-amber-400/60 shadow-[0_0_50px_rgba(245,158,11,0.28)] flex flex-col max-h-[92vh] bg-slate-950">
+   <!-- Header -->
+   <div class="px-5 py-4 border-b border-slate-800 bg-slate-900/95 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-3">
+     <div class="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-300 shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.25)]">
+      <i class="fas fa-rocket text-lg"></i>
+     </div>
+     <div>
+      <div class="flex items-center gap-2 flex-wrap">
+       <h3 class="text-sm sm:text-base font-extrabold text-white">Import Contacts • via Apollo CSV</h3>
+       <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 font-bold">Auto Column Extractor</span>
+      </div>
+      <p class="text-[11px] text-slate-400">Choose your Apollo CSV source — from your Local Device or from the "Files" Modal</p>
+     </div>
+    </div>
+    <button type="button" onclick="closeApolloCsvImportModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-900/60 border border-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-all">
+     <i class="fas fa-times"></i>
+    </button>
+   </div>
+   <!-- Body -->
+   <div class="p-5 overflow-y-auto space-y-4">
+    <!-- Column Mapping Specification Strip -->
+    <div class="p-3.5 rounded-xl bg-slate-900/95 border border-amber-400/35 space-y-2.5">
+     <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="text-xs font-extrabold text-amber-300 flex items-center gap-1.5">
+       <i class="fas fa-table"></i>
+       <span>Apollo CSV Column Extraction Rules</span>
+      </div>
+      <span class="text-[10px] text-emerald-300 font-semibold flex items-center gap-1">
+       <i class="fas fa-check-circle"></i> First &amp; Last Name (Col A &amp; B) Included Automatically
+      </span>
+     </div>
+     <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+      <div class="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2.5">
+       <span class="px-2 py-1 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-300 font-mono font-extrabold text-xs">Col E</span>
+       <div class="min-w-0">
+        <div class="font-bold text-white truncate">Company Name</div>
+        <div class="text-[10px] text-slate-400 truncate">Company Name for Emails</div>
+       </div>
+      </div>
+      <div class="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2.5">
+       <span class="px-2 py-1 rounded-lg bg-gb-cyan/20 border border-gb-cyan/40 text-gb-cyan font-mono font-extrabold text-xs">Col F</span>
+       <div class="min-w-0">
+        <div class="font-bold text-white truncate">Email Address</div>
+        <div class="text-[10px] text-slate-400 truncate">Verified Lead Email</div>
+       </div>
+      </div>
+      <div class="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2.5">
+       <span class="px-2 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-mono font-extrabold text-xs">Col T</span>
+       <div class="min-w-0">
+        <div class="font-bold text-white truncate">Contact Number</div>
+        <div class="text-[10px] text-slate-400 truncate">Corporate / Direct Phone</div>
+       </div>
+      </div>
+     </div>
+     <!-- Lead Status / Category Selector -->
+     <div class="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <label for="apollo-csv-category-select" class="text-[11px] font-bold text-slate-300 flex items-center gap-1.5 shrink-0">
+       <i class="fas fa-tags text-amber-400"></i>
+       <span>Lead Status / Category Assignment:</span>
+      </label>
+      <select id="apollo-csv-category-select" class="w-full sm:w-auto sm:max-w-[310px] bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none cursor-pointer [color-scheme:dark] truncate">
+       <option value="auto" selected>✨ Smart Auto-Assign (Hot Prospect / New Lead)</option>
+       <option value="Hot Prospect">Hot Prospect (Force All)</option>
+       <option value="New Lead">New Lead (Force All)</option>
+       <option value="Active Client">Active Client (Force All)</option>
+       <option value="VIP">VIP (Force All)</option>
+       <option value="Inquirer">Inquirer (Force All)</option>
+       <option value="Follow-Up">Follow-Up (Force All)</option>
+       <option value="Partner">Partner (Force All)</option>
+      </select>
+     </div>
+    </div>
+
+    <!-- Step 1: Choose File Source (Local Device vs "Files" Modal) -->
+    <div class="space-y-2.5">
+     <div class="text-[11px] font-extrabold uppercase tracking-wider text-slate-300 flex items-center justify-between">
+      <span>Choose Where to Get Your Apollo CSV File:</span>
+      <span id="apollo-csv-source-active-pill" class="text-[10px] font-mono text-amber-300">Select an option below</span>
+     </div>
+     <input type="file" id="apollo-local-csv-file-input" accept=".csv,text/csv" class="hidden" onchange="onApolloLocalCsvFileSelected(this)">
+     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <!-- Option A: From Local Device -->
+      <button type="button" id="btn-apollo-source-local" onclick="triggerApolloLocalDevicePicker()" class="text-left p-4 rounded-2xl bg-slate-900/90 hover:bg-emerald-950/30 border-2 border-emerald-400/50 hover:border-emerald-400 transition-all flex flex-col justify-between gap-3 group shadow-[0_0_20px_rgba(16,185,129,0.12)]">
+       <div class="flex items-start justify-between gap-2 w-full">
+        <div class="w-11 h-11 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 group-hover:scale-105 transition-transform">
+         <i class="fas fa-laptop-medical text-lg"></i>
+        </div>
+        <span class="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-extrabold">
+         Auto-Saves to "Files" Modal
+        </span>
+       </div>
+       <div>
+        <div class="text-sm font-extrabold text-white group-hover:text-emerald-300 flex items-center gap-1.5">
+         <span>From Local Device</span>
+         <i class="fas fa-upload text-xs text-emerald-400"></i>
+        </div>
+        <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
+         Pick a <code class="text-emerald-300">.csv</code> file from your computer. Once selected, it <strong>automatically saves directly to the "Files" Modal</strong> and imports your contacts!
+        </p>
+       </div>
+       <div id="apollo-local-status-box" class="w-full px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-emerald-300 font-semibold flex items-center justify-between gap-2">
+        <span class="truncate"><i class="fas fa-folder-open mr-1"></i>Click to browse Local Device (.csv)</span>
+        <i class="fas fa-chevron-right text-[10px]"></i>
+       </div>
+      </button>
+
+      <!-- Option B: From "Files" Modal -->
+      <button type="button" id="btn-apollo-source-files-modal" onclick="showApolloFilesModalCsvSelector()" class="text-left p-4 rounded-2xl bg-slate-900/90 hover:bg-gb-cyan/10 border-2 border-gb-cyan/50 hover:border-gb-cyan transition-all flex flex-col justify-between gap-3 group shadow-[0_0_20px_rgba(0,240,255,0.12)]">
+       <div class="flex items-start justify-between gap-2 w-full">
+        <div class="w-11 h-11 rounded-xl bg-gb-cyan/20 border border-gb-cyan/50 flex items-center justify-center text-gb-cyan group-hover:scale-105 transition-transform">
+         <i class="fab fa-google-drive text-lg"></i>
+        </div>
+        <span class="px-2.5 py-0.5 rounded-full bg-gb-cyan/20 border border-gb-cyan/40 text-gb-cyan text-[10px] font-extrabold">
+         Files Vault (.csv)
+        </span>
+       </div>
+       <div>
+        <div class="text-sm font-extrabold text-white group-hover:text-gb-cyan flex items-center gap-1.5">
+         <span>From "Files" Modal</span>
+         <i class="fas fa-database text-xs text-gb-cyan"></i>
+        </div>
+        <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
+         Choose an existing Apollo <code class="text-gb-cyan">.csv</code> file already stored inside your <strong>"Files" Modal</strong> (<code class="text-emerald-300">file_...</code>).
+        </p>
+       </div>
+       <div class="w-full px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-gb-cyan font-semibold flex items-center justify-between gap-2">
+        <span id="apollo-vault-csv-count-label" class="truncate"><i class="fas fa-list-ul mr-1"></i>Click to select CSV from Files Modal</span>
+        <i class="fas fa-chevron-right text-[10px]"></i>
+       </div>
+      </button>
+     </div>
+    </div>
+
+    <!-- "From Files Modal" CSV Picker Drawer (Shown when user clicks "From Files Modal" or when CSVs exist in Vault) -->
+    <div id="apollo-files-modal-picker-panel" class="hidden p-4 rounded-2xl bg-slate-900/95 border border-gb-cyan/50 space-y-3">
+     <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="text-xs font-extrabold text-gb-cyan flex items-center gap-1.5">
+       <i class="fab fa-google-drive"></i>
+       <span>Select Apollo CSV File from "Files" Modal</span>
+      </div>
+      <div class="flex items-center gap-2">
+       <button type="button" onclick="refreshApolloFilesModalCsvList(true)" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gb-cyan text-[11px] font-semibold flex items-center gap-1">
+        <i id="apollo-files-refresh-icon" class="fas fa-sync-alt text-[10px]"></i>
+        <span>Refresh List</span>
+       </button>
+       <button type="button" onclick="closeApolloCsvImportModal(); switchTab('files');" class="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-[11px] font-semibold flex items-center gap-1">
+        <i class="fas fa-external-link-alt text-[10px]"></i>
+        <span>Open "Files" Modal</span>
+       </button>
+      </div>
+     </div>
+     <div id="apollo-files-modal-csv-list" class="max-h-52 overflow-y-auto space-y-2 pr-1">
+      <!-- Dynamically populated with .csv files from vaultFilesList / /api/files -->
+     </div>
+    </div>
+
+    <!-- Live Import Result / Feedback Banner -->
+    <div id="apollo-csv-import-result-banner" class="hidden p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-400/50 text-xs text-emerald-200 space-y-1.5"></div>
+   </div>
+   <!-- Footer -->
+   <div class="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between gap-2 shrink-0">
+    <span class="text-[11px] text-slate-400">
+     <i class="fas fa-info-circle text-amber-400 mr-1"></i>Local CSV uploads are automatically saved to your <strong>Files</strong> Modal
+    </span>
+    <button type="button" onclick="closeApolloCsvImportModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-xs font-semibold">
+     Close
+    </button>
+   </div>
+  </div>
+ </div>
+

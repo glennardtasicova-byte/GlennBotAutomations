@@ -469,6 +469,49 @@ def api_stream_gdrive_media(gdrive_file_id: str, request: Request):
  except Exception as e:
   print(f"[⚠️ GDRIVE MEDIA STREAM WARNING] ({clean_id}): {e}")
   return RedirectResponse(f"https://drive.google.com/uc?export=download&id={urllib.parse.quote(clean_id, safe='')}")
+LOCAL_VAULT_FILES_RAW_DIR = os.path.join(
+ os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+ "vault_files_storage"
+)
+
+def _save_local_vault_file_bytes(file_id: str, file_bytes: bytes) -> str:
+ clean_id = re.sub(r"[^a-zA-Z0-9_\-]", "", str(file_id or "").strip())
+ if not clean_id or not file_bytes:
+  return ""
+ try:
+  os.makedirs(LOCAL_VAULT_FILES_RAW_DIR, exist_ok=True)
+  path = os.path.join(LOCAL_VAULT_FILES_RAW_DIR, f"{clean_id}.bin")
+  with open(path, "wb") as f:
+   f.write(file_bytes)
+  return path
+ except Exception as e:
+  print(f"[⚠️ LOCAL VAULT BYTES SAVE WARNING] ({clean_id}): {e}")
+  return ""
+
+def _read_local_vault_file_bytes(file_id: str) -> Optional[bytes]:
+ clean_id = re.sub(r"[^a-zA-Z0-9_\-]", "", str(file_id or "").strip())
+ if not clean_id:
+  return None
+ path = os.path.join(LOCAL_VAULT_FILES_RAW_DIR, f"{clean_id}.bin")
+ if os.path.exists(path):
+  try:
+   with open(path, "rb") as f:
+    return f.read()
+  except Exception as e:
+   print(f"[⚠️ LOCAL VAULT BYTES READ WARNING] ({clean_id}): {e}")
+ return None
+
+def _delete_local_vault_file_bytes(file_id: str) -> None:
+ clean_id = re.sub(r"[^a-zA-Z0-9_\-]", "", str(file_id or "").strip())
+ if not clean_id:
+  return
+ path = os.path.join(LOCAL_VAULT_FILES_RAW_DIR, f"{clean_id}.bin")
+ if os.path.exists(path):
+  try:
+   os.remove(path)
+  except Exception:
+   pass
+
 @router.get("/api/files/{file_id}/stream")
 def api_stream_vault_file_by_id(file_id: str, request: Request):
  clean_id = (file_id or "").strip()
@@ -476,6 +519,18 @@ def api_stream_vault_file_by_id(file_id: str, request: Request):
  target = next((f for f in (store.get("files") or []) if str(f.get("file_id") or "") == clean_id), None)
  if not target:
   return JSONResponse({"status": "error", "message": f"File ID '{clean_id}' not found."}, status_code=404)
+ local_bytes = _read_local_vault_file_bytes(clean_id)
+ if local_bytes is not None:
+  media_ct = str(target.get("content_type") or "application/octet-stream").strip()
+  fname = str(target.get("filename") or f"{clean_id}.bin").replace('"', '')
+  return Response(
+   content=local_bytes,
+   media_type=media_ct,
+   headers={
+    "Content-Disposition": f'inline; filename="{fname}"',
+    "Cache-Control": "public, max-age=3600"
+   }
+  )
  gdrive_fid = str(target.get("gdrive_file_id") or "").strip()
  if gdrive_fid and "/" not in gdrive_fid:
   return api_stream_gdrive_media(gdrive_fid, request)
@@ -521,6 +576,7 @@ def _sync_files_vault_with_gdrive(force: bool = False) -> List[Dict[str, Any]]:
  by_gdrive_id: Dict[str, Dict[str, Any]] = {}
  by_file_id: Dict[str, Dict[str, Any]] = {}
  existing_ids: set = set()
+ local_only_entries: List[Dict[str, Any]] = []
  for entry in existing_files:
   if not isinstance(entry, dict):
    continue
@@ -531,6 +587,8 @@ def _sync_files_vault_with_gdrive(force: bool = False) -> List[Dict[str, Any]]:
    by_file_id[fid] = entry
   if gd_id:
    by_gdrive_id[gd_id] = entry
+  elif fid:
+   local_only_entries.append(entry)
  synced_files: List[Dict[str, Any]] = []
  vault_changed = False
  active_gdrive_ids: set = set()
@@ -595,6 +653,12 @@ def _sync_files_vault_with_gdrive(force: bool = False) -> List[Dict[str, Any]]:
    }
    synced_files.append(rec)
    vault_changed = True
+ synced_fids = {str(x.get("file_id") or "") for x in synced_files}
+ for l_entry in local_only_entries:
+  lfid = str(l_entry.get("file_id") or "")
+  if lfid and lfid not in synced_fids:
+   synced_files.insert(0, l_entry)
+   synced_fids.add(lfid)
  if len(synced_files) != len(existing_files):
   vault_changed = True
  if vault_changed:
@@ -645,37 +709,140 @@ def _upload_vault_file_bytes_with_fallback(
 file_bytes: bytes,
 orig_name: str,
 py_file_id: str,
-mime_type: str = "application/octet-stream"
+mime_type: str = "application/octet-stream",
+allow_local_fallback: bool = True
 ) -> Dict[str, Any]:
  """
-    Uploads a 'Files' modal file strictly to Google Drive ('GlennBot_Media_Vault').
-    Does NOT pre-stage to Zernio (so files in the 'Files' modal never expire after Zernio's 7-day limit);
-    live previews stream directly from Google Drive API v3 (/api/files/{file_id}/stream), and
-    transfer to Zernio happens only when publishing/scheduling a post!
+    Uploads a 'Files' modal file to Google Drive ('GlennBot_Media_Vault') and caches raw bytes locally.
+    If Google Drive OAuth is not authorized yet and allow_local_fallback is True, stores in the local/Cloudinary
+    Files Vault so features like Apollo CSV Import from Local Device always save directly to the Files Modal.
     """
- if not is_gdrive_authorized():
-  raise RuntimeError("Google Drive is not connected yet. Please click 'Connect Google Drive' in the Files modal first.")
- g_res = upload_media_to_gdrive(
- file_bytes=file_bytes,
- original_filename=orig_name,
- media_type="file",
- is_thumb=False,
- custom_subfolder="files_vault",
- custom_file_prefix=py_file_id
- )
- g_fid = str(g_res.get("gdrive_file_id") or "")
+ _save_local_vault_file_bytes(py_file_id, file_bytes)
  stream_u = f"/api/files/{py_file_id}/stream"
+ if is_gdrive_authorized():
+  try:
+   g_res = upload_media_to_gdrive(
+   file_bytes=file_bytes,
+   original_filename=orig_name,
+   media_type="file",
+   is_thumb=False,
+   custom_subfolder="files_vault",
+   custom_file_prefix=py_file_id
+   )
+   g_fid = str(g_res.get("gdrive_file_id") or "")
+   return {
+   "gdrive_file_id": g_fid,
+   "gdrive_file_name": str(g_res.get("gdrive_file_name") or orig_name),
+   "web_view_link": str(g_res.get("web_view_link") or (f"https://drive.google.com/file/d/{g_fid}/view" if g_fid else "")),
+   "download_url": stream_u,
+   "preview_url": stream_u,
+   "zernio_media_url": "",
+   "zernio_media_ts": 0.0,
+   "storage_provider": "google_drive",
+   "bucket_name": GOOGLE_DRIVE_FOLDER_NAME
+   }
+  except Exception as gd_err:
+   print(f"[⚠️ GDRIVE UPLOAD FALLBACK TO VAULT CACHE] ({orig_name}): {gd_err}")
+   if not allow_local_fallback:
+    raise
+ if not allow_local_fallback:
+  raise RuntimeError("Google Drive is not connected yet. Please click 'Connect Google Drive' in the Files modal first.")
  return {
- "gdrive_file_id": g_fid,
- "gdrive_file_name": str(g_res.get("gdrive_file_name") or orig_name),
- "web_view_link": str(g_res.get("web_view_link") or (f"https://drive.google.com/file/d/{g_fid}/view" if g_fid else "")),
+ "gdrive_file_id": "",
+ "gdrive_file_name": orig_name,
+ "web_view_link": "",
  "download_url": stream_u,
  "preview_url": stream_u,
  "zernio_media_url": "",
  "zernio_media_ts": 0.0,
- "storage_provider": "google_drive",
+ "storage_provider": "files_vault",
  "bucket_name": GOOGLE_DRIVE_FOLDER_NAME
  }
+
+def save_uploaded_bytes_to_files_vault(
+ file_bytes: bytes,
+ filename: str,
+ content_type: str = "text/csv",
+ notes: str = ""
+) -> Dict[str, Any]:
+ """
+ Saves an uploaded file (such as an Apollo CSV from Local Device) directly into the 'Files' Modal
+ with a Python-generated file_id, persisting to Files Vault + Google Drive (if connected).
+ """
+ orig_name = os.path.basename(filename or "apollo-contacts-export.csv").strip()
+ orig_name = re.sub(r"^file_[a-fA-F0-9]{8,16}_+", "", orig_name) or "apollo-contacts-export.csv"
+ guessed_mime, _ = mimetypes.guess_type(orig_name)
+ mime_type = content_type or guessed_mime or "text/csv"
+ store = _load_files_vault_store(force_cloud=False)
+ existing_files: List[Dict[str, Any]] = list(store.get("files") or [])
+ existing_ids = {str(x.get("file_id") or "") for x in existing_files}
+ py_file_id = _generate_python_automation_file_id(existing_ids)
+ existing_ids.add(py_file_id)
+ size_bytes = len(file_bytes or b"")
+ up_info = _upload_vault_file_bytes_with_fallback(
+  file_bytes=file_bytes,
+  orig_name=orig_name,
+  py_file_id=py_file_id,
+  mime_type=mime_type,
+  allow_local_fallback=True
+ )
+ now_manila = datetime.now(manila_tz)
+ record = {
+  "file_id": py_file_id,
+  "filename": orig_name,
+  "content_type": mime_type,
+  "size_bytes": size_bytes,
+  "size_formatted": _format_file_size_human(size_bytes),
+  "storage_provider": up_info["storage_provider"],
+  "bucket_name": up_info["bucket_name"],
+  "gdrive_file_id": up_info.get("gdrive_file_id") or "",
+  "gdrive_file_name": up_info.get("gdrive_file_name") or orig_name,
+  "web_view_link": up_info.get("web_view_link") or "",
+  "download_url": up_info["download_url"],
+  "preview_url": up_info.get("preview_url") or up_info["download_url"],
+  "zernio_media_url": "",
+  "zernio_media_ts": 0.0,
+  "notes": (notes or "").strip(),
+  "uploaded_at": now_manila.strftime("%b %d, %Y %I:%M %p"),
+  "uploaded_iso": now_manila.isoformat()
+ }
+ existing_files.insert(0, record)
+ with FILES_VAULT_LOCK:
+  FILES_VAULT_STORE["files"] = existing_files
+ _save_files_vault_store()
+ return {
+  "record": _refresh_vault_file_entry_urls(record),
+  "files": [_refresh_vault_file_entry_urls(f) for f in existing_files]
+ }
+
+def read_vault_file_bytes_by_id(file_id: str) -> Tuple[Optional[bytes], Optional[Dict[str, Any]]]:
+ """
+ Reads the raw bytes and metadata record of a file stored in the 'Files' Modal by its file_id.
+ Checks local vault cache first, then Google Drive API v3 if gdrive_file_id is present.
+ """
+ clean_id = (file_id or "").strip()
+ if not clean_id:
+  return None, None
+ store = _load_files_vault_store(force_cloud=False)
+ existing_files: List[Dict[str, Any]] = list(store.get("files") or [])
+ target = next((f for f in existing_files if str(f.get("file_id") or "") == clean_id), None)
+ if not target:
+  return None, None
+ local_bytes = _read_local_vault_file_bytes(clean_id)
+ if local_bytes is not None:
+  return local_bytes, target
+ gdrive_fid = str(target.get("gdrive_file_id") or "").strip()
+ if gdrive_fid and is_gdrive_authorized():
+  try:
+   acc_tok = gdrive_get_access_token(force_refresh=False)
+   g_url = f"https://www.googleapis.com/drive/v3/files/{urllib.parse.quote(gdrive_fid, safe='')}?alt=media"
+   resp = HTTP_SESSION.get(g_url, headers={"Authorization": f"Bearer {acc_tok}"}, timeout=45)
+   if resp.status_code == 200 and resp.content:
+    _save_local_vault_file_bytes(clean_id, resp.content)
+    return resp.content, target
+  except Exception as e:
+   print(f"[⚠️ VAULT READ GDRIVE BYTES WARNING] ({clean_id}): {e}")
+ return None, target
 @router.post("/api/files/upload")
 async def api_upload_vault_files(
 files: List[UploadFile] = File(None),
@@ -1041,6 +1208,7 @@ def api_delete_vault_file(file_id: str):
    delete_media_from_gdrive(gdrive_fid, gd_fname)
   except Exception as e:
    print(f"[⚠️ FILES VAULT GDRIVE DELETE WARNING]: {e}")
+ _delete_local_vault_file_bytes(clean_id)
  remaining = [f for f in existing_files if str(f.get("file_id") or "") != clean_id]
  with FILES_VAULT_LOCK:
   FILES_VAULT_STORE["files"] = remaining
