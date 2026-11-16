@@ -1818,31 +1818,91 @@
     container.innerHTML = filtered.map(c => renderSingleConversationCardHTML(c)).join('');
    }
   }
+  function buildFallbackConversationObject(convKey, conversationId, accountId, messagesArr = []) {
+   const cleanCid = String(conversationId || '').trim();
+   const rawAid = String(accountId || '').trim();
+   const cleanAid = rawAid === '6adda70399e7b30829e8859c' ? '6af6210fb722435238788b8f' : rawAid;
+   const popParams = (window.gbActivePopoutParams && typeof window.gbActivePopoutParams === 'object') ? window.gbActivePopoutParams : {};
+   let plat = String(popParams.platform || '').trim().toLowerCase();
+   if (!plat) {
+    if (cleanCid.startsWith('wa_live_') || cleanAid === '6af6210fb722435238788b8f') plat = 'whatsapp';
+    else if (cleanCid.startsWith('ig_live_') || cleanAid === '6ad9e9b2e5d470e468e58d87' || cleanAid === '6af0b109818eb5c88d1e87a7') plat = 'instagram';
+    else plat = 'facebook';
+   }
+   let accName = String(popParams.account_name || '').trim();
+   if (!accName) {
+    if (plat === 'whatsapp') accName = 'Glennard Tasico';
+    else if (plat === 'instagram') accName = 'glennard.tasico.va';
+    else accName = 'GlennBot Automations';
+   }
+   let partName = String(popParams.participant_name || '').trim();
+   if (!partName && Array.isArray(messagesArr)) {
+    const incomingMsg = messagesArr.find(m => m && !m.is_own && m.sender_name);
+    if (incomingMsg) partName = String(incomingMsg.sender_name).trim();
+   }
+   if (!partName) partName = 'Portfolio Client';
+   return {
+    conv_key: convKey || (cleanAid && cleanCid ? `${cleanAid}_${cleanCid}` : cleanCid),
+    conversation_id: cleanCid,
+    platform_conversation_id: cleanCid,
+    zernio_conversation_id: cleanCid,
+    platform: plat,
+    account_id: cleanAid || '6af0b109818eb5c88d1e87a6',
+    account_name: accName,
+    participant_id: `visitor_${cleanCid}`,
+    participant_name: partName,
+    participant_avatar: '',
+    is_portfolio_live_dm: /^(fb_live_|ig_live_|wa_live_|portfolio_)/.test(cleanCid),
+    is_read: true,
+    unread_count: 0
+   };
+  }
   async function selectMessageConversation(convKey, conversationId, accountId) {
-   if (selectedConversationKey !== convKey) {
+   const prevConvId = String(selectedConversationId || '').trim();
+   const cleanReqCid = String(conversationId || '').trim();
+   const isPortfolioLiveThread = /^(fb_live_|ig_live_|wa_live_|portfolio_)/.test(cleanReqCid);
+   const alreadyRenderedSameConv = Boolean(
+    prevConvId
+    && cleanReqCid
+    && prevConvId === cleanReqCid
+    && document.getElementById('conversation-messages-scroll-box')
+   );
+   if (selectedConversationKey !== convKey && prevConvId !== cleanReqCid) {
     clearAttachmentForContext('messages_chat');
+    activeConversationMessages = [];
    }
    const normAccId = String(accountId || '').trim() === '6adda70399e7b30829e8859c' ? '6af6210fb722435238788b8f' : String(accountId || '').trim();
-   selectedConversationKey = convKey;
-   selectedConversationId = conversationId;
+   selectedConversationKey = convKey || (normAccId && cleanReqCid ? `${normAccId}_${cleanReqCid}` : cleanReqCid);
+   selectedConversationId = cleanReqCid;
    selectedConversationAccountId = normAccId || accountId;
+   window.selectedConversationKey = selectedConversationKey;
+   window.selectedConversationId = selectedConversationId;
+   window.selectedConversationAccountId = selectedConversationAccountId;
    const target = messagesConversationsList.find(c =>
     c.conv_key === convKey
-    || (conversationId && (
-     String(c.conversation_id) === String(conversationId)
-     || String(c.platform_conversation_id || '') === String(conversationId)
-     || String(c.zernio_conversation_id || '') === String(conversationId)
+    || (cleanReqCid && (
+     String(c.conversation_id) === cleanReqCid
+     || String(c.platform_conversation_id || '') === cleanReqCid
+     || String(c.zernio_conversation_id || '') === cleanReqCid
     ))
    );
    if (target) {
     target.is_read = true;
     target.unread_count = 0;
     activeConversationObj = target;
+   } else if (!activeConversationObj || String(activeConversationObj.conversation_id || '') !== cleanReqCid) {
+    activeConversationObj = buildFallbackConversationObject(selectedConversationKey, cleanReqCid, selectedConversationAccountId, activeConversationMessages);
    }
+   window.activeConversationObj = activeConversationObj;
    updateMessagesBadges();
    renderMessagesConversationsList();
+   if (alreadyRenderedSameConv) {
+    return await refreshOpenConversationSilently(cleanReqCid, normAccId || accountId);
+   }
    const panel = document.getElementById('message-detail-panel');
-   if (panel) {
+   if (isPortfolioLiveThread || window.gbActivePopoutMode === 'message_thread') {
+    renderActiveConversationThread(true);
+   } else if (panel) {
     panel.innerHTML = `
  <div class="flex flex-col items-center justify-center h-full py-16 text-slate-400">
  <i class="fas fa-circle-notch fa-spin text-3xl text-gb-cyan mb-3"></i>
@@ -1851,16 +1911,26 @@
                 `;
    }
    try {
-    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=true`);
+    const forceFlag = isPortfolioLiveThread ? 'false' : 'true';
+    const res = await fetch(`/api/messages/${encodeURIComponent(cleanReqCid)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=${forceFlag}`);
     const data = await res.json();
     if (data.status === 'success') {
-     activeConversationObj = data.conversation || target;
+     const fetchedMsgs = Array.isArray(data.messages) ? data.messages : [];
+     activeConversationObj = data.conversation || target || activeConversationObj || buildFallbackConversationObject(selectedConversationKey, cleanReqCid, selectedConversationAccountId, fetchedMsgs);
      if (activeConversationObj) {
+      if (!activeConversationObj.participant_name && fetchedMsgs.length > 0) {
+       const incM = fetchedMsgs.find(m => m && !m.is_own && m.sender_name);
+       if (incM) activeConversationObj.participant_name = String(incM.sender_name).trim();
+      }
       if (activeConversationObj.conv_key) selectedConversationKey = activeConversationObj.conv_key;
       if (activeConversationObj.conversation_id) selectedConversationId = activeConversationObj.conversation_id;
       if (activeConversationObj.account_id) selectedConversationAccountId = activeConversationObj.account_id;
+      window.selectedConversationKey = selectedConversationKey;
+      window.selectedConversationId = selectedConversationId;
+      window.selectedConversationAccountId = selectedConversationAccountId;
+      window.activeConversationObj = activeConversationObj;
      }
-     activeConversationMessages = data.messages || [];
+     activeConversationMessages = fetchedMsgs;
      renderActiveConversationThread(true);
      if (window.gbActivePopoutMode === 'message_thread' && activeConversationObj?.participant_name && typeof setGlennBotPopoutBarHeader === 'function') {
       setGlennBotPopoutBarHeader(
@@ -1869,6 +1939,10 @@
        'fa-comments'
       );
      }
+    } else if (isPortfolioLiveThread || window.gbActivePopoutMode === 'message_thread') {
+     activeConversationObj = activeConversationObj || buildFallbackConversationObject(selectedConversationKey, cleanReqCid, selectedConversationAccountId, activeConversationMessages);
+     window.activeConversationObj = activeConversationObj;
+     renderActiveConversationThread(true);
     } else {
      if (panel) {
       panel.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">${escapeHTML(data.message || 'Could not load conversation messages.')}</div>`;
@@ -1876,26 +1950,44 @@
     }
    } catch (e) {
     console.error("Load conversation thread error:", e);
-    if (panel) {
+    if (isPortfolioLiveThread || window.gbActivePopoutMode === 'message_thread') {
+     activeConversationObj = activeConversationObj || buildFallbackConversationObject(selectedConversationKey, cleanReqCid, selectedConversationAccountId, activeConversationMessages);
+     window.activeConversationObj = activeConversationObj;
+     renderActiveConversationThread(true);
+    } else if (panel) {
      panel.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">Network error while loading conversation thread.</div>`;
     }
    }
   }
   async function refreshOpenConversationSilently(conversationId, accountId) {
    try {
-    const normAccId = String(accountId || '').trim() === '6adda70399e7b30829e8859c' ? '6af6210fb722435238788b8f' : String(accountId || '').trim();
-    const res = await fetch(`/api/messages/${encodeURIComponent(conversationId)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=false`);
+    const cleanReqCid = String(conversationId || selectedConversationId || '').trim();
+    if (!cleanReqCid) return;
+    const normAccId = String(accountId || selectedConversationAccountId || '').trim() === '6adda70399e7b30829e8859c'
+     ? '6af6210fb722435238788b8f'
+     : String(accountId || selectedConversationAccountId || '').trim();
+    const res = await fetch(`/api/messages/${encodeURIComponent(cleanReqCid)}/thread?account_id=${encodeURIComponent(normAccId || accountId)}&force=false`);
     const data = await res.json();
     if (data.status === 'success') {
+     const incomingMsgs = Array.isArray(data.messages) ? [...data.messages] : [];
      const prevName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
-     activeConversationObj = data.conversation || activeConversationObj;
+     activeConversationObj = data.conversation || activeConversationObj || buildFallbackConversationObject(selectedConversationKey, cleanReqCid, normAccId, incomingMsgs);
      if (activeConversationObj) {
+      if (incomingMsgs.length > 0) {
+       const incM = incomingMsgs.find(m => m && !m.is_own && m.sender_name);
+       if (incM && (!activeConversationObj.participant_name || activeConversationObj.participant_name === 'Portfolio Client')) {
+        activeConversationObj.participant_name = String(incM.sender_name).trim();
+       }
+      }
       if (activeConversationObj.conv_key) selectedConversationKey = activeConversationObj.conv_key;
       if (activeConversationObj.conversation_id) selectedConversationId = activeConversationObj.conversation_id;
       if (activeConversationObj.account_id) selectedConversationAccountId = activeConversationObj.account_id;
+      window.selectedConversationKey = selectedConversationKey;
+      window.selectedConversationId = selectedConversationId;
+      window.selectedConversationAccountId = selectedConversationAccountId;
+      window.activeConversationObj = activeConversationObj;
      }
      const nextName = activeConversationObj ? String(activeConversationObj.participant_name || '') : '';
-     const incomingMsgs = data.messages || [];
      const pendingList = pendingOptimisticMessages[selectedConversationKey] || [];
      pendingList.forEach(optM => {
       const exists = incomingMsgs.some(m =>
@@ -1905,7 +1997,8 @@
      });
      const prevSig = (activeConversationMessages || []).map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
      const nextSig = incomingMsgs.map(m => `${m.id || ''}:${m.message || ''}:${m.is_own ? 1 : 0}`).join('|');
-     if (incomingMsgs.length !== activeConversationMessages.length || prevSig !== nextSig || prevName !== nextName) {
+     const missingScrollBox = !document.getElementById('conversation-messages-scroll-box');
+     if (missingScrollBox || incomingMsgs.length !== activeConversationMessages.length || prevSig !== nextSig || prevName !== nextName) {
       activeConversationMessages = incomingMsgs;
       renderActiveConversationThread(true);
       if (window.gbActivePopoutMode === 'message_thread' && nextName && typeof setGlennBotPopoutBarHeader === 'function') {

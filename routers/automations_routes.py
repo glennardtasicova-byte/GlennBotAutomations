@@ -2303,6 +2303,9 @@ is_test_run: bool = False
   })
   INTERNAL_API_STATE["recent_logs"] = logs[:40]
  return summary_record
+_AUTOMATION_EVENT_DEDUP_LOCK = threading.Lock()
+_AUTOMATION_EVENT_DEDUP_MAP: Dict[str, Tuple[float, List[Any]]] = {}
+
 def _execute_active_dashboard_automations_for_event(
 event_type: str,
 data: Dict[str, Any],
@@ -2316,6 +2319,40 @@ wait_for_completion: bool = False
     """
  futures = []
  try:
+  from routers.internal_api_routes import _load_internal_api_state
+  # Deduplicate identical incoming message/comment events within a 45s window so the same message never runs twice
+  if isinstance(data, dict) and event_type in ("message.received", "comment.received", "sms.received"):
+   msg_sub = data.get("message") if isinstance(data.get("message"), dict) else {}
+   dedup_id = str(
+    msg_sub.get("id")
+    or msg_sub.get("platform_message_id")
+    or data.get("comment_id")
+    or data.get("message_id")
+    or ""
+   ).strip()
+   conv_or_rec = str(data.get("conversation_id") or data.get("record_id") or "").strip()
+   txt_sig = str(data.get("text") or data.get("message_text") or data.get("comment_text") or "").strip()[:120]
+   dedup_key = f"{event_type}:{conv_or_rec}:{dedup_id or txt_sig}"
+   if dedup_key and (dedup_id or txt_sig):
+    now_mono = time.time()
+    with _AUTOMATION_EVENT_DEDUP_LOCK:
+     stale_keys = [k for k, (ts_v, _) in _AUTOMATION_EVENT_DEDUP_MAP.items() if now_mono - ts_v > 60.0]
+     for sk in stale_keys:
+      _AUTOMATION_EVENT_DEDUP_MAP.pop(sk, None)
+     existing_entry = _AUTOMATION_EVENT_DEDUP_MAP.get(dedup_key)
+     if existing_entry and (now_mono - existing_entry[0]) < 45.0:
+      futures = list(existing_entry[1] or [])
+      if wait_for_completion and futures:
+       results = []
+       for f in futures:
+        try:
+         results.append(f.result(timeout=90))
+        except Exception as exc:
+         results.append({"status": "error", "error": str(exc)})
+       return results
+      return []
+  else:
+   dedup_key = ""
   state = _load_automations_canvas_state(force_cloud=False)
   api_state = _load_internal_api_state(force_cloud=False)
   workflows: List[Dict[str, Any]] = list(state.get("workflows") or [])
@@ -2367,6 +2404,9 @@ wait_for_completion: bool = False
     False
     )
     futures.append(fut)
+  if dedup_key and futures:
+   with _AUTOMATION_EVENT_DEDUP_LOCK:
+    _AUTOMATION_EVENT_DEDUP_MAP[dedup_key] = (time.time(), list(futures))
  except Exception as e:
   print(f"[AutomationsCanvas] Event execution warning: {e}")
  if wait_for_completion and futures:
@@ -2381,6 +2421,7 @@ wait_for_completion: bool = False
 @router.get("/api/automations/workflows")
 async def api_get_automations_canvas_workflows(request: Request):
  """Returns all workflows saved in the In-Dashboard 'Automations' Canvas plus any imported n8n workflows."""
+ from routers.internal_api_routes import _load_internal_api_state
  canvas_state = await run_in_threadpool(lambda: _load_automations_canvas_state(force_cloud=False))
  api_state = await run_in_threadpool(lambda: _load_internal_api_state(force_cloud=False))
  base_url = get_dynamic_base_url(request=request, prefer_public=True)

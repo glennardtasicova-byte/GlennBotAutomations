@@ -2303,6 +2303,21 @@ def send_direct_message_reply(payload: SendMessagePayload, trigger_n8n_webhook: 
   real_conv_id = str((target_conv or {}).get("conversation_id") or payload.conversation_id).strip()
   participant_id = str(payload.recipient_id or (target_conv or {}).get("participant_id") or (target_conv or {}).get("participant_phone") or "").strip()
   participant_name = str((target_conv or {}).get("participant_name") or "").strip()
+  # Guard against duplicate automated AI replies (when both an external webhook and in-dashboard workflow or retry fire for the same user message)
+  if not trigger_n8n_webhook and isinstance(target_conv, dict):
+   existing_thread_msgs = [m for m in (target_conv.get("messages") or []) if isinstance(m, dict)]
+   if existing_thread_msgs:
+    last_thread_m = existing_thread_msgs[-1]
+    if bool(last_thread_m.get("is_own")) and str(last_thread_m.get("message") or "").strip():
+     last_m_epoch = _msg_iso_to_epoch(str(last_thread_m.get("created_iso") or ""))
+     if last_m_epoch <= 0 or (time.time() - last_m_epoch) < 60.0:
+      return {
+      "status": "success",
+      "message_id": last_thread_m.get("id") or "",
+      "message": last_thread_m,
+      "conversation": target_conv,
+      "deduplicated": True
+      }
   # If this conversation belongs to TextBee.dev SMS Gateway (platform == 'sms'), send directly via TextBee API
   if (
   platform == "sms"
@@ -3049,10 +3064,10 @@ def receive_portfolio_live_showcase_dm(payload: PortfolioLiveDmPayload):
      return True
    return False
   fallback_triggered = False
-  for step_idx in range(80):
+  for step_idx in range(90):
    if _has_ai_reply_after_incoming():
     break
-   if step_idx == 40 and not fallback_triggered:
+   if step_idx == 60 and not fallback_triggered:
     fallback_triggered = True
     try:
      from routers.automations_routes import _execute_active_dashboard_automations_for_event
