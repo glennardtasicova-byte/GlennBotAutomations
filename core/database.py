@@ -887,7 +887,7 @@ connected_items: List[Dict[str, Any]]
      break
  except Exception:
   pass
- # 3. Match against connected_items in Supabase
+ # 3. Match against connected_items in Supabase (prioritize exact account_id / username over displayName)
  matched_acc = None
  has_verified_account_match = False
  for acc in connected_items:
@@ -895,16 +895,23 @@ connected_items: List[Dict[str, Any]]
    continue
   a_id = str(acc.get("account_id") or "").strip()
   a_uname = (acc.get("username") or "").strip().lstrip("@").lower()
-  a_dname = (acc.get("account_name") or "").strip().lstrip("@").lower()
-  name_matched = bool(
-  (a_uname and a_uname in candidate_acc_names)
-  or (a_dname and a_dname in candidate_acc_names)
-  or (account_name and (_is_same_social_page_name(account_name, acc.get("account_name") or "") or _is_same_social_page_name(account_name, acc.get("username") or "")))
-  )
-  if (a_id and a_id in candidate_acc_ids) or name_matched:
+  if (a_id and a_id in candidate_acc_ids) or (a_uname and a_uname in candidate_acc_names):
    matched_acc = acc
    has_verified_account_match = True
    break
+ if not matched_acc:
+  for acc in connected_items:
+   if (acc.get("platform") or "").strip().lower() != plat_clean:
+    continue
+   a_dname = (acc.get("account_name") or "").strip().lstrip("@").lower()
+   name_matched = bool(
+   (a_dname and a_dname in candidate_acc_names)
+   or (account_name and (_is_same_social_page_name(account_name, acc.get("account_name") or "") or _is_same_social_page_name(account_name, acc.get("username") or "")))
+   )
+   if name_matched:
+    matched_acc = acc
+    has_verified_account_match = True
+    break
  if not matched_acc and live_matched_za:
   has_verified_account_match = True
   matched_acc = {

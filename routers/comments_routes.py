@@ -612,22 +612,40 @@ def resolve_youtube_channel_uc_id(page_id: str = "", acc_name: str = "", usernam
   return YOUTUBE_CHANNEL_ID_CACHE[cache_key]
  # 1. Check live Zernio connected YouTube accounts for platformAccountId / channelId / username
  try:
-  for za in fetch_zernio_connected_accounts(platform="youtube", force=False):
-   if not isinstance(za, dict):
-    continue
-   za_id = str(za.get("_id") or za.get("id") or "").strip()
-   za_plat_id = str(za.get("platformAccountId") or za.get("platformId") or za.get("channelId") or za.get("externalId") or "").strip()
-   za_uname = str(za.get("username") or "").strip().lstrip("@")
-   za_dname = str(za.get("displayName") or za.get("name") or "").strip()
-   if (pid and pid in (za_id, za_plat_id)) or (aname and aname.lower() in (za_dname.lower(), za_uname.lower())) or (uname and uname.lower() == za_uname.lower()):
-    if za_plat_id.startswith("UC"):
-     if cache_key:
-      YOUTUBE_CHANNEL_ID_CACHE[cache_key] = za_plat_id
-     return za_plat_id
-    if not uname and za_uname:
-     uname = za_uname
-    if not aname and za_dname:
-     aname = za_dname
+  yt_z_accs = [za for za in fetch_zernio_connected_accounts(platform="youtube", force=False) if isinstance(za, dict)]
+  matched_za = None
+  if pid:
+   for za in yt_z_accs:
+    za_id = str(za.get("_id") or za.get("id") or "").strip()
+    za_plat_id = str(za.get("platformAccountId") or za.get("platformId") or za.get("channelId") or za.get("externalId") or "").strip()
+    if pid in (za_id, za_plat_id):
+     matched_za = za
+     break
+  if not matched_za and uname:
+   for za in yt_z_accs:
+    za_uname = str(za.get("username") or "").strip().lstrip("@")
+    if za_uname and uname.lower() == za_uname.lower():
+     matched_za = za
+     break
+  if not matched_za and aname and not pid:
+   for za in yt_z_accs:
+    za_dname = str(za.get("displayName") or za.get("name") or "").strip()
+    za_uname = str(za.get("username") or "").strip().lstrip("@")
+    if aname.lower() in (za_dname.lower(), za_uname.lower()):
+     matched_za = za
+     break
+  if matched_za:
+   za_plat_id = str(matched_za.get("platformAccountId") or matched_za.get("platformId") or matched_za.get("channelId") or matched_za.get("externalId") or "").strip()
+   za_uname = str(matched_za.get("username") or "").strip().lstrip("@")
+   za_dname = str(matched_za.get("displayName") or matched_za.get("name") or "").strip()
+   if za_plat_id.startswith("UC"):
+    if cache_key:
+     YOUTUBE_CHANNEL_ID_CACHE[cache_key] = za_plat_id
+    return za_plat_id
+   if not uname and za_uname:
+    uname = za_uname
+   if not aname and za_dname:
+    aname = za_dname
  except Exception:
   pass
  # 2. Check connected accounts cache for username
@@ -854,7 +872,7 @@ preferred_api_key: str = ""
  now_ts = time.time()
  cached_tok_info = YOUTUBE_LIVE_TOKEN_CACHE.get(video_id)
  newest_token = ""
- if cached_tok_info and (now_ts - cached_tok_info.get("ts", 0)) < 300:
+ if cached_tok_info and (now_ts - cached_tok_info.get("ts", 0)) < 15:
   newest_token = str(cached_tok_info.get("token") or "")
  def _post_yt_next_with_retry(payload_body: Dict[str, Any], read_timeout: float = 12.0):
   last_err = None
@@ -2275,13 +2293,17 @@ def _heal_external_post_metadata_from_z_info(r_dict: Dict[str, Any], z_info: Dic
  disc_cap = str(z_info.get("discovered_caption") or "").strip()
  disc_prev = str(z_info.get("discovered_preview_url") or "").strip()
  disc_plink = str(z_info.get("permalink_url") or "").strip()
+ disc_acc_id = str(z_info.get("zernio_account_id") or "").strip()
  cur_cap = str(r_dict.get("caption") or "").strip()
  cur_prev = str(r_dict.get("media_preview_url") or "").strip()
  cur_plink = str(r_dict.get("permalink_url") or "").strip()
+ cur_page_id = str(r_dict.get("page_id") or "").strip()
+ has_real_z_match = bool(z_info.get("inbox_post_id") or z_info.get("inbox_plat_id"))
  need_cap = bool(disc_cap and (not cur_cap or cur_cap in ("Previous Post", "Social Media Post")))
  need_prev = bool(disc_prev and not cur_prev)
  need_plink = bool(disc_plink and (not cur_plink or ("_" in cur_plink and "/posts/" not in cur_plink and "/posts/" in disc_plink)))
- if not (need_cap or need_prev or need_plink):
+ need_page_id = bool(has_real_z_match and disc_acc_id and len(disc_acc_id) == 24 and disc_acc_id != cur_page_id)
+ if not (need_cap or need_prev or need_plink or need_page_id):
   return False
  if need_cap:
   r_dict["caption"] = disc_cap
@@ -2289,6 +2311,8 @@ def _heal_external_post_metadata_from_z_info(r_dict: Dict[str, Any], z_info: Dic
   r_dict["media_preview_url"] = disc_prev
  if need_plink:
   r_dict["permalink_url"] = disc_plink
+ if need_page_id:
+  r_dict["page_id"] = disc_acc_id
  try:
   with db_engine.begin() as conn:
    conn.execute(
@@ -2296,14 +2320,16 @@ def _heal_external_post_metadata_from_z_info(r_dict: Dict[str, Any], z_info: Dic
                     UPDATE glennbot_scheduled_posts
                     SET caption = :cap,
                         media_preview_url = CASE WHEN :prev != '' THEN :prev ELSE media_preview_url END,
-                        permalink_url = CASE WHEN :plink != '' THEN :plink ELSE permalink_url END
+                        permalink_url = CASE WHEN :plink != '' THEN :plink ELSE permalink_url END,
+                        page_id = CASE WHEN :pid != '' THEN :pid ELSE page_id END
                     WHERE id = :id
                 """),
    {
    "id": rec_id,
    "cap": r_dict.get("caption") or cur_cap or "Previous Post",
    "prev": r_dict.get("media_preview_url") or cur_prev or "",
-   "plink": r_dict.get("permalink_url") or cur_plink or ""
+   "plink": r_dict.get("permalink_url") or cur_plink or "",
+   "pid": r_dict.get("page_id") if need_page_id else ""
    }
    )
   _invalidate_fast_db_cache(["published_posts"])
@@ -2446,7 +2472,7 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_r
    return True
   _FULL_COMMENTS_SYNC_STATE.setdefault("per_record_ts", {})[clean_target_rec] = now_sync_ts
   try:
-   get_zernio_commented_posts_list(force=False)
+   get_zernio_commented_posts_list(force=bool(force_refresh))
    with db_engine.connect() as conn:
     t_row = conn.execute(
     text("""
@@ -2461,6 +2487,8 @@ def sync_all_connected_posts_to_cloudinary(force_refresh: bool = False, target_r
     ).mappings().first()
    if t_row:
     sync_single_post_to_cloudinary(dict(t_row), force_unhide=bool(force_refresh))
+   if force_refresh and "trigger_auto_youtube_and_active_sync" in globals():
+    trigger_auto_youtube_and_active_sync(clean_target_rec)
    return True
   except Exception as e:
    print(f"[⚠️ TARGETED POST SYNC WARNING]: {e}")

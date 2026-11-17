@@ -367,7 +367,9 @@
    const syncIcon = document.getElementById('sync-comments-icon');
    if (syncIcon && showFeedback) syncIcon.classList.add('fa-spin');
    try {
-    const activeRec = selectedRecordId || (window.gbActivePopoutParams && window.gbActivePopoutParams.record_id) || '';
+    const activeRec = (showFeedback && !isCommentThreadPopout)
+     ? ''
+     : (selectedRecordId || (window.gbActivePopoutParams && window.gbActivePopoutParams.record_id) || '');
     const activeParam = activeRec ? `active_record_id=${encodeURIComponent(activeRec)}` : '';
     const url = allowForceSync
      ? `/api/comments?force=true${activeParam ? '&' + activeParam : ''}`
