@@ -358,12 +358,23 @@ def _send_single_account_email_sync(body: Dict[str, Any]):
  raw_attachments = body.get("attachments") or []
  if not message_body and raw_attachments:
   message_body = "(Please see attached file)"
+ if not EMAIL_HUB_STATE.get("accounts"):
+  try:
+   _discover_composio_email_accounts()
+  except Exception:
+   pass
+ accounts_list = EMAIL_HUB_STATE.get("accounts") or []
+ if not account_id and accounts_list:
+  preferred_acc = next((a for a in accounts_list if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower()), accounts_list[0])
+  account_id = str(preferred_acc.get("id") or "").strip()
  if not account_id or not primary_recipient or not message_body:
   return JSONResponse({
   "status": "error",
   "message": "At least one Recipient email (To) and a message body (or file attachment) are required."
   }, status_code=400)
- target_acc = next((a for a in EMAIL_HUB_STATE["accounts"] if str(a.get("id")) == account_id), None)
+ target_acc = next((a for a in accounts_list if str(a.get("id")) == account_id or str(a.get("email_address") or "").lower() == account_id.lower()), None)
+ if not target_acc and accounts_list:
+  target_acc = next((a for a in accounts_list if "glennard.tasico.va@gmail.com" in str(a.get("email_address") or "").lower()), accounts_list[0])
  if not target_acc:
   return JSONResponse({"status": "error", "message": "Selected email account not found."}, status_code=404)
  provider = str(target_acc.get("provider") or "gmail").lower()

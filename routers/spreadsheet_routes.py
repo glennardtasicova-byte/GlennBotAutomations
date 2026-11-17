@@ -3726,13 +3726,18 @@ body: Optional[Dict[str, Any]] = None
   )
   target_wb = _find_workbook_by_query(workbooks, q_wb)
  if not target_wb:
-  if q_wb and any(k in q_wb.lower() for k in ("conversation", "script", ".xlsx")):
+  if q_wb and any(k in q_wb.lower() for k in ("conversation", "script", "compose", ".xlsx")):
    clean_title = q_wb if q_wb.lower().endswith(".xlsx") else f"{q_wb}.xlsx"
    default_sheet_name = q_sheet or "Sheet1"
+   is_compose_wb = "compose" in clean_title.lower()
    default_cells_init: Dict[str, str] = (
+   {}
+   if is_compose_wb
+   else (
    {"A1": "Thread ID", "B1": "Conversations"}
    if "conversation" in clean_title.lower()
    else dict(DEFAULT_ENGLISH_SCRIPT_XLSX_CELLS)
+   )
    )
    with SPREADSHEETS_LOCK:
     existing_again = _find_workbook_by_query(SPREADSHEETS_STORE.get("workbooks") or workbooks, q_wb)
@@ -3756,13 +3761,13 @@ body: Optional[Dict[str, Any]] = None
      }
      ],
      }
-     if default_sheet_name.lower() not in ("sheet1", "sheet_1", "default"):
+     if is_compose_wb or default_sheet_name.lower() not in ("sheet1", "sheet_1", "default"):
       target_wb["sheets"].append({
       "id": f"sheet_2_{uuid.uuid4().hex[:4]}",
-      "name": default_sheet_name,
+      "name": "Sheet2" if is_compose_wb else default_sheet_name,
       "row_count": 25,
       "col_count": 10,
-      "cells": dict(default_cells_init),
+      "cells": {} if is_compose_wb else dict(default_cells_init),
       })
      workbooks.append(target_wb)
      SPREADSHEETS_STORE["workbooks"] = workbooks
@@ -4155,17 +4160,43 @@ async def api_v1_append_spreadsheet_row(request: Request):
  return res
 def _update_spreadsheet_cells_sync(body: Dict[str, Any]) -> Dict[str, Any]:
  wb_query = str(body.get("workbook_id") or body.get("file_id") or body.get("title") or "").strip()
- workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=True, target_id=wb_query)
+ force_gd = bool(body.get("sync_gdrive", False)) or not bool(SPREADSHEETS_STORE.get("workbooks"))
+ workbooks, _ = _sync_spreadsheets_with_gdrive_and_vault(force_gdrive_check=force_gd, target_id=wb_query)
  with SPREADSHEETS_LOCK:
+  workbooks = list(SPREADSHEETS_STORE.get("workbooks") or workbooks)
   target_wb = _find_workbook_by_query(workbooks, wb_query)
   if not target_wb:
-   return {"status": "error", "status_code": 404, "message": f"Spreadsheet '{wb_query}' not found."}
+   if wb_query:
+    clean_title = wb_query if wb_query.lower().endswith((".xlsx", ".xls")) else f"{wb_query}.xlsx"
+    target_wb = {
+    "workbook_id": f"wb_{uuid.uuid4().hex[:8]}",
+    "title": clean_title,
+    "last_gdrive_check_ts": time.time(),
+    "sheets": [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}]
+    }
+    workbooks.insert(0, target_wb)
+    SPREADSHEETS_STORE["workbooks"] = workbooks
+   else:
+    return {"status": "error", "status_code": 404, "message": f"Spreadsheet '{wb_query}' not found."}
   sheets_list = target_wb.setdefault("sheets", [{"id": "sheet_1", "name": "Sheet1", "row_count": 25, "col_count": 10, "cells": {}}])
   sheet_query = str(body.get("sheet_name") or body.get("sheet") or "").strip()
   target_sheet = next(
-  (s for s in sheets_list if sheet_query and str(s.get("name") or "").lower() == sheet_query.lower()),
-  sheets_list[0]
+  (s for s in sheets_list if sheet_query and (str(s.get("name") or "").lower() == sheet_query.lower() or str(s.get("id") or "") == sheet_query)),
+  None
   )
+  if not target_sheet:
+   if sheet_query and sheet_query.lower() not in ("sheet1", "sheet_1", "default"):
+    target_sheet = {
+    "id": f"sheet_{len(sheets_list) + 1}_{uuid.uuid4().hex[:4]}",
+    "name": sheet_query,
+    "row_count": 25,
+    "col_count": 10,
+    "cells": {}
+    }
+    sheets_list.append(target_sheet)
+    target_wb["sheets"] = sheets_list
+   else:
+    target_sheet = sheets_list[0]
   raw_cells = body.get("cells") if isinstance(body.get("cells"), dict) else {
   k: v for k, v in body.items() if _split_cell_coord(k) is not None
   }

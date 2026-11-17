@@ -1,0 +1,413 @@
+{
+  "name": "Portfolio SYS-03 — Custom Message & Batch Email Automation (Compose.xlsx)",
+  "active": true,
+  "nodes": [
+    {
+      "id": "node-sys03-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        180,
+        360
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "portfolio-sys03-compose-batch-email",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "node-sys03-parse-attributes",
+      "name": "Parse [[Attributes]] & Prepare Compose.xlsx Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        360
+      ],
+      "parameters": {
+        "jsCode": "// PORTFOLIO_SYS03_COMPOSE_BATCH: Parses [[First Name]], [[Middle Name]], [[Last Name]], [[Company Name]], [[Email Address]], [[Contact Number]]\nconst root = $json.body || $json || {};\nconst data = (root.data && typeof root.data === 'object' && !root.actionMode) ? root.data : root;\nconst actionMode = String(data.actionMode || data.mode || data.action || 'send_and_mark_done').trim();\nconst rawTemplate = String(data.composedMessageRaw || data.composed_message || data.template_message || data.message || '').trim();\nconst rawSubject = String(data.subjectTemplate || data.subject || 'Custom Outreach for [[Company Name]]').trim();\nconst fullName = String(data.name || data.full_name || '').trim();\nconst parts = fullName.split(/\\s+/).filter(Boolean);\nconst firstName = String(data.firstName || data.first_name || (parts[0] || '')).trim();\nconst middleName = String(data.middleName || data.middle_name || (parts.length >= 3 ? parts[1] : '')).trim();\nconst lastName = String(data.lastName || data.last_name || (parts.length >= 3 ? parts.slice(2).join(' ') : (parts[1] || ''))).trim();\nconst companyName = String(data.companyName || data.company_name || data.company || '').trim();\nconst emailAddress = String(data.emailAddress || data.email_address || data.email || '').trim();\nconst contactNumber = String(data.contactNumber || data.contact_number || data.phone || '').trim();\nconst replaceAttributes = (txt) => {\n  if (!txt) return '';\n  const map = {\n    'first name': firstName,\n    'firstname': firstName,\n    'first_name': firstName,\n    'middle name': middleName,\n    'middlename': middleName,\n    'middle_name': middleName,\n    'last name': lastName,\n    'lastname': lastName,\n    'last_name': lastName,\n    'company name': companyName,\n    'companyname': companyName,\n    'company_name': companyName,\n    'company': companyName,\n    'email address': emailAddress,\n    'emailaddress': emailAddress,\n    'email_address': emailAddress,\n    'email': emailAddress,\n    'contact number': contactNumber,\n    'contactnumber': contactNumber,\n    'contact_number': contactNumber,\n    'phone': contactNumber\n  };\n  return String(txt)\n    .replace(/\\[\\[\\s*([^\\[\\]]+?)\\s*\\]\\]/g, (m, key) => {\n      const k = String(key || '').trim().toLowerCase().replace(/\\s+/g, ' ');\n      return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : m;\n    })\n    .replace(/[ \\t]{2,}/g, ' ')\n    .trim();\n};\nconst personalizedMessage = replaceAttributes(rawTemplate) || String(data.personalizedMessage || '').trim();\nconst personalizedSubject = replaceAttributes(rawSubject) || String(data.personalizedSubject || 'Custom Outreach Message').trim();\nconst batchRowKey = String(data.batchRowKey || data.batch_row_key || `portfolio_row_${emailAddress || Date.now()}`).trim();\nconst emailAccountId = String(data.emailAccountId || data.account_id || 'email_gmail_ca_58qp11H0JD4J').trim();\nreturn [{\n  json: {\n    actionMode,\n    composedMessageRaw: rawTemplate,\n    firstName,\n    middleName,\n    lastName,\n    companyName,\n    emailAddress,\n    contactNumber,\n    personalizedSubject,\n    personalizedMessage,\n    batchRowKey,\n    emailAccountId\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-sys03-if-save-compose",
+      "name": "IF Action is Save Custom Message (Sheet1)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        780,
+        360
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.actionMode || $json.body.actionMode || '' }}",
+              "rightValue": "save_custom_message",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-sys03-append-sheet1",
+      "name": "Save Composed Message to Compose.xlsx (Sheet1 Column A)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations-3wq8.onrender.com/api/v1/spreadsheets/append-row",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_GLENNBOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": {
+          "workbook_id": "Compose.xlsx",
+          "sheet_name": "Sheet1",
+          "row": {
+            "A": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.composedMessageRaw || $('Webhook Trigger').item.json.body.composedMessageRaw || '' }}"
+          }
+        }
+      }
+    },
+    {
+      "id": "node-sys03-if-queue-waiting",
+      "name": "IF Action is Queue Waiting Row (Sheet2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        460
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.actionMode || $json.body.actionMode || '' }}",
+              "rightValue": "queue_batch_waiting",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-sys03-append-sheet2-waiting",
+      "name": "Append CRM Contact as Waiting to Compose.xlsx (Sheet2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations-3wq8.onrender.com/api/v1/spreadsheets/append-row",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_GLENNBOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": {
+          "workbook_id": "Compose.xlsx",
+          "sheet_name": "Sheet2",
+          "match_column": "I",
+          "match_value": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}",
+          "row": {
+            "A": "Waiting",
+            "B": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.firstName || $('Webhook Trigger').item.json.body.firstName || '' }}",
+            "C": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.middleName || $('Webhook Trigger').item.json.body.middleName || '' }}",
+            "D": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.lastName || $('Webhook Trigger').item.json.body.lastName || '' }}",
+            "E": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.companyName || $('Webhook Trigger').item.json.body.companyName || '' }}",
+            "F": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.emailAddress || $('Webhook Trigger').item.json.body.emailAddress || '' }}",
+            "G": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.contactNumber || $('Webhook Trigger').item.json.body.contactNumber || '' }}",
+            "H": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.personalizedMessage || $('Webhook Trigger').item.json.body.personalizedMessage || '' }}",
+            "I": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}"
+          }
+        }
+      }
+    },
+    {
+      "id": "node-sys03-mark-sheet2-sending",
+      "name": "Update Status to Sending in Compose.xlsx (Sheet2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        580
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations-3wq8.onrender.com/api/v1/spreadsheets/append-row",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_GLENNBOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": {
+          "workbook_id": "Compose.xlsx",
+          "sheet_name": "Sheet2",
+          "match_column": "I",
+          "match_value": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}",
+          "row": {
+            "A": "Sending",
+            "B": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.firstName || $('Webhook Trigger').item.json.body.firstName || '' }}",
+            "C": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.middleName || $('Webhook Trigger').item.json.body.middleName || '' }}",
+            "D": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.lastName || $('Webhook Trigger').item.json.body.lastName || '' }}",
+            "E": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.companyName || $('Webhook Trigger').item.json.body.companyName || '' }}",
+            "F": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.emailAddress || $('Webhook Trigger').item.json.body.emailAddress || '' }}",
+            "G": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.contactNumber || $('Webhook Trigger').item.json.body.contactNumber || '' }}",
+            "H": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.personalizedMessage || $('Webhook Trigger').item.json.body.personalizedMessage || '' }}",
+            "I": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}"
+          }
+        }
+      }
+    },
+    {
+      "id": "node-sys03-if-only-sending",
+      "name": "IF Should Send Personalized Email Now",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        580
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.actionMode || $('Webhook Trigger').item.json.body.actionMode || 'send_and_mark_done' }}",
+              "rightValue": "mark_batch_sending",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-sys03-send-email",
+      "name": "Send Personalized Email with [[Attributes]] via GlennBot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2100,
+        580
+      ],
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations-3wq8.onrender.com/api/email/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_GLENNBOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": {
+          "account_id": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.emailAccountId || $('Webhook Trigger').item.json.body.emailAccountId || 'email_gmail_ca_58qp11H0JD4J' }}",
+          "to": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.emailAddress || $('Webhook Trigger').item.json.body.emailAddress || '' }}",
+          "subject": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.personalizedSubject || $('Webhook Trigger').item.json.body.personalizedSubject || 'Custom Outreach Message' }}",
+          "body": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.personalizedMessage || $('Webhook Trigger').item.json.body.personalizedMessage || '' }}"
+        }
+      }
+    },
+    {
+      "id": "node-sys03-mark-sheet2-done",
+      "name": "Update Status to Done in Compose.xlsx (Sheet2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        580
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://glennbotautomations-3wq8.onrender.com/api/v1/spreadsheets/append-row",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "YOUR_GLENNBOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": {
+          "workbook_id": "Compose.xlsx",
+          "sheet_name": "Sheet2",
+          "match_column": "I",
+          "match_value": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}",
+          "row": {
+            "A": "Done",
+            "B": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.firstName || $('Webhook Trigger').item.json.body.firstName || '' }}",
+            "C": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.middleName || $('Webhook Trigger').item.json.body.middleName || '' }}",
+            "D": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.lastName || $('Webhook Trigger').item.json.body.lastName || '' }}",
+            "E": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.companyName || $('Webhook Trigger').item.json.body.companyName || '' }}",
+            "F": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.emailAddress || $('Webhook Trigger').item.json.body.emailAddress || '' }}",
+            "G": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.contactNumber || $('Webhook Trigger').item.json.body.contactNumber || '' }}",
+            "H": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.personalizedMessage || $('Webhook Trigger').item.json.body.personalizedMessage || '' }}",
+            "I": "={{ $('Parse [[Attributes]] & Prepare Compose.xlsx Data').item.json.batchRowKey || $('Webhook Trigger').item.json.body.batchRowKey || '' }}"
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse [[Attributes]] & Prepare Compose.xlsx Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse [[Attributes]] & Prepare Compose.xlsx Data": {
+      "main": [
+        [
+          {
+            "node": "IF Action is Save Custom Message (Sheet1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Action is Save Custom Message (Sheet1)": {
+      "main": [
+        [
+          {
+            "node": "Save Composed Message to Compose.xlsx (Sheet1 Column A)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Action is Queue Waiting Row (Sheet2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Action is Queue Waiting Row (Sheet2)": {
+      "main": [
+        [
+          {
+            "node": "Append CRM Contact as Waiting to Compose.xlsx (Sheet2)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Status to Sending in Compose.xlsx (Sheet2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status to Sending in Compose.xlsx (Sheet2)": {
+      "main": [
+        [
+          {
+            "node": "IF Should Send Personalized Email Now",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Should Send Personalized Email Now": {
+      "main": [
+        [
+          {
+            "node": "Send Personalized Email with [[Attributes]] via GlennBot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send Personalized Email with [[Attributes]] via GlennBot": {
+      "main": [
+        [
+          {
+            "node": "Update Status to Done in Compose.xlsx (Sheet2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

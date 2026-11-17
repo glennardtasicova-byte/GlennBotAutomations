@@ -172,6 +172,13 @@ def _canonical_automation_slot(wf_obj_or_name: Any) -> str:
  or "comment-thread-ai-agent" in wf_json_str
  ):
   return "glennbot_post_auto_reply"
+ if (
+ raw_id == "auto_wf_glennbot_portfolio_sys03_batch_email"
+ or "compose.xlsx" in wf_json_str
+ or ("batch email" in norm and "custom message" in norm)
+ or "sys 03" in norm
+ ):
+  return "glennbot_portfolio_batch_email"
  return ""
 def _load_automations_canvas_state(force_cloud: bool = False) -> Dict[str, Any]:
  with AUTOMATIONS_CANVAS_LOCK:
@@ -878,6 +885,82 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
   return {
   **(current_json if isinstance(current_json, dict) else {}),
   **comp_res,
+  }
+ # 0b. Native Python fast-path for Portfolio SYS-03 Custom Message & Batch Email (Compose.xlsx + [[Attributes]] parser)
+ if (
+ "parse [[attributes]]" in node_name_low
+ or "compose.xlsx" in node_name_low
+ or "PORTFOLIO_SYS03_COMPOSE_BATCH" in js_code
+ or ("[[First Name]]" in js_code and "[[Company Name]]" in js_code)
+ ):
+  wh_data = (
+  node_outputs.get("Webhook Trigger")
+  or node_outputs.get("Webhook")
+  or next((v for k, v in node_outputs.items() if "webhook" in k.lower() or "trigger" in k.lower()), None)
+  or current_json
+  )
+  wb_root = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
+  wb = wb_root.get("data") if isinstance(wb_root.get("data"), dict) and not wb_root.get("actionMode") else wb_root
+  action_mode = str(wb.get("actionMode") or wb.get("mode") or wb.get("action") or "send_and_mark_done").strip()
+  raw_template = str(wb.get("composedMessageRaw") or wb.get("composed_message") or wb.get("template_message") or wb.get("message") or "").strip()
+  raw_subj_template = str(wb.get("subjectTemplate") or wb.get("subject") or "Quick Outreach for [[Company Name]]").strip()
+  full_name_in = str(wb.get("name") or wb.get("full_name") or "").strip()
+  name_parts = [p for p in full_name_in.split() if p]
+  first_n = str(wb.get("firstName") or wb.get("first_name") or (name_parts[0] if len(name_parts) >= 1 else "")).strip()
+  middle_n = str(wb.get("middleName") or wb.get("middle_name") or (name_parts[1] if len(name_parts) >= 3 else "")).strip()
+  last_n = str(wb.get("lastName") or wb.get("last_name") or (" ".join(name_parts[2:]) if len(name_parts) >= 3 else (name_parts[1] if len(name_parts) == 2 else ""))).strip()
+  comp_n = str(wb.get("companyName") or wb.get("company_name") or wb.get("company") or "").strip()
+  email_a = str(wb.get("emailAddress") or wb.get("email_address") or wb.get("email") or "").strip()
+  phone_n = str(wb.get("contactNumber") or wb.get("contact_number") or wb.get("phone") or "").strip()
+  def _replace_merge_tags(txt: str) -> str:
+   if not txt:
+    return ""
+   rep_map = {
+   "first name": first_n,
+   "firstname": first_n,
+   "first_name": first_n,
+   "middle name": middle_n,
+   "middlename": middle_n,
+   "middle_name": middle_n,
+   "last name": last_n,
+   "lastname": last_n,
+   "last_name": last_n,
+   "company name": comp_n,
+   "companyname": comp_n,
+   "company_name": comp_n,
+   "company": comp_n,
+   "email address": email_a,
+   "emailaddress": email_a,
+   "email_address": email_a,
+   "email": email_a,
+   "contact number": phone_n,
+   "contactnumber": phone_n,
+   "contact_number": phone_n,
+   "phone": phone_n,
+   }
+   def _tag_sub(m_obj):
+    key_clean = re.sub(r"\s+", " ", m_obj.group(1).strip().lower())
+    return rep_map.get(key_clean, m_obj.group(0))
+   rendered = re.sub(r"\[\[\s*([^\[\]]+?)\s*\]\]", _tag_sub, txt)
+   rendered = re.sub(r"[ \t]{2,}", " ", rendered)
+   return rendered.strip()
+  rendered_body = _replace_merge_tags(raw_template) or str(wb.get("personalizedMessage") or "").strip()
+  rendered_subj = _replace_merge_tags(raw_subj_template) or str(wb.get("personalizedSubject") or "Custom Outreach Message").strip()
+  batch_row_key = str(wb.get("batchRowKey") or wb.get("batch_row_key") or f"portfolio_row_{email_a or int(time.time())}").strip()
+  email_acc_id = str(wb.get("emailAccountId") or wb.get("account_id") or "email_gmail_ca_58qp11H0JD4J").strip()
+  return {
+  "actionMode": action_mode,
+  "composedMessageRaw": raw_template,
+  "firstName": first_n,
+  "middleName": middle_n,
+  "lastName": last_n,
+  "companyName": comp_n,
+  "emailAddress": email_a,
+  "contactNumber": phone_n,
+  "personalizedSubject": rendered_subj,
+  "personalizedMessage": rendered_body,
+  "batchRowKey": batch_row_key,
+  "emailAccountId": email_acc_id,
   }
  # 1. Native fast-path for ANY Thread-Grouping Code node (`Group Comment Thread into Single Row` / `Group Thread & Find Matching Row`)
  is_custom_pipe_or_dm_code = any(
@@ -2590,11 +2673,14 @@ async def api_execute_automations_canvas_workflow(request: Request):
     auth_n = str(custom_payload.get("author_name") or "Maria Santos").strip()
     msg_t = str(custom_payload.get("message") or "Hm po ito? Available pa ba?").strip()
     custom_payload.setdefault("thread_transcript", f"{auth_n}: {msg_t}")
+  is_test_flag = bool(body.get("is_test_run", True))
+  if body.get("live_execution") is True or body.get("is_test_run") is False:
+   is_test_flag = False
   exec_result = _execute_n8n_workflow_json_natively(
   patched_json,
   sim_event,
   custom_payload,
-  is_test_run=True
+  is_test_run=is_test_flag
   )
   _schedule_debounced_automations_canvas_save()
   return exec_result, None
