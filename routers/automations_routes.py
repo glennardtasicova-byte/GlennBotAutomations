@@ -901,8 +901,9 @@ def _execute_n8n_code_node(node: Dict[str, Any], current_json: Dict[str, Any], n
   )
   wb_root = wh_data.get("body") if isinstance(wh_data.get("body"), dict) else wh_data
   wb = wb_root.get("data") if isinstance(wb_root.get("data"), dict) and not wb_root.get("actionMode") else wb_root
-  action_mode = str(wb.get("actionMode") or wb.get("mode") or wb.get("action") or "send_and_mark_done").strip()
-  raw_template = str(wb.get("composedMessageRaw") or wb.get("composed_message") or wb.get("template_message") or wb.get("message") or "").strip()
+  action_mode = str(wb.get("actionMode") or wb.get("mode") or wb.get("action") or "").strip()
+  msg_str_val = wb.get("message") if isinstance(wb.get("message"), str) else ""
+  raw_template = str(wb.get("composedMessageRaw") or wb.get("composed_message") or wb.get("template_message") or msg_str_val or "").strip()
   raw_subj_template = str(wb.get("subjectTemplate") or wb.get("subject") or "Quick Outreach for [[Company Name]]").strip()
   full_name_in = str(wb.get("name") or wb.get("full_name") or "").strip()
   name_parts = [p for p in full_name_in.split() if p]
@@ -2466,6 +2467,13 @@ wait_for_completion: bool = False
    has_explicit_evts = any(bool(v) for v in evts.values())
    is_sms_evt = event_type in ("sms.sent", "sms.received")
    raw_wf_low = json.dumps(wf_json, ensure_ascii=False).lower()
+   is_portfolio_batch_wf = (
+   _canonical_automation_slot(wf) == "glennbot_portfolio_batch_email"
+   or "compose.xlsx" in raw_wf_low
+   or "portfolio-sys03" in raw_wf_low
+   )
+   if is_portfolio_batch_wf and event_type not in ("portfolio.batch_email", "n8n.test"):
+    continue
    is_comment_wf = (
    not has_explicit_evts
    and event_type == "comment.received"

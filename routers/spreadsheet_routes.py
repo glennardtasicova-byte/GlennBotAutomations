@@ -1449,11 +1449,14 @@ def _format_spreadsheet_cell_value(val: Any, c_type: str = "") -> str:
 def _sanitize_workbook_sheets_cells(wb: Dict[str, Any]) -> bool:
  """
     Cleans any scientific-notation or float-artifact strings across all sheets in a workbook.
+    Also auto-heals Compose.xlsx Sheet2 by removing accidental non-CRM rows (e.g. {'id': ...})
+    and deduplicating/compacting rows by batchRowKey (Column I) or same-session Email (Column F).
     Returns True if any cell value was normalized.
     """
  if not isinstance(wb, dict):
   return False
  changed = False
+ is_compose_wb = "compose" in str(wb.get("title") or "").lower()
  for sh in (wb.get("sheets") or []):
   if not isinstance(sh, dict):
    continue
@@ -1466,6 +1469,83 @@ def _sanitize_workbook_sheets_cells(wb: Dict[str, Any]) -> bool:
    if new_v != old_v:
     cells[k] = new_v
     changed = True
+  if is_compose_wb and str(sh.get("name") or "").strip().lower() == "sheet2" and cells:
+   rows_by_num: Dict[int, Dict[str, str]] = {}
+   for coord_k, val_v in list(cells.items()):
+    sp = _split_cell_coord(coord_k)
+    if not sp:
+     continue
+    c_let, _, r_num = sp
+    v_str = str(val_v or "").strip()
+    if v_str:
+     rows_by_num.setdefault(r_num, {})[c_let] = v_str
+   if rows_by_num:
+    status_rank = {"waiting": 1, "sending": 2, "done": 3}
+    deduped_rows: List[Dict[str, str]] = []
+    key_to_idx: Dict[str, int] = {}
+    needs_rewrite = False
+    sorted_r_nums = sorted(rows_by_num.keys())
+    for expected_r, r_num in enumerate(sorted_r_nums, start=1):
+     if r_num != expected_r:
+      needs_rewrite = True
+     r_data = rows_by_num[r_num]
+     col_a = str(r_data.get("A") or "").strip()
+     col_b = str(r_data.get("B") or "").strip()
+     col_f = str(r_data.get("F") or "").strip()
+     col_h = str(r_data.get("H") or "").strip()
+     col_i = str(r_data.get("I") or "").strip()
+     # Drop accidental Gmail webhook rows where B & F are empty or H is a raw dict string {'id': ...}
+     if col_h.startswith(("{'id':", '{"id":', "{'threadId':")) or (not col_b and not col_f and col_a.lower() in ("waiting", "sending", "done")):
+      needs_rewrite = True
+      continue
+     # Build canonical deduplication key (by batchRowKey or session+email)
+     dedup_k = col_i
+     if col_i.startswith("portfolio_row_") and col_f:
+      parts_i = col_i.split("_")
+      sess_prefix = parts_i[2] if len(parts_i) >= 4 else ""
+      dedup_k = f"portfolio_sess_{sess_prefix}_{col_f.lower()}" if sess_prefix else col_i
+     elif not dedup_k and col_f:
+      dedup_k = f"email_{col_f.lower()}"
+     if dedup_k and dedup_k in key_to_idx:
+      needs_rewrite = True
+      ex_row = deduped_rows[key_to_idx[dedup_k]]
+      ex_rank = status_rank.get(str(ex_row.get("A") or "").strip().lower(), 0)
+      new_rank = status_rank.get(col_a.lower(), 0)
+      for c_k, c_v in r_data.items():
+       if c_k == "A":
+        if new_rank >= ex_rank and c_v:
+         ex_row["A"] = c_v
+       elif c_v and not ex_row.get(c_k):
+        ex_row[c_k] = c_v
+     else:
+      if dedup_k:
+       key_to_idx[dedup_k] = len(deduped_rows)
+      deduped_rows.append(dict(r_data))
+    if deduped_rows:
+     sess_order: Dict[str, int] = {}
+     def _sheet2_sort_key(item_pair: Tuple[int, Dict[str, str]]) -> Tuple[int, int, int]:
+      orig_pos, r_d = item_pair
+      c_i = str(r_d.get("I") or "").strip()
+      if c_i.startswith("portfolio_row_"):
+       p_i = c_i.split("_")
+       if len(p_i) >= 4 and p_i[3].isdigit():
+        s_id = p_i[2]
+        if s_id not in sess_order:
+         sess_order[s_id] = len(sess_order)
+        return (sess_order[s_id], int(p_i[3]), orig_pos)
+      return (999999, orig_pos, orig_pos)
+     sorted_deduped = [r_d for _, r_d in sorted(enumerate(deduped_rows), key=_sheet2_sort_key)]
+     if sorted_deduped != deduped_rows:
+      deduped_rows = sorted_deduped
+      needs_rewrite = True
+    if needs_rewrite:
+     new_cells: Dict[str, str] = {}
+     for new_r_idx, r_dict in enumerate(deduped_rows, start=1):
+      for c_let, c_val in r_dict.items():
+       if c_val:
+        new_cells[f"{c_let}{new_r_idx}"] = c_val
+     sh["cells"] = new_cells
+     changed = True
  return changed
 def _compute_sheets_signature(sheets: Any) -> str:
  """
@@ -2616,7 +2696,7 @@ force_live_download: bool = False
    float(fast_wb.get("last_local_save_ts") or 0.0),
    float(SPREADSHEETS_STORE.get("last_gdrive_sync_ts") or 0.0),
    )
-   if fast_cells_cnt > 1 and (now_fast_ts - last_wb_check) < 8.0:
+   if (fast_cells_cnt > 1 or str(fast_wb.get("last_edit_source") or "") == "glennbot") and (now_fast_ts - last_wb_check) < 8.0:
     return cached_wbs, False
  with SPREADSHEETS_SYNC_LOCK:
   sp_store = _load_spreadsheets_store(force_cloud=False)
@@ -2706,8 +2786,9 @@ force_live_download: bool = False
      existing_wb["workbook_id"] = str(vf.get("workbook_id") or f"wb_{v_fid or uuid.uuid4().hex[:8]}").strip()
      any_changed = True
     ex_cells_cnt = sum(len((s or {}).get("cells") or {}) for s in (existing_wb.get("sheets") or []) if isinstance(s, dict))
-    if v_gd_id and (not had_gd_id or ex_cells_cnt <= 2):
-     parsed_sheets = _download_and_parse_gdrive_spreadsheet(v_gd_id, v_fname, v_mime, prefer_live_sheets_export=True)
+    was_saved_by_glennbot = str(existing_wb.get("last_edit_source") or "") == "glennbot" or float(existing_wb.get("last_local_save_ts") or 0.0) > 0.0
+    if v_gd_id and (not had_gd_id or (ex_cells_cnt <= 2 and not was_saved_by_glennbot)):
+     parsed_sheets = _download_and_parse_gdrive_spreadsheet(v_gd_id, v_fname, v_mime, prefer_live_sheets_export=not was_saved_by_glennbot)
      if parsed_sheets:
       existing_wb["sheets"] = parsed_sheets
       existing_wb["sheet_count"] = len(parsed_sheets)
@@ -2814,21 +2895,23 @@ force_live_download: bool = False
       for s in (wb.get("sheets") or [])
       if isinstance(s, dict)
       )
+      was_saved_by_gb = str(wb.get("last_edit_source") or "") == "glennbot" or last_local_save > 0.0
       last_dl_ts = float(wb.get("last_gdrive_download_ts") or 0.0)
       should_download_live = (
       force_live_download
       or is_meta_modified
-      or wb_cells_count <= 2
-      or (bool(target_clean) and (now_ts - last_dl_ts) >= 15.0)
+      or (wb_cells_count <= 2 and not was_saved_by_gb)
+      or (bool(target_clean) and not was_saved_by_gb and (now_ts - last_dl_ts) >= 15.0)
       ) and not recent_glennbot_write
       if should_download_live:
        wb["last_gdrive_download_ts"] = now_ts
        wb_title_str = str(wb.get("title") or m_data.get("name") or "Spreadsheet.xlsx")
+       use_live_export = (remote_mime == GOOGLE_SHEETS_MIME_TYPE) or not was_saved_by_gb
        fresh_sheets = _download_and_parse_gdrive_spreadsheet(
        gd_id,
        wb_title_str,
        remote_mime,
-       prefer_live_sheets_export=True
+       prefer_live_sheets_export=use_live_export
        )
        old_sig = _compute_sheets_signature(wb.get("sheets"))
        new_sig = _compute_sheets_signature(fresh_sheets) if fresh_sheets else ""
@@ -3974,9 +4057,28 @@ def _append_spreadsheet_row_sync(body: Dict[str, Any]) -> Dict[str, Any]:
    }
   written_cells: Dict[str, str] = {}
   # 1. Check if match_column + match_value matches an existing row in cells_map
-  match_col = str(body.get("match_column") or "A").strip().upper()
+  is_compose_sheet2 = (
+  "compose" in str(target_wb.get("title") or "").lower()
+  and str(target_sheet.get("name") or "").strip().lower() == "sheet2"
+  )
+  if is_compose_sheet2 and isinstance(raw_row_data, dict):
+   col_h_in = str(raw_row_data.get("H") or "").strip()
+   col_b_in = str(raw_row_data.get("B") or "").strip()
+   col_f_in = str(raw_row_data.get("F") or "").strip()
+   if col_h_in.startswith(("{'id':", '{"id":', "{'threadId':")) or (not col_b_in and not col_f_in):
+    return {
+    "status": "success",
+    "workbook_id": target_wb.get("workbook_id"),
+    "title": target_wb.get("title"),
+    "sheet_name": target_sheet.get("name"),
+    "appended_row_number": 0,
+    "written_cells": {},
+    "message": "Ignored non-CRM event payload on Compose.xlsx Sheet2."
+    }
+  match_col = str(body.get("match_column") or ("I" if is_compose_sheet2 else "A")).strip().upper()
   match_val = str(
   body.get("match_value")
+  or (raw_row_data.get("I") if isinstance(raw_row_data, dict) and is_compose_sheet2 else "")
   or (raw_row_data.get("A") if isinstance(raw_row_data, dict) and "conversation" in str(target_wb.get("title") or "").lower() else "")
   or ""
   ).strip()
@@ -3996,9 +4098,31 @@ def _append_spreadsheet_row_sync(body: Dict[str, Any]) -> Dict[str, Any]:
      if c_str == match_val or c_str == norm_mv or (norm_mv and (norm_c_str == norm_mv or norm_mv in c_str)):
       matched_existing_row = r_num_k
       break
+  # Fallback match for Compose.xlsx Sheet2: if same email in Column F has an active Waiting/Sending row (or same session prefix), update in-place
+  if matched_existing_row is None and is_compose_sheet2 and isinstance(raw_row_data, dict):
+   row_email_low = str(raw_row_data.get("F") or "").strip().lower()
+   if row_email_low:
+    for coord_k, cell_v in list(cells_map.items()):
+     parsed_c = _split_cell_coord(coord_k)
+     if not parsed_c:
+      continue
+     c_let_k, _, r_num_k = parsed_c
+     if c_let_k == "F" and r_num_k >= 1 and str(cell_v or "").strip().lower() == row_email_low:
+      ex_i_val = str(cells_map.get(f"I{r_num_k}") or "").strip()
+      ex_a_val = str(cells_map.get(f"A{r_num_k}") or "").strip().lower()
+      if ex_i_val == match_val or ex_a_val in ("waiting", "sending"):
+       matched_existing_row = r_num_k
+       break
   explicit_row_num = int(body.get("row_number") or body.get("target_row") or body.get("targetRowNumber") or 0)
   if matched_existing_row is not None:
    target_row = matched_existing_row
+   # Enforce monotonic status progression on Compose.xlsx Sheet2 (Waiting -> Sending -> Done)
+   if is_compose_sheet2 and isinstance(raw_row_data, dict) and "A" in raw_row_data:
+    status_rank_map = {"waiting": 1, "sending": 2, "done": 3}
+    curr_status_str = str(cells_map.get(f"A{target_row}") or "").strip()
+    inc_status_str = str(raw_row_data.get("A") or "").strip()
+    if status_rank_map.get(inc_status_str.lower(), 0) < status_rank_map.get(curr_status_str.lower(), 0):
+     raw_row_data["A"] = curr_status_str
   elif explicit_row_num >= 1:
    # Concurrency collision guard:
    # If 4 simultaneous new comments read Conversations.xlsx at t=0, all 4 saw next_empty_row=2 (`explicit_row_num=2`).
@@ -4116,6 +4240,8 @@ def _append_spreadsheet_row_sync(body: Dict[str, Any]) -> Dict[str, Any]:
      written_cells[coord] = str(v_val).strip()
   if not written_cells:
    return {"status": "error", "status_code": 400, "message": "No row values provided. Pass 'row': {'A': '...', 'B': '...'} or top-level 'client_name', 'email_address', 'platform', 'status'."}
+  if is_compose_sheet2:
+   _sanitize_workbook_sheets_cells(target_wb)
   target_sheet["row_count"] = max(int(target_sheet.get("row_count") or 25), target_row + 5)
   now_append_ts = time.time()
   if prev_sig_before_append:

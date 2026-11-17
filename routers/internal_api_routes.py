@@ -532,7 +532,7 @@ def _analyze_n8n_workflow_json(wf_json: Any) -> Dict[str, Any]:
     explicit_trigger_events["sms.sent"] = True
    if "sms" in p_low and not explicit_trigger_events["sms.sent"]:
     explicit_trigger_events["sms.received"] = True
-   if any(w in p_low for w in ("email", "gmail")) and "calendar" not in p_low and "appoint" not in p_low:
+   if any(w in p_low for w in ("email", "gmail")) and "calendar" not in p_low and "appoint" not in p_low and "portfolio" not in p_low and "sys03" not in p_low and "compose" not in p_low:
     explicit_trigger_events["email.received"] = True
    if any(w in p_low for w in ("message", "dm", "inbox")):
     explicit_trigger_events["message.received"] = True
@@ -657,7 +657,7 @@ def _analyze_n8n_workflow_json(wf_json: Any) -> Dict[str, Any]:
    detected_events["sms.received"] = True
   if any(k in raw_dump_low for k in ("/messages/send", "/api/v1/messages", "conversation_id", "participant_id", "message.received", "glennbot-message")):
    detected_events["message.received"] = True
-  if any(k in raw_dump_low for k in ("/emails/send", "/api/v1/emails", "sender_email", "account_email", "thread_id", "email.received", "glennbot-email", "gmail")) and not any(detected_events[k] for k in ("calendar.scheduled", "calendar.rescheduled", "calendar.cancelled")):
+  if any(k in raw_dump_low for k in ("/emails/send", "/api/v1/emails", "sender_email", "account_email", "thread_id", "email.received", "glennbot-email", "gmail")) and "compose.xlsx" not in raw_dump_low and "portfolio_sys03" not in raw_dump_low and not any(detected_events[k] for k in ("calendar.scheduled", "calendar.rescheduled", "calendar.cancelled")):
    detected_events["email.received"] = True
   if any(k in raw_dump_low for k in ("/contacts", "contact.saved", "glennbot-contact")) and not any(detected_events.values()):
    detected_events["contact.saved"] = True
