@@ -2,6 +2,74 @@
   // --- CLIENT CONTACTS & LEAD CRM DATABASE + SMART NAME AUTO-DETECTION ---
   // =========================================================================
   let crmContactsList = [];
+  const PORTFOLIO_CLIENT_CONTACTS_CACHE_KEY = 'gb_portfolio_client_contacts_v1';
+
+  function isPortfolioClientCacheMode() {
+   if (window.gbPortfolioClientCacheOnly === true) return true;
+   try {
+    const sp = new URLSearchParams(window.location.search || '');
+    if (sp.get('client_cache_only') === '1' || sp.get('ephemeral') === '1' || sp.get('demo_contacts') === '1') {
+     return true;
+    }
+   } catch (_) {}
+   if (window.gbActivePopoutParams && (window.gbActivePopoutParams.client_cache_only || window.gbActivePopoutParams.ephemeral)) {
+    return true;
+   }
+   return false;
+  }
+
+  function loadPortfolioClientCachedContacts() {
+   try {
+    const raw = localStorage.getItem(PORTFOLIO_CLIENT_CONTACTS_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+   } catch (_) {
+    return [];
+   }
+  }
+
+  function savePortfolioClientCachedContacts(contactsArr) {
+   const cleanArr = Array.isArray(contactsArr) ? contactsArr : [];
+   try {
+    localStorage.setItem(PORTFOLIO_CLIENT_CONTACTS_CACHE_KEY, JSON.stringify(cleanArr));
+   } catch (_) {}
+   return cleanArr;
+  }
+
+  function mergeIntoPortfolioClientCachedContacts(incomingContacts) {
+   const existing = loadPortfolioClientCachedContacts();
+   const incoming = Array.isArray(incomingContacts) ? incomingContacts : [];
+   const merged = [];
+   const indexByKey = new Map();
+   const makeKey = (c) => {
+    if (!c || typeof c !== 'object') return '';
+    const em = String(c.email_address || '').trim().toLowerCase();
+    const ph = normalizeCrmPhoneKey(c.contact_number || '');
+    const id = String(c.id || '').trim();
+    return em ? `email:${em}` : (ph ? `phone:${ph}` : `id:${id || Math.random()}`);
+   };
+   for (const item of [...incoming, ...existing]) {
+    if (!item || typeof item !== 'object') continue;
+    const k = makeKey(item);
+    if (!indexByKey.has(k)) {
+     indexByKey.set(k, merged.length);
+     merged.push(Object.assign({}, item));
+    } else {
+     const idx = indexByKey.get(k);
+     merged[idx] = Object.assign({}, merged[idx], item);
+    }
+   }
+   return savePortfolioClientCachedContacts(merged);
+  }
+
+  window.addEventListener('storage', (evt) => {
+   if (evt && evt.key === PORTFOLIO_CLIENT_CONTACTS_CACHE_KEY && isPortfolioClientCacheMode()) {
+    crmContactsList = loadPortfolioClientCachedContacts();
+    updateCrmBadgesAndStats();
+    renderCrmContactsTable();
+   }
+  });
+
   function initContactsTabView() {
    fetchCrmContacts(false);
   }
@@ -35,6 +103,19 @@
   async function fetchCrmContacts(showFeedback = false) {
    const syncIcon = document.getElementById('crm-sync-icon');
    if (syncIcon && showFeedback) syncIcon.classList.add('fa-spin');
+   if (isPortfolioClientCacheMode()) {
+    try {
+     crmContactsList = loadPortfolioClientCachedContacts();
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+     if (showFeedback) {
+      showToast(`🔒 Loaded ${crmContactsList.length} imported contact(s) from your Browser Cache (Private Client Demo)!`);
+     }
+    } finally {
+     if (syncIcon) syncIcon.classList.remove('fa-spin');
+    }
+    return;
+   }
    try {
     const res = await fetch(`/api/contacts?refresh=${showFeedback ? 'true' : 'false'}`);
     const data = await res.json();
@@ -58,6 +139,19 @@
   async function syncAllCrmContactsWithDeduplication() {
    const syncIcon = document.getElementById('crm-sync-icon');
    if (syncIcon) syncIcon.classList.add('fa-spin');
+   if (isPortfolioClientCacheMode()) {
+    try {
+     const beforeCount = crmContactsList.length;
+     crmContactsList = mergeIntoPortfolioClientCachedContacts([]);
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+     const mergedDiff = Math.max(0, beforeCount - crmContactsList.length);
+     showToast(`🔒 Deduplicated ${crmContactsList.length} contact(s) in your Browser Cache (${mergedDiff} duplicate(s) combined)!`);
+    } finally {
+     if (syncIcon) syncIcon.classList.remove('fa-spin');
+    }
+    return;
+   }
    showToast('🔄 Syncing contacts from Cloudinary, WhatsApp & Telegram and combining duplicate numbers/emails...');
    try {
     const res = await fetch('/api/contacts/sync', { method: 'POST' });
@@ -520,6 +614,50 @@
     btn.disabled = true;
     btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> Saving...`;
    }
+   if (isPortfolioClientCacheMode()) {
+    try {
+     const nowLabel = new Date().toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+     const recId = id || `crm_cache_${Date.now()}`;
+     const newRec = {
+      id: recId,
+      first_name,
+      middle_name,
+      last_name,
+      contact_number,
+      email_address,
+      platform,
+      social_username,
+      account_name,
+      category,
+      company,
+      notes,
+      source_type,
+      source_ref_id,
+      avatar_url,
+      created_at: nowLabel,
+      updated_at: nowLabel
+     };
+     let list = loadPortfolioClientCachedContacts();
+     const existingIdx = list.findIndex(item => String(item.id) === String(recId));
+     if (existingIdx >= 0) {
+      list[existingIdx] = Object.assign({}, list[existingIdx], newRec);
+     } else {
+      list.unshift(newRec);
+     }
+     crmContactsList = savePortfolioClientCachedContacts(list);
+     closeCrmContactModal();
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+     const fullName = [first_name, middle_name, last_name].filter(Boolean).join(' ') || social_username || email_address || contact_number;
+     showToast(`🔒 Saved "${fullName}" to your Browser Cache!`);
+    } finally {
+     if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i class="fas fa-check-circle"></i> <span>Save Contact to CRM</span>`;
+     }
+    }
+    return;
+   }
    try {
     const res = await fetch('/api/contacts', {
      method: 'POST',
@@ -716,6 +854,22 @@
     btn.disabled = true;
     btn.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Deleting (${totalSelected})...</span>`;
    }
+   if (isPortfolioClientCacheMode()) {
+    try {
+     const remaining = (crmContactsList || []).filter(c => !selectedCrmContactIds.has(String(c.id)));
+     crmContactsList = savePortfolioClientCachedContacts(remaining);
+     selectedCrmContactIds.clear();
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+     showToast(`🗑️ Removed ${totalSelected} contact(s) from your Browser Cache!`);
+    } finally {
+     if (btn) {
+      btn.innerHTML = `<i class="fas fa-trash-alt"></i> <span id="crm-trash-btn-label" class="hidden sm:inline">Delete</span>`;
+     }
+     updateCrmSelectionUI();
+    }
+    return;
+   }
    try {
     const payload = {
      delete_all: isDeletingAll,
@@ -747,6 +901,15 @@
   }
 
   async function deleteCrmContactById(contactId, displayName) {
+   if (isPortfolioClientCacheMode()) {
+    selectedCrmContactIds.delete(String(contactId));
+    const remaining = (crmContactsList || []).filter(c => String(c.id) !== String(contactId));
+    crmContactsList = savePortfolioClientCachedContacts(remaining);
+    updateCrmBadgesAndStats();
+    renderCrmContactsTable();
+    showToast(`🗑️ Removed "${displayName}" from your Browser Cache.`);
+    return;
+   }
    try {
     const res = await fetch(`/api/contacts/${encodeURIComponent(contactId)}`, { method: 'DELETE' });
     const data = await res.json();
@@ -1248,10 +1411,11 @@
    }
    showToast('🔗 Opening Google Account Login to import your Google Contacts...');
    try {
+    const isClientCache = isPortfolioClientCacheMode();
     const res = await fetch('/api/oauth/google-contacts/start', {
      method: 'POST',
      headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify({})
+     body: JSON.stringify({ ephemeral: isClientCache })
     });
     const data = await res.json();
     if (data.status === 'success' && data.auth_url) {
@@ -1274,11 +1438,15 @@
         const impRes = await fetch('/api/contacts/import/google', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ connected_account_id: connId, entity_id: entityId })
+         body: JSON.stringify({ connected_account_id: connId, entity_id: entityId, ephemeral: isClientCache })
         });
         const impData = await impRes.json();
         if (impData.status === 'success') {
-         crmContactsList = impData.contacts || [];
+         if (isClientCache || impData.ephemeral) {
+          crmContactsList = mergeIntoPortfolioClientCachedContacts(impData.contacts || []);
+         } else {
+          crmContactsList = impData.contacts || [];
+         }
          updateCrmBadgesAndStats();
          renderCrmContactsTable();
          showToast(`✅ Imported ${impData.imported_count || 0} Google Contact(s) from ${impData.account_email || 'Google'}!`);
@@ -1323,7 +1491,13 @@
      btn.disabled = false;
      if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
     }
-    await fetchCrmContacts(false);
+    if ((isPortfolioClientCacheMode() || d.ephemeral) && Array.isArray(d.contacts)) {
+     crmContactsList = mergeIntoPortfolioClientCachedContacts(d.contacts);
+     updateCrmBadgesAndStats();
+     renderCrmContactsTable();
+    } else {
+     await fetchCrmContacts(false);
+    }
     showToast(`✅ Imported ${d.imported_count || 0} Google Contact(s) from ${d.account_email || 'Google Account'}!`);
    }
   });
@@ -1954,10 +2128,14 @@
    }
 
    try {
+    const isClientCache = isPortfolioClientCacheMode();
     const formData = new FormData();
     formData.append('source_mode', 'local');
     formData.append('category_override', categoryOverride);
     formData.append('job_id', jobId);
+    if (isClientCache) {
+     formData.append('ephemeral', '1');
+    }
     formData.append('file', file);
 
     const { ok, data } = await executeApolloCsvImportRequestWithLiveProgress({
@@ -1981,19 +2159,25 @@
      return;
     }
 
-    // 1. Sync Files Modal state immediately so the newly uploaded CSV appears in the "Files" Modal
-    if (Array.isArray(data.vault_files)) {
-     vaultFilesList = data.vault_files;
-     if (typeof updateVaultFilesBadges === 'function') updateVaultFilesBadges();
-     if (typeof renderVaultFilesList === 'function') renderVaultFilesList();
-    } else if (typeof fetchVaultFiles === 'function') {
-     fetchVaultFiles(false);
+    // 1. Sync Files Modal state if not ephemeral
+    if (!isClientCache && !data.ephemeral) {
+     if (Array.isArray(data.vault_files)) {
+      vaultFilesList = data.vault_files;
+      if (typeof updateVaultFilesBadges === 'function') updateVaultFilesBadges();
+      if (typeof renderVaultFilesList === 'function') renderVaultFilesList();
+     } else if (typeof fetchVaultFiles === 'function') {
+      fetchVaultFiles(false);
+     }
+     refreshApolloFilesModalCsvList(false);
     }
-    refreshApolloFilesModalCsvList(false);
 
     // 2. Sync Contacts CRM state & table immediately
     if (Array.isArray(data.contacts)) {
-     crmContactsList = data.contacts;
+     if (isClientCache || data.ephemeral) {
+      crmContactsList = mergeIntoPortfolioClientCachedContacts(data.contacts);
+     } else {
+      crmContactsList = data.contacts;
+     }
      updateCrmBadgesAndStats();
      renderCrmContactsTable();
     } else {

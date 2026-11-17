@@ -1127,16 +1127,19 @@ def _get_or_create_google_contacts_composio_auth_config_id(force_lookup: bool = 
   if default_g and default_g not in candidates:
    candidates.append(default_g)
  return candidates
-def _create_composio_google_contacts_oauth_link(request: Request) -> Dict[str, Any]:
+def _create_composio_google_contacts_oauth_link(request: Request, ephemeral: bool = False, callback_origin: str = "") -> Dict[str, Any]:
  """
     Generates a Composio v3 OAuth2 login link for Google Contacts using COMPOSIO_API_KEY from .env.
+    When ephemeral=True, marks the session as client-cache-only so contacts are never saved to DB/Cloudinary.
     """
  _load_email_hub_state()
  host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:5001"
  proto = request.headers.get("x-forwarded-proto") or ("https" if ("ngrok" in host or "onrender" in host or "run.app" in host) else "http")
- base_url = f"{proto}://{host}"
- entity_id = f"glennbot_gcontacts_{int(time.time())}"
- callback_url = f"{base_url}/api/oauth/google-contacts/callback?entity_id={urllib.parse.quote(entity_id)}"
+ base_url = (callback_origin or "").strip().rstrip("/") or f"{proto}://{host}"
+ prefix = "glennbot_gcontacts_ephemeral_" if ephemeral else "glennbot_gcontacts_"
+ entity_id = f"{prefix}{int(time.time())}"
+ eph_param = "&ephemeral=1" if ephemeral else ""
+ callback_url = f"{base_url}/api/oauth/google-contacts/callback?entity_id={urllib.parse.quote(entity_id)}{eph_param}"
  headers = _get_composio_headers()
  last_err = ""
  for force_flag in (False, True):
@@ -1164,6 +1167,7 @@ def _create_composio_google_contacts_oauth_link(request: Request) -> Dict[str, A
      GOOGLE_CONTACTS_AUTH_CONFIG_CACHE.setdefault("pending_sessions", {})[entity_id] = {
      "connected_account_id": conn_id,
      "entity_id": entity_id,
+     "ephemeral": bool(ephemeral),
      "created_at": time.time()
      }
      return {
@@ -1172,6 +1176,7 @@ def _create_composio_google_contacts_oauth_link(request: Request) -> Dict[str, A
      "auth_url": redirect_url,
      "connected_account_id": conn_id,
      "entity_id": entity_id,
+     "ephemeral": bool(ephemeral),
      "auth_config_id": auth_config_id
      }
     last_err = (data.get("error") or {}).get("message") or data.get("message") or f"HTTP {r.status_code}"
@@ -1361,14 +1366,16 @@ def _harvest_google_correspondents_from_gmail_messages(conn_id: str, entity_id: 
  except Exception as e:
   print(f"[ContactsCRM] Gmail correspondent harvest warning: {e}")
  return harvested
-def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str = "", preferred_entity_id: str = "") -> Dict[str, Any]:
+def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str = "", preferred_entity_id: str = "", ephemeral: bool = False) -> Dict[str, Any]:
  """
     Discovers the active Google Contacts / Google OAuth connection on Composio, downloads all contacts
-    via Composio tools, direct Google People API (using live OAuth token), and Google correspondent fallback,
-    and merges/saves them into CRM Database & Cloudinary.
+    via Composio tools, direct Google People API (using live OAuth access_token), and Google correspondent fallback.
+    When ephemeral=True, returns parsed contacts for browser-cache-only demo without saving to DB or Cloudinary.
     """
+ is_ephemeral = bool(ephemeral or str(preferred_entity_id or "").startswith("glennbot_gcontacts_ephemeral_"))
  _load_email_hub_state()
- _load_crm_contacts_state(force_cloud=False)
+ if not is_ephemeral:
+  _load_crm_contacts_state(force_cloud=False)
  headers = _get_composio_headers()
  try:
   r = HTTP_SESSION.get(f"{COMPOSIO_BASE_URL}/connected_accounts", headers=headers, timeout=15)
@@ -1439,23 +1446,7 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
   except Exception:
    pass
  raw_persons: List[Dict[str, Any]] = []
- # 1. Try Composio Google Contacts & Gmail Contacts tools
- for tool_slug, tool_args in (
- ("GOOGLECONTACTS_LIST_CONTACTS", {"pageSize": 1000, "personFields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies"}),
- ("GOOGLECONTACTS_GET_CONTACTS", {"pageSize": 1000}),
- ("GOOGLECONTACTS_LIST_OTHER_CONTACTS", {"pageSize": 1000, "readMask": "names,emailAddresses,phoneNumbers"}),
- ("GMAIL_GET_CONTACTS", {"resource_name": "people/me", "person_fields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies", "page_size": 1000}),
- ("GMAIL_GET_PEOPLE", {"resource_name": "people/me", "person_fields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies", "other_contacts": True}),
- ):
-  try:
-   t_res = _composio_execute_tool(tool_slug, target_conn_id, target_entity_id, tool_args)
-   if isinstance(t_res, dict) and t_res.get("data"):
-    extracted = _extract_person_nodes_from_payload(t_res.get("data"))
-    if extracted:
-     raw_persons.extend(extracted)
-  except Exception:
-   pass
- # 2. Direct Google People API v1 using live OAuth access_token from Composio connected_account
+ # 1. Fastest path: Direct Google People API v1 using live OAuth access_token from Composio connected_account
  access_tok = ""
  try:
   if "_fetch_composio_connection_access_token" in globals():
@@ -1465,12 +1456,12 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
  if access_tok:
   g_headers = {"Authorization": f"Bearer {access_tok}", "Accept": "application/json"}
   next_pt = ""
-  for _ in range(10):
+  for _ in range(5):
    url_conn = "https://people.googleapis.com/v1/people/me/connections?personFields=names,emailAddresses,phoneNumbers,organizations,photos,biographies&pageSize=1000"
    if next_pt:
     url_conn += f"&pageToken={urllib.parse.quote(next_pt)}"
    try:
-    gr = HTTP_SESSION.get(url_conn, headers=g_headers, timeout=15)
+    gr = HTTP_SESSION.get(url_conn, headers=g_headers, timeout=10)
     if gr.status_code == 200:
      g_data = gr.json() or {}
      conns = g_data.get("connections") or []
@@ -1487,7 +1478,7 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
    gr_other = HTTP_SESSION.get(
    "https://people.googleapis.com/v1/otherContacts?readMask=names,emailAddresses,phoneNumbers&pageSize=1000",
    headers=g_headers,
-   timeout=15
+   timeout=8
    )
    if gr_other.status_code == 200:
     o_data = gr_other.json() or {}
@@ -1495,6 +1486,24 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
      raw_persons.extend(o_data["otherContacts"])
   except Exception:
    pass
+ # 2. Fallback: Try Composio Google Contacts & Gmail Contacts tools only if direct People API returned 0 contacts
+ if not raw_persons:
+  for tool_slug, tool_args in (
+  ("GOOGLECONTACTS_LIST_CONTACTS", {"pageSize": 1000, "personFields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies"}),
+  ("GOOGLECONTACTS_GET_CONTACTS", {"pageSize": 1000}),
+  ("GOOGLECONTACTS_LIST_OTHER_CONTACTS", {"pageSize": 1000, "readMask": "names,emailAddresses,phoneNumbers"}),
+  ("GMAIL_GET_CONTACTS", {"resource_name": "people/me", "person_fields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies", "page_size": 1000}),
+  ("GMAIL_GET_PEOPLE", {"resource_name": "people/me", "person_fields": "names,emailAddresses,phoneNumbers,organizations,photos,biographies", "other_contacts": True}),
+  ):
+   try:
+    t_res = _composio_execute_tool(tool_slug, target_conn_id, target_entity_id, tool_args)
+    if isinstance(t_res, dict) and t_res.get("data"):
+     extracted = _extract_person_nodes_from_payload(t_res.get("data"))
+     if extracted:
+      raw_persons.extend(extracted)
+      break
+   except Exception:
+    pass
  # 3. Also try Composio proxy for Google People API if raw_persons is still empty
  if not raw_persons:
   try:
@@ -1533,6 +1542,18 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
    if ref_key not in seen_refs:
     seen_refs.add(ref_key)
     parsed_records.append(grec)
+ if is_ephemeral:
+  deduped_ephemeral, merged_dups = _deduplicate_and_combine_crm_contacts(parsed_records)
+  return {
+  "status": "success",
+  "ephemeral": True,
+  "message": f"Successfully imported {len(deduped_ephemeral)} Google Contact(s) into your Browser Cache!",
+  "account_email": account_email or "Google Account",
+  "imported_count": len(deduped_ephemeral),
+  "merged_duplicates": merged_dups,
+  "total_contacts": len(deduped_ephemeral),
+  "contacts": deduped_ephemeral
+  }
  with CONTACTS_CRM_LOCK:
   current_list = list(CONTACTS_CRM_STATE.get("contacts") or [])
  combined_input = current_list + parsed_records
@@ -1544,6 +1565,7 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
  threading.Thread(target=_save_crm_contacts_to_cloudinary, daemon=True).start()
  return {
  "status": "success",
+ "ephemeral": False,
  "message": f"Successfully imported {len(parsed_records)} Google Contact(s) into CRM!",
  "account_email": account_email or "Google Account",
  "imported_count": len(parsed_records),
@@ -1553,13 +1575,27 @@ def _fetch_and_import_google_contacts_from_composio(preferred_connection_id: str
  }
 @router.post("/api/oauth/google-contacts/start")
 async def api_start_google_contacts_oauth(request: Request):
- res = await run_in_threadpool(lambda: _create_composio_google_contacts_oauth_link(request))
+ try:
+  body = await request.json()
+ except Exception:
+  body = {}
+ qp = request.query_params
+ is_eph = bool(
+  body.get("ephemeral")
+  or body.get("client_cache_only")
+  or str(qp.get("ephemeral") or qp.get("client_cache_only") or "").strip().lower() in ("1", "true", "yes")
+ )
+ cb_origin = str(body.get("callback_origin") or qp.get("callback_origin") or "").strip()
+ res = await run_in_threadpool(lambda: _create_composio_google_contacts_oauth_link(request, ephemeral=is_eph, callback_origin=cb_origin))
  if res.get("status") == "success":
   return res
  return JSONResponse(res, status_code=400)
 @router.get("/api/oauth/google-contacts/redirect", response_class=HTMLResponse)
 async def api_redirect_google_contacts_oauth(request: Request):
- res = await run_in_threadpool(lambda: _create_composio_google_contacts_oauth_link(request))
+ qp = request.query_params
+ is_eph = str(qp.get("ephemeral") or qp.get("client_cache_only") or "").strip().lower() in ("1", "true", "yes")
+ cb_origin = str(qp.get("callback_origin") or "").strip()
+ res = await run_in_threadpool(lambda: _create_composio_google_contacts_oauth_link(request, ephemeral=is_eph, callback_origin=cb_origin))
  if res.get("status") == "success" and res.get("auth_url"):
   auth_url = res["auth_url"]
   html = f"""<!DOCTYPE html>
@@ -1596,13 +1632,20 @@ async def api_google_contacts_oauth_callback(request: Request):
  qp = request.query_params
  conn_id = str(qp.get("connectedAccountId") or qp.get("connected_account_id") or qp.get("connectionId") or "").strip()
  entity_id = str(qp.get("entity_id") or "").strip()
+ is_eph = (
+  str(qp.get("ephemeral") or qp.get("client_cache_only") or "").strip().lower() in ("1", "true", "yes")
+  or entity_id.startswith("glennbot_gcontacts_ephemeral_")
+ )
  if not conn_id and entity_id:
   sess_info = (GOOGLE_CONTACTS_AUTH_CONFIG_CACHE.get("pending_sessions") or {}).get(entity_id) or {}
   conn_id = str(sess_info.get("connected_account_id") or "").strip()
- import_res = await run_in_threadpool(lambda: _fetch_and_import_google_contacts_from_composio(conn_id, entity_id))
+  if sess_info.get("ephemeral"):
+   is_eph = True
+ import_res = await run_in_threadpool(lambda: _fetch_and_import_google_contacts_from_composio(conn_id, entity_id, ephemeral=is_eph))
  imported_cnt = int(import_res.get("imported_count") or 0)
  total_cnt = int(import_res.get("total_contacts") or 0)
  acc_email = str(import_res.get("account_email") or "Google Account")
+ contacts_payload_json = json.dumps(import_res.get("contacts") or [])
  html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1618,16 +1661,34 @@ async def api_google_contacts_oauth_callback(request: Request):
 <body>
     <div class="card">
         <div class="title">✅ Google Contacts Imported!</div>
-        <p class="sub">Imported <strong>{imported_cnt}</strong> contact(s) from <strong>{acc_email}</strong> into your GlennBot CRM. Closing window...</p>
+        <p class="sub">Imported <strong>{imported_cnt}</strong> contact(s) from <strong>{acc_email}</strong>. Closing window...</p>
     </div>
     <script>
         try {{
+            var importedContacts = {contacts_payload_json};
+            var isEphemeral = {json.dumps(bool(is_eph))};
+            if (isEphemeral && Array.isArray(importedContacts) && importedContacts.length > 0) {{
+                try {{
+                    var rawExisting = localStorage.getItem('gb_portfolio_client_contacts_v1');
+                    var existingArr = rawExisting ? JSON.parse(rawExisting) : [];
+                    if (!Array.isArray(existingArr)) existingArr = [];
+                    var byKey = new Map();
+                    existingArr.concat(importedContacts).forEach(function(c) {{
+                        if (!c || typeof c !== 'object') return;
+                        var k = String(c.email_address || c.contact_number || c.id || Math.random()).toLowerCase();
+                        byKey.set(k, c);
+                    }});
+                    localStorage.setItem('gb_portfolio_client_contacts_v1', JSON.stringify(Array.from(byKey.values())));
+                }} catch (_e) {{}}
+            }}
             if (window.opener) {{
                 window.opener.postMessage({{
                     type: 'GLENNBOT_GOOGLE_CONTACTS_IMPORT_DONE',
+                    ephemeral: isEphemeral,
                     imported_count: {imported_cnt},
                     total_contacts: {total_cnt},
-                    account_email: {json.dumps(acc_email)}
+                    account_email: {json.dumps(acc_email)},
+                    contacts: importedContacts
                 }}, '*');
             }}
         }} catch (e) {{}}
@@ -1642,9 +1703,16 @@ async def api_import_google_contacts_now(request: Request):
   body = await request.json()
  except Exception:
   body = {}
+ qp = request.query_params
  conn_id = str(body.get("connected_account_id") or "").strip()
  entity_id = str(body.get("entity_id") or "").strip()
- res = await run_in_threadpool(lambda: _fetch_and_import_google_contacts_from_composio(conn_id, entity_id))
+ is_eph = bool(
+  body.get("ephemeral")
+  or body.get("client_cache_only")
+  or str(qp.get("ephemeral") or qp.get("client_cache_only") or "").strip().lower() in ("1", "true", "yes")
+  or entity_id.startswith("glennbot_gcontacts_ephemeral_")
+ )
+ res = await run_in_threadpool(lambda: _fetch_and_import_google_contacts_from_composio(conn_id, entity_id, ephemeral=is_eph))
  if res.get("status") == "success":
   return res
  return JSONResponse(res, status_code=400)
@@ -1965,23 +2033,21 @@ def _ingest_parsed_apollo_contacts_into_crm(
 
 @router.post("/api/contacts/import/apollo-csv")
 async def api_import_contacts_via_apollo_csv(
+ request: Request,
  source_mode: str = Form("local"),
  file_id: str = Form(""),
  category_override: str = Form("auto"),
  job_id: str = Form(""),
+ ephemeral: str = Form("false"),
  file: Optional[UploadFile] = File(None),
 ):
  """
  Imports CRM Contacts from an Apollo CSV export:
  - Extracts Column E (Company Name), Column F (Email Address), Column T (Contact Number),
    First/Last Name, and assigns the appropriate Lead Status / Category.
- - If source_mode == 'local' (Local Device):
-   1) Automatically saves the uploaded CSV file directly into the 'Files' Modal (Files Vault)
-      with a Python-generated file_id.
-   2) Parses the CSV and imports all leads into Contacts CRM.
- - If source_mode == 'files_modal' (From 'Files' Modal):
-   1) Reads the selected CSV file by file_id from the 'Files' Modal.
-   2) Parses the CSV and imports all leads into Contacts CRM.
+ - When ephemeral is true (Portfolio Client Demo Mode):
+   Parses and returns the contacts array for browser-cache storage ONLY without saving
+   to Files Modal, PostgreSQL, or Cloudinary.
  """
  from services.apollo_csv_service import parse_apollo_csv_bytes
  from routers.files_routes import save_uploaded_bytes_to_files_vault, read_vault_file_bytes_by_id
@@ -1989,6 +2055,11 @@ async def api_import_contacts_via_apollo_csv(
  clean_mode = (source_mode or "local").strip().lower()
  clean_cat = (category_override or "auto").strip()
  clean_jid = (job_id or "").strip()
+ qp = request.query_params
+ is_ephemeral = (
+  str(ephemeral or "").strip().lower() in ("1", "true", "yes")
+  or str(qp.get("ephemeral") or qp.get("client_cache_only") or "").strip().lower() in ("1", "true", "yes")
+ )
 
  if clean_mode == "local":
   if not file or not file.filename:
@@ -2005,6 +2076,82 @@ async def api_import_contacts_via_apollo_csv(
    )
 
   def _process_local_apollo_csv():
+   if is_ephemeral:
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=2,
+     percent=45,
+     stage_title=f"Stage 2/4 • Extracting Apollo CSV Columns from '{orig_filename}'...",
+     detail="Parsing Company (Col E), Email (Col F) & Contact Number (Col T) in Private Browser Cache Mode...",
+     status="running",
+    )
+    parsed = parse_apollo_csv_bytes(
+     csv_bytes=csv_bytes,
+     source_filename=orig_filename,
+     file_id="client_browser_cache",
+     category_override=clean_cat,
+    )
+    parsed_rows = parsed.get("contacts") or []
+    if not parsed_rows:
+     _update_apollo_import_job(
+      job_id=clean_jid,
+      stage_number=2,
+      percent=100,
+      stage_title="Import Error • No Valid Rows Found",
+      detail=f"No valid contact rows found in '{orig_filename}'.",
+      status="error",
+     )
+     return {
+      "status": "error",
+      "message": f"No valid contact rows found in '{orig_filename}'. Make sure it is a valid Apollo CSV export.",
+     }
+    now_str = datetime.now(MANILA_TZ).strftime("%Y-%m-%d %I:%M %p")
+    ephemeral_records = []
+    for item in parsed_rows:
+     ephemeral_records.append({
+      "id": f"crm_apollo_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+      "first_name": str(item.get("first_name") or "").strip(),
+      "middle_name": str(item.get("middle_name") or "").strip(),
+      "last_name": str(item.get("last_name") or "").strip(),
+      "contact_number": str(item.get("contact_number") or "").strip(),
+      "email_address": str(item.get("email_address") or "").strip(),
+      "platform": "apollo",
+      "social_username": str(item.get("social_username") or "").strip(),
+      "account_name": str(item.get("account_name") or "Apollo CSV").strip(),
+      "category": str(item.get("category") or "New Lead").strip(),
+      "company": str(item.get("company") or "").strip(),
+      "notes": str(item.get("notes") or "").strip(),
+      "source_type": "apollo",
+      "source_ref_id": str(item.get("source_ref") or orig_filename).strip(),
+      "avatar_url": "",
+      "created_at": now_str,
+      "updated_at": now_str,
+     })
+    deduped_ephemeral, _ = _deduplicate_and_combine_crm_contacts(ephemeral_records)
+    _update_apollo_import_job(
+     job_id=clean_jid,
+     stage_number=4,
+     percent=100,
+     stage_title=f"Stage 4/4 • Import Complete! ({len(deduped_ephemeral)} Leads Cached in Browser)",
+     detail=f"Parsed '{orig_filename}' • Stored in your Browser Cache only (Zero Cloud/DB retention).",
+     status="completed",
+     processed_rows=len(deduped_ephemeral),
+     total_rows=len(parsed_rows),
+    )
+    return {
+     "status": "success",
+     "ephemeral": True,
+     "source_mode": "local",
+     "job_id": clean_jid,
+     "message": f"Imported {len(deduped_ephemeral)} lead(s) from '{orig_filename}' into your Browser Cache (Private Client Demo)!",
+     "imported_count": len(deduped_ephemeral),
+     "added_count": len(deduped_ephemeral),
+     "updated_count": 0,
+     "column_mapping": parsed.get("column_mapping"),
+     "contacts": deduped_ephemeral,
+     "count": len(deduped_ephemeral),
+    }
+
    _update_apollo_import_job(
     job_id=clean_jid,
     stage_number=1,
@@ -2071,6 +2218,7 @@ async def api_import_contacts_via_apollo_csv(
    )
    return {
     "status": "success",
+    "ephemeral": False,
     "source_mode": "local",
     "job_id": clean_jid,
     "message": (
